@@ -1,0 +1,12 @@
+@doc "asdasd"
+@type integer("u8") def_native(u8);
+@type integer("u64") def_native(u64);
+@type integer("u32") def_native(u32);
+@type integer("usize") def_native(usize);
+
+def(arrayreftest) => container {
+    virtual_field(size, value: ./field/arr/@len) => root::u8;
+    field(field) => container {
+        field(arr) => array(length: ../../size) => u32;
+    };
+};

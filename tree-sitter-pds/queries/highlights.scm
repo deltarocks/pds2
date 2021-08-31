@@ -1,0 +1,14 @@
+(stringSingleline) @string
+(stringBlock) @string
+(attributeName) @attribute
+(rocket) @keyword
+(pathDelim) @keyword
+(number) @number
+(root) @root
+(lparen) @keyword
+(rparen) @keyword
+(lbrace) @keyword
+(rbrace) @keyword
+(pathIdent) @type
+(path) @type
+(boolean) @keyword

@@ -1,0 +1,404 @@
+use anyhow::{anyhow, bail, ensure, Context, Result};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashMap},
+    convert::TryFrom,
+    fmt::Debug,
+    iter,
+    rc::Rc,
+};
+mod format;
+pub use format::format;
+mod parse;
+pub use parse::parse;
+pub mod builder;
+
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Ident(Rc<str>);
+impl Ident {
+    pub fn new(v: &str) -> Self {
+        Self(v.into())
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl Debug for Ident {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let has_split = self.0.contains("::");
+        if has_split {
+            write!(f, "\"")?;
+        }
+        write!(f, "{}", self.0)?;
+        if has_split {
+            write!(f, "\"")?;
+        }
+        Ok(())
+    }
+}
+impl From<&str> for Ident {
+    fn from(s: &str) -> Self {
+        Self(s.into())
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Path {
+    pub absolute: bool,
+    pub path: Vec<Ident>,
+    pub item: Ident,
+}
+
+impl Path {
+    pub fn new(mut segments: Vec<Ident>) -> Self {
+        let item = segments.pop().expect("name");
+        Self {
+            absolute: true,
+            path: segments,
+            item,
+        }
+    }
+    pub fn new_simple(v: Ident) -> Self {
+        Path {
+            absolute: false,
+            path: vec![],
+            item: v,
+        }
+    }
+    pub fn simple_name(&self) -> Option<Ident> {
+        (!self.absolute && self.path.is_empty()).then(|| self.item.clone())
+    }
+    pub fn expect_simple_name(&self) -> Result<Ident> {
+        self.simple_name()
+            .ok_or_else(|| anyhow!("expected non-namespaced name"))
+    }
+    pub fn rewrite_to_absolute(&mut self, current_ns: &[Ident]) {
+        if !self.absolute {
+            let mut new_path = current_ns.to_vec();
+            new_path.extend(self.path.drain(..));
+            self.path = new_path;
+            self.absolute = true;
+        }
+    }
+    pub fn readable_name(&self) -> String {
+        self.path
+            .iter()
+            .chain(iter::once(&self.item))
+            .map(|p| p.as_str())
+            .collect::<Vec<_>>()
+            .join("_")
+    }
+}
+
+impl Debug for Path {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.absolute {
+            write!(f, "root::")?;
+        }
+        for item in self.path.iter() {
+            write!(f, "{:?}::", item)?;
+        }
+        write!(f, "{:?}", self.item)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Block {
+    pub statements: Vec<Statement>,
+    pub root: bool,
+}
+impl Block {
+    pub fn is_empty(&self) -> bool {
+        self.statements.is_empty()
+    }
+}
+
+pub type Attributes = HashMap<Ident, Vec<Value>>;
+
+#[derive(Debug, Clone)]
+pub struct Statement {
+    pub attributes: Attributes,
+    pub items: Vec<Value>,
+}
+
+impl Statement {
+    pub fn pop_item(self) -> Result<(Attributes, Item, Vec<Value>)> {
+        let (attrs, value, values) = self.pop_value();
+        let item = value.into_item().ok_or_else(|| anyhow!("expected item"))?;
+        Ok((attrs, item, values))
+    }
+    fn pop_value(self) -> (Attributes, Value, Vec<Value>) {
+        let Statement {
+            attributes,
+            mut items,
+        } = self;
+        // Statement always has at least one item
+        let first = items.remove(0);
+        (attributes, first, items)
+    }
+}
+
+#[derive(Clone)]
+pub struct BaseReference(pub Vec<(bool, Ident)>);
+impl BaseReference {
+    pub fn name(&self) -> String {
+        self.0
+            .iter()
+            .map(|p| p.1.as_str())
+            .collect::<Vec<_>>()
+            .join("_")
+    }
+}
+impl TryFrom<Reference> for BaseReference {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Reference) -> Result<Self, Self::Error> {
+        ensure!(value.up == 0, "not a based reference: {:?}", value);
+        Ok(value.path)
+    }
+}
+impl Debug for BaseReference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, (virt, path)) in self.0.iter().enumerate() {
+            if i != 0 {
+                write!(f, "/")?;
+            }
+            if *virt {
+                write!(f, "@")?;
+            }
+            write!(f, "{:?}", path)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct Reference {
+    pub up: usize,
+    pub path: BaseReference,
+}
+impl Reference {
+    pub fn name(&self) -> String {
+        self.path.name()
+    }
+}
+impl Debug for Reference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.up == 0 {
+            write!(f, ".")?
+        } else {
+            for i in 0..self.up {
+                if i != 0 {
+                    write!(f, "/")?;
+                }
+                write!(f, "..")?;
+            }
+        }
+        write!(f, "/{:?}", self.path)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Value {
+    String { string: String, is_block: bool },
+    Reference(Reference),
+    Int(i64),
+    Item(Item),
+    Internal(String),
+    Unset,
+}
+impl From<Item> for Value {
+    fn from(i: Item) -> Self {
+        Self::Item(i)
+    }
+}
+impl From<i64> for Value {
+    fn from(i: i64) -> Self {
+        Self::Int(i)
+    }
+}
+impl From<Reference> for Value {
+    fn from(r: Reference) -> Self {
+        Self::Reference(r)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ItemArgs {
+    unnamed: Vec<Value>,
+    named: BTreeMap<Ident, Value>,
+    used_unnamed: RefCell<BTreeSet<usize>>,
+    used_named: RefCell<BTreeSet<Ident>>,
+}
+impl ItemArgs {
+    fn empty() -> Self {
+        Self::default()
+    }
+    fn is_empty(&self) -> bool {
+        self.unnamed.is_empty() && self.named.is_empty()
+    }
+    pub fn arg<T: ParseValue>(&self, id: usize, name: &str) -> Result<T> {
+        if self.unnamed.len() > id {
+            self.used_unnamed.borrow_mut().insert(id);
+        }
+        let value = self
+            .unnamed
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| Value::Unset);
+        T::parse(value).with_context(|| format!("parsing argument {} ({})", id, name))
+    }
+    pub fn named<T: ParseValue>(&self, name: impl Into<Ident>) -> Result<T> {
+        let name: Ident = name.into();
+        if self.named.contains_key(&name) {
+            self.used_named.borrow_mut().insert(name.clone());
+        }
+        let value = self
+            .named
+            .get(&name)
+            .cloned()
+            .unwrap_or_else(|| Value::Unset);
+        T::parse(value).with_context(|| format!("parsing argument {:?}", name))
+    }
+    pub fn verify_unused(&self) -> Result<()> {
+        for i in 0..self.unnamed.len() {
+            if !self.used_unnamed.borrow().contains(&i) {
+                bail!("unused argument {}: {:?}", i, self.unnamed[i]);
+            }
+        }
+        for i in self.named.keys() {
+            if !self.used_named.borrow().contains(&i) {
+                bail!("unused argument {:?}: {:?}", i, self.named[i]);
+            }
+        }
+        Ok(())
+    }
+}
+
+pub trait ParseValue: Sized {
+    fn parse(value: Value) -> Result<Self>;
+}
+impl<T: ParseValue> ParseValue for Option<T> {
+    fn parse(value: Value) -> Result<Self> {
+        if matches!(value, Value::Unset) {
+            Ok(None)
+        } else {
+            Ok(Some(T::parse(value)?))
+        }
+    }
+}
+impl ParseValue for bool {
+    fn parse(value: Value) -> Result<Self> {
+        if value.is_unset() {
+            bail!("missing boolean")
+        }
+        let item = value
+            .into_item()
+            .ok_or_else(|| anyhow!("expected boolean"))?;
+        let v = item
+            .simple_name()
+            .ok_or_else(|| anyhow!("expected boolean"))?;
+        match v.as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            v => bail!("expected boolean, got {}", v),
+        }
+    }
+}
+impl ParseValue for Ident {
+    fn parse(value: Value) -> Result<Self> {
+        if value.is_unset() {
+            bail!("missing identifier")
+        }
+        let item = value
+            .into_item()
+            .ok_or_else(|| anyhow!("expected identifer"))?;
+        item.simple_name()
+            .ok_or_else(|| anyhow!("expected identifer"))
+    }
+}
+impl ParseValue for Reference {
+    fn parse(value: Value) -> Result<Self> {
+        if value.is_unset() {
+            bail!("missing reference");
+        }
+        match value {
+            Value::Reference(v) => Ok(v),
+            _ => bail!("expected reference"),
+        }
+    }
+}
+impl ParseValue for Value {
+    fn parse(value: Value) -> Result<Self> {
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Item {
+    pub name: Path,
+    pub args: ItemArgs,
+    pub block: Block,
+}
+
+impl Item {
+    pub fn new_simple(name: impl Into<Ident>) -> Self {
+        Self {
+            name: Path::new_simple(name.into()),
+            args: ItemArgs::empty(),
+            block: Block::default(),
+        }
+    }
+    pub fn simple_name(&self) -> Option<Ident> {
+        (self.args.is_empty() && self.block.is_empty())
+            .then(|| self.name.simple_name())
+            .flatten()
+    }
+}
+
+// Helpers
+impl Value {
+    pub fn item<'a>(&'a self) -> Option<&'a Item> {
+        if let Value::Item(item) = self {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    pub fn into_item(self) -> Option<Item> {
+        if let Value::Item(item) = self {
+            Some(item)
+        } else {
+            None
+        }
+    }
+
+    pub fn string<'a>(&'a self) -> Option<&'a str> {
+        if let Value::String { string, .. } = self {
+            Some(string)
+        } else {
+            None
+        }
+    }
+
+    pub fn reference(&self) -> Option<Reference> {
+        if let Value::Reference(r) = self {
+            Some(r.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn new_string(string: String) -> Value {
+        Value::String {
+            string: string,
+            is_block: false,
+        }
+    }
+
+    pub fn is_unset(&self) -> bool {
+        matches!(self, Self::Unset)
+    }
+}
