@@ -20,7 +20,7 @@
                   owner = "tree-sitter";
                   repo = "tree-sitter";
                   rev = "master";
-                  hash = "sha256-I66vbOfhL382/08/NVM3o1PBpstEI4wcS4h2+Sauc2k=";
+                  hash = "sha256-qS5fepa9FCGZXy9IQLFK1bR8Vsb5rUiyWGBTrP6jVFE=";
                 }; in
               {
                 inherit src;

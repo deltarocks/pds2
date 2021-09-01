@@ -12,6 +12,7 @@ dprint-core = "0.44.0"
 peg = "0.7.0"
 rand = "0.8.4"
 structopt = "0.3.22"
+serde_json = "*"
 
 [features]
 trace = ["peg/trace"]
