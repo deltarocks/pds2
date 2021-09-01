@@ -8,6 +8,7 @@ pub mod ast;
 pub mod generator;
 pub mod hir;
 pub mod mir;
+pub mod upgrade;
 
 pub mod pds {
     #![allow(non_camel_case_types)]
@@ -127,6 +128,12 @@ enum Opts {
         /// Generation target
         generator: GeneratorTypes,
     },
+    /// Convert .json definition to code
+    #[structopt(setting(ColorAuto), setting(ColoredHelp))]
+    Upgrade {
+        /// .json source code
+        from: PathBuf,
+    },
     /// Reformat .pds definition code
     #[structopt(setting(ColorAuto), setting(ColoredHelp))]
     Format { from: PathBuf },
@@ -215,6 +222,13 @@ fn main() -> anyhow::Result<()> {
             let out = ast::format(&parsed);
             println!("{}", out);
         }
+        Opts::Upgrade { from } => {
+            let data = std::fs::read_to_string(&from)?;
+            let parsed = serde_json::from_str(&data)?;
+            let upgraded = upgrade::upgrade(parsed)?;
+            let out = ast::format(&upgraded);
+            println!("{}", out);
+        },
     }
     Ok(())
 }
