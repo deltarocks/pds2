@@ -129,6 +129,9 @@ enum Opts {
         from: PathBuf,
         /// Generation target
         generator: GeneratorTypes,
+        /// Print generated MIR
+        #[structopt(long)]
+        print_mir: bool,
     },
     /// Convert .json definition to code
     #[structopt(setting(ColorAuto), setting(ColoredHelp))]
@@ -195,11 +198,19 @@ macro_rules! pi {
 fn main() -> anyhow::Result<()> {
     let opts = Opts::from_args();
     match opts {
-        Opts::Compile { from, generator } => {
+        Opts::Compile {
+            from,
+            generator,
+            print_mir,
+        } => {
             let data = std::fs::read_to_string(&from)?;
             let parsed = ast::parse(&data)?;
             let hir = hir::parse_ast(parsed)?;
             let mir = mir::from_hir(&hir)?;
+
+            if print_mir {
+                dbg!(&mir);
+            }
 
             let mut out = Default::default();
             generator.generator()(&mir, &mut out)?;
