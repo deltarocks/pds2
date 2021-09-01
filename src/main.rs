@@ -16,23 +16,23 @@ pub mod pds {
 
     macro_rules! impl_for_num {
         (@single $n:ident => $ty:ident) => {
-            mod $n {
+            pub mod $n {
                 use super::{Output, Input, Result};
                 use std::io::{Read, Write};
 
                 pub type Ty = $ty;
                 const SIZE: usize = (Ty::BITS / 8) as usize;
 
-                fn size_of(val: &Ty) -> usize {
+                pub fn size_of(val: &Ty) -> usize {
                     SIZE
                 }
 
-                fn serialize(val: &Ty, output: &mut Output) -> Result<()> {
-                    output.0.write_all(&Ty::to_be_bytes(*val));
+                pub fn serialize(val: &Ty, output: &mut Output) -> Result<()> {
+                    output.0.write_all(&Ty::to_be_bytes(*val))?;
                     Ok(())
                 }
 
-                fn deserialize(input: &mut Input) -> Result<Ty> {
+                pub fn deserialize(input: &mut Input) -> Result<Ty> {
                     let mut out = [0; SIZE];
                     input.0.read_exact(&mut out)?;
                     Ok(Ty::from_be_bytes(out))
@@ -59,23 +59,23 @@ pub mod pds {
     );
     macro_rules! impl_for_le_num {
         (@single $n:ident => $ty:ident) => {
-            mod $n {
+            pub mod $n {
                 use super::{Output, Input, Result};
                 use std::io::{Read, Write};
 
                 pub type Ty = $ty;
                 const SIZE: usize = (Ty::BITS / 8) as usize;
 
-                fn size_of(val: &Ty) -> usize {
+                pub fn size_of(val: &Ty) -> usize {
                     SIZE
                 }
 
-                fn serialize(val: &Ty, output: &mut Output) -> Result<()> {
-                    output.0.write_all(&Ty::to_le_bytes(*val));
+                pub fn serialize(val: &Ty, output: &mut Output) -> Result<()> {
+                    output.0.write_all(&Ty::to_le_bytes(*val))?;
                     Ok(())
                 }
 
-                fn deserialize(input: &mut Input) -> Result<Ty> {
+                pub fn deserialize(input: &mut Input) -> Result<Ty> {
                     let mut out = [0; SIZE];
                     input.0.read_exact(&mut out)?;
                     Ok(Ty::from_le_bytes(out))
@@ -100,6 +100,8 @@ pub mod pds {
         pds_i128_le => i128,
         pds_u128_le => u128
     );
+
+    pub use pds_u64 as pds_usize;
 
     #[derive(Default)]
     pub struct Input(Cursor<Vec<u8>>);
