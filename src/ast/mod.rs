@@ -398,6 +398,10 @@ impl Value {
         }
     }
 
+    pub fn new_simple_item(name: impl Into<Ident>) -> Value {
+        Value::Item(Item::new_simple(name))
+    }
+
     pub fn is_unset(&self) -> bool {
         matches!(self, Self::Unset)
     }

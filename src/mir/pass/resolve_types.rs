@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 
 use crate::{
     ast::Ident,
@@ -59,39 +59,37 @@ impl Definition {
                 for field in fields.iter() {
                     let r = &field.ty;
                     for (name, ty) in &r.args {
-                        out.used(
-                            r.target,
-                            name,
-                            Self::resolve_ref(self_id, types, ty.clone())?,
-                        );
+                        out.used(r.target, name, Self::resolve_ref(self_id, types, &ty)?);
+                    }
+                    if let Some(from) = &field.load_from {
+                        Self::resolve_ref(self_id, types, &from)
+                            .with_context(|| format!("Resolving {:?}", from))?;
                     }
                 }
             }
             mir::TypeKind::FixedSizeArray { t, .. } | mir::TypeKind::DynamicArray { t, .. } => {
                 for (name, ty) in &t.args {
-                    out.used(
-                        t.target,
-                        name,
-                        Self::resolve_ref(self_id, types, ty.clone())?,
-                    );
+                    out.used(t.target, name, Self::resolve_ref(self_id, types, &ty)?);
                 }
             }
-            mir::TypeKind::Union { matches, default } => {
+            mir::TypeKind::Union {
+                tag,
+                matches,
+                default,
+            } => {
                 for (_, _, ty) in matches {
                     for (name, r) in &ty.args {
-                        out.used(
-                            ty.target,
-                            name,
-                            Self::resolve_ref(self_id, types, r.clone())?,
-                        )
+                        out.used(ty.target, name, Self::resolve_ref(self_id, types, &r)?)
                     }
                 }
-                for (name, ty) in &default.1.args {
-                    out.used(
-                        default.1.target,
-                        name,
-                        Self::resolve_ref(self_id, types, ty.clone())?,
-                    )
+                if let Some(default) = default {
+                    for (name, ty) in &default.1.args {
+                        out.used(
+                            default.1.target,
+                            name,
+                            Self::resolve_ref(self_id, types, &ty)?,
+                        )
+                    }
                 }
             }
             mir::TypeKind::Native(_) => {}
@@ -99,11 +97,11 @@ impl Definition {
         Ok(())
     }
 
-    fn resolve_ref(from: TypeId, types: &HashMap<TypeId, Definition>, r: Field) -> Result<TypeId> {
+    fn resolve_ref(from: TypeId, types: &HashMap<TypeId, Definition>, r: &Field) -> Result<TypeId> {
         let mut cur = from;
         for (i, item) in r.0.iter().enumerate() {
             if item.from.get().is_valid() {
-                assert!(item.from.get() == cur);
+                assert_eq!(item.from.get(), cur);
             } else {
                 item.from.set(cur);
             }
@@ -139,7 +137,10 @@ impl Definition {
                     }
                 }
                 mir::FieldItemKind::Virtual => {
-                    bail!("unknown field");
+                    let ty = types.iter().find(|t| t.1.name.item == Ident::new("usize"));
+                    ensure!(ty.is_some(), "expected to find defined usize");
+                    cur = *ty.unwrap().0;
+                    item.to.set(cur);
                 }
             }
         }
@@ -188,6 +189,7 @@ pub fn resolve_types(types: &mut HashMap<TypeId, Definition>) -> Result<()> {
         } else if !collector.has_invalid && !collector.has_valid {
             break;
         }
+        let count_resolved = types.len();
         for (i, d) in types.iter_mut() {
             d.propogate_types(*i, &collector)?;
         }

@@ -1,5 +1,9 @@
 mod from_hir;
-use std::{cell::Cell, collections::HashMap, ops::Index};
+use std::{
+    cell::Cell,
+    collections::{BTreeMap, HashMap},
+    ops::Index,
+};
 
 pub use from_hir::from_hir;
 mod pass;
@@ -36,8 +40,9 @@ pub enum TypeKind {
         fields: Vec<ContainerField>,
     },
     Union {
+        tag: BaseReference,
         matches: Vec<(Value, Ident, Type)>,
-        default: (Ident, Type),
+        default: Option<(Ident, Type)>,
     },
     FixedSizeArray {
         size: usize,
@@ -63,12 +68,13 @@ pub enum Value {
     String(String),
 }
 
-pub struct TypeMap(pub HashMap<TypeId, Definition>);
+#[derive(Debug)]
+pub struct TypeMap(pub BTreeMap<TypeId, Definition>);
 impl Index<TypeId> for TypeMap {
     type Output = Definition;
 
     fn index(&self, index: TypeId) -> &Self::Output {
-        &self.0[&index]
+        self.0.get(&index).as_ref().unwrap()
     }
 }
 

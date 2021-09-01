@@ -1,12 +1,12 @@
 use crate::{
-    ast::{Ident, Path, Reference},
+    ast::{self, Ident, Path, Reference},
     hir::{self, TypeId},
     mir::{self, FieldItem, FieldItemKind},
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use std::{collections::HashMap, convert::TryInto};
 
-use super::{Definition, Field, Type, TypeKind};
+use super::{Definition, Field, Type, TypeKind, TypeMap, Value};
 
 impl Type {
     fn from_hir(kind: &hir::TypeKind) -> Self {
@@ -20,6 +20,16 @@ impl Type {
             },
             _ => unreachable!(),
         }
+    }
+}
+
+impl Value {
+    fn from_hir(hir: &ast::Value) -> Result<Self> {
+        Ok(match hir {
+            ast::Value::String { string, is_block } => Self::String(string.clone()),
+            ast::Value::Int(i) => Self::Signed(*i as i128),
+            _ => bail!("unexpected value type"),
+        })
     }
 }
 
@@ -47,7 +57,24 @@ impl TypeKind {
                     })
                     .collect::<Result<_>>()?,
             },
-            hir::TypeKind::Union(_) => todo!(),
+            hir::TypeKind::Union(u) => Self::Union {
+                tag: u.tag.clone().try_into()?,
+                matches: u
+                    .matches
+                    .iter()
+                    .map(|v| {
+                        (
+                            mir::Value::from_hir(&v.0).unwrap(),
+                            v.1.clone(),
+                            Type::from_hir(&v.2),
+                        )
+                    })
+                    .collect(),
+                default: u
+                    .default
+                    .as_ref()
+                    .map(|d| (d.0.clone(), Type::from_hir(&d.1))),
+            },
             hir::TypeKind::Array(a) => match &a.length {
                 Ok(r) => Self::DynamicArray {
                     size_ref: r.clone().try_into().unwrap(),
@@ -123,10 +150,11 @@ pub fn from_hir_internal(
     Ok(())
 }
 
-pub fn from_hir(hir: &hir::Namespace) -> Result<HashMap<TypeId, Definition>> {
+pub fn from_hir(hir: &hir::Namespace) -> Result<TypeMap> {
     let mut out = HashMap::new();
     from_hir_internal(hir, &mut Vec::new(), &mut out)?;
     super::pass::resolve_types(&mut out)?;
+    let mut out = TypeMap(out.into_iter().collect());
     super::pass::resolve_field_types(&mut out);
     Ok(out)
 }

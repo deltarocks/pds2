@@ -34,9 +34,9 @@ pub struct Container {
 
 #[derive(Debug)]
 pub struct Union {
-    tag: Reference,
-    matches: Vec<(Value, Ident, TypeKind)>,
-    default: Option<(Ident, Box<TypeKind>)>,
+    pub tag: Reference,
+    pub matches: Vec<(Value, Ident, TypeKind)>,
+    pub default: Option<(Ident, Box<TypeKind>)>,
 }
 
 #[derive(Debug)]

@@ -241,7 +241,7 @@ fn main() -> anyhow::Result<()> {
             let upgraded = upgrade::upgrade(parsed)?;
             let out = ast::format(&upgraded);
             println!("{}", out);
-        },
+        }
     }
     Ok(())
 }

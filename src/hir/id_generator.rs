@@ -18,7 +18,7 @@ impl IdGenerator {
     }
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TypeId(u64);
 
 impl TypeId {
