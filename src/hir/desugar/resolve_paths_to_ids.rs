@@ -39,6 +39,7 @@ impl TypeKind {
                     match v {
                         crate::hir::ContainerFieldType::Normal(t) => fix_path(paths, t)?,
                         crate::hir::ContainerFieldType::Virtual(_, p) => fix_path(paths, p)?,
+                        crate::hir::ContainerFieldType::Delegate(_) => {}
                     }
                 }
             }

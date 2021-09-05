@@ -24,18 +24,20 @@ pub struct Namespace {
 pub enum ContainerFieldType {
     Normal(TypeKind),
     Virtual(Reference, TypeKind),
+    Delegate(Ident),
 }
 
 #[derive(Debug)]
 pub struct Container {
     pub virt: bool,
     pub fields: Vec<(Ident, ContainerFieldType)>,
+    pub delegate_all: Option<Ident>,
 }
 
 #[derive(Debug)]
 pub enum UnionTag {
     LoadFrom(Reference),
-    Type(TypeKind),
+    Type(Box<TypeKind>),
 }
 
 #[derive(Debug)]
@@ -49,7 +51,7 @@ pub struct Union {
 pub enum ArrayLength {
     LoadFrom(Reference),
     Fixed(u32),
-    Type(TypeKind),
+    Type(Box<TypeKind>),
 }
 
 #[derive(Debug)]

@@ -10,6 +10,13 @@ pub mod hir;
 pub mod mir;
 pub mod upgrade;
 
+#[macro_export]
+macro_rules! should_be_desugared {
+    ($v:expr) => {
+        unreachable!("should be desugared: {:?}", $v)
+    };
+}
+
 pub mod pds {
     #![allow(non_camel_case_types)]
     use std::io::Cursor;
@@ -23,7 +30,7 @@ pub mod pds {
                 pub type Ty = $ty;
                 const SIZE: usize = (Ty::BITS / 8) as usize;
 
-                pub fn size_of(val: &Ty) -> usize {
+                pub fn size_of(_val: &Ty) -> usize {
                     SIZE
                 }
 
@@ -66,7 +73,7 @@ pub mod pds {
                 pub type Ty = $ty;
                 const SIZE: usize = (Ty::BITS / 8) as usize;
 
-                pub fn size_of(val: &Ty) -> usize {
+                pub fn size_of(_val: &Ty) -> usize {
                     SIZE
                 }
 
@@ -129,6 +136,12 @@ enum Opts {
         from: PathBuf,
         /// Generation target
         generator: GeneratorTypes,
+        /// Print AST
+        #[structopt(long)]
+        print_ast: bool,
+        /// Print generated HIR
+        #[structopt(long)]
+        print_hir: bool,
         /// Print generated MIR
         #[structopt(long)]
         print_mir: bool,
@@ -201,11 +214,23 @@ fn main() -> anyhow::Result<()> {
         Opts::Compile {
             from,
             generator,
+            print_ast,
+            print_hir,
             print_mir,
         } => {
             let data = std::fs::read_to_string(&from)?;
             let parsed = ast::parse(&data)?;
+
+            if print_ast {
+                dbg!(&parsed);
+            }
+
             let hir = hir::parse_ast(parsed)?;
+
+            if print_hir {
+                dbg!(&hir);
+            }
+
             let mir = mir::from_hir(&hir)?;
 
             if print_mir {

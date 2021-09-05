@@ -72,8 +72,12 @@ rule string_singleline() -> String
     / expected!("string")
 rule stringChar() -> char
     = !['"' | '\n'] c:$[_] { c.chars().next().unwrap() }
-rule reference() -> Reference
-    = ups:(p:"../"+ {p.len()} / "./" {0}) path: (v:"@"? id:baseIdent() { (v.is_some(), id) }) ++ ("/") {
+pub rule reference_segment() -> ReferenceSegment
+    = "@" id:baseIdent() { ReferenceSegment::Virtual(id) }
+    / "$" id:baseIdent() { ReferenceSegment::Arg(id) }
+    / ignore:"."? id: baseIdent() { ReferenceSegment::Down{to:id, ignore_delegation: ignore.is_some()} }
+pub rule reference() -> Reference
+    = ups:(p:"../"+ {p.len()} / "./" {0}) path: reference_segment() ++ ("/") {
         Reference {
             up: ups,
             path: BaseReference(path),
@@ -108,4 +112,7 @@ rule eol()
 
 pub fn parse(input: &str) -> Result<Block, ParseError<LineCol>> {
     pds_parser::root(&input)
+}
+pub fn parse_reference(input: &str) -> Result<Reference, ParseError<LineCol>> {
+    pds_parser::reference(input)
 }

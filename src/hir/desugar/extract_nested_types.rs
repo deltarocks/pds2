@@ -41,8 +41,9 @@
 use std::cell::Cell;
 
 use crate::{
-    ast::{BaseReference, Ident, Reference},
+    ast::{BaseReference, Ident, Reference, ReferenceSegment},
     hir::{IdGenerator, Namespace, NamespaceItem, NativeTypeKind, Type, TypeKind},
+    should_be_desugared,
 };
 
 impl Namespace {
@@ -122,6 +123,7 @@ struct ReferenceCollector {
     params: Vec<Ident>,
 }
 impl ReferenceCollector {
+    /// Rewrites references to parent type fields as arguments
     fn collect(&mut self, r: &mut Reference) {
         if r.up == 0 {
             return;
@@ -134,7 +136,7 @@ impl ReferenceCollector {
 
         *r = Reference {
             up: 0,
-            path: BaseReference(vec![(true, name.clone())]),
+            path: BaseReference(vec![ReferenceSegment::Arg(name.clone())]),
         };
         self.params.push(name);
     }
@@ -146,8 +148,9 @@ impl TypeKind {
             TypeKind::Array(a) => {
                 a.ty.assert_reference();
                 match &mut a.length {
-                    Ok(r) => collector.collect(r),
-                    Err(_) => {}
+                    crate::hir::ArrayLength::LoadFrom(r) => collector.collect(r),
+                    crate::hir::ArrayLength::Fixed(_) => {}
+                    crate::hir::ArrayLength::Type(_) => should_be_desugared!(a.length),
                 }
             }
             TypeKind::Container(c) => {
@@ -162,6 +165,7 @@ impl TypeKind {
                             n.rewrite_references(collector);
                             collector.collect(r)
                         }
+                        crate::hir::ContainerFieldType::Delegate(_) => {}
                     }
                 }
             }
@@ -192,6 +196,7 @@ impl TypeKind {
                     match f {
                         crate::hir::ContainerFieldType::Normal(n) => receiver.extract(n),
                         crate::hir::ContainerFieldType::Virtual(_, t) => receiver.extract(t),
+                        crate::hir::ContainerFieldType::Delegate(_) => {}
                     }
 
                     receiver.pop();

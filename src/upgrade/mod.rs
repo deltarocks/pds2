@@ -1,11 +1,47 @@
-use crate::ast::{self, builder::ItemBuilder, BaseReference, Block, Item, ItemArgs, Statement};
+use crate::ast::{self, BaseReference, Block, Ident, Item, ItemArgs, ReferenceSegment, Statement};
 use anyhow::{anyhow, bail, ensure, Result};
 use serde_json::Value;
 
+enum ProtodefPathItem {
+    Down(Ident),
+    Arg(Ident),
+}
+
+pub struct ProtodefPath {
+    up: usize,
+    items: Vec<ProtodefPathItem>,
+}
+
+peg::parser!(
+grammar protodef() for str {
+    rule ident() -> Ident = s:$(['a'..='z' | 'A'..='Z' | '_']+) { s.into() }
+    rule path_item() -> ProtodefPathItem = arg:"$"? ident:ident() { if arg.is_some() { ProtodefPathItem::Arg(ident) } else { ProtodefPathItem::Down(ident) } }
+    pub rule path() -> ProtodefPath = v:("../")* items:path_item()++"/" {ProtodefPath {up: v.len(), items}}
+}
+);
+
 pub fn parse_reference(r: &str) -> Result<ast::Reference> {
+    let path = protodef::path(r)?;
+    for i in path.items.iter().skip(1) {
+        ensure!(
+            !matches!(i, ProtodefPathItem::Arg(_)),
+            "argument only can be first"
+        )
+    }
     Ok(ast::Reference {
-        up: 10,
-        path: BaseReference(vec![(true, "todo".into())]),
+        up: path.up,
+        path: BaseReference(
+            path.items
+                .into_iter()
+                .map(|i| match i {
+                    ProtodefPathItem::Down(v) => ReferenceSegment::Down {
+                        to: v,
+                        ignore_delegation: false,
+                    },
+                    ProtodefPathItem::Arg(v) => ReferenceSegment::Arg(v),
+                })
+                .collect::<Vec<_>>(),
+        ),
     })
 }
 

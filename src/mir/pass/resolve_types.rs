@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 
 use crate::{
-    ast::Ident,
+    ast::{Ident, ReferenceSegment},
     hir::TypeId,
-    mir::{self, Definition, Field},
+    mir::{self, Definition, Field, TypeMap},
 };
 
 #[derive(Default, Debug)]
@@ -51,7 +51,7 @@ impl Definition {
     fn resolve_types(
         &self,
         self_id: TypeId,
-        types: &HashMap<TypeId, Definition>,
+        types: &TypeMap,
         out: &mut TypeUsageCollector,
     ) -> Result<()> {
         match &self.kind {
@@ -63,11 +63,17 @@ impl Definition {
                     }
                     if let Some(from) = &field.load_from {
                         Self::resolve_ref(self_id, types, &from)
-                            .with_context(|| format!("Resolving {:?}", from))?;
+                            .with_context(|| format!("failed to resolve {:?}", from))?;
                     }
                 }
             }
-            mir::TypeKind::FixedSizeArray { t, .. } | mir::TypeKind::DynamicArray { t, .. } => {
+            mir::TypeKind::FixedSizeArray { t, .. } => {
+                for (name, ty) in &t.args {
+                    out.used(t.target, name, Self::resolve_ref(self_id, types, &ty)?);
+                }
+            }
+            mir::TypeKind::DynamicArray { size_ref, t, .. } => {
+                Self::resolve_ref(self_id, types, &size_ref)?;
                 for (name, ty) in &t.args {
                     out.used(t.target, name, Self::resolve_ref(self_id, types, &ty)?);
                 }
@@ -97,23 +103,23 @@ impl Definition {
         Ok(())
     }
 
-    fn resolve_ref(from: TypeId, types: &HashMap<TypeId, Definition>, r: &Field) -> Result<TypeId> {
+    fn resolve_ref(from: TypeId, types: &TypeMap, r: &Field) -> Result<TypeId> {
         let mut cur = from;
         for (i, item) in r.0.iter().enumerate() {
+            println!("Resolving {:?}", item);
             if item.from.get().is_valid() {
                 assert_eq!(item.from.get(), cur);
             } else {
                 item.from.set(cur);
             }
-            match item.kind {
-                mir::FieldItemKind::Argument => {
-                    let id = types
-                        .get(&from)
-                        .expect("invalid reference")
+            match &item.segment {
+                ReferenceSegment::Arg(name) => {
+                    assert_eq!(i, 0);
+                    let id = types[from]
                         .params
                         .iter()
-                        .find(|f| f.0 == item.name)
-                        .ok_or_else(|| anyhow!("unknown argument: {:?}", item.name))?
+                        .find(|f| &f.0 == name)
+                        .ok_or_else(|| anyhow!("unknown argument: {:?}", name))?
                         .1;
                     if !id.is_valid() {
                         return Ok(id);
@@ -125,39 +131,65 @@ impl Definition {
                         item.to.set(cur);
                     }
                 }
-                mir::FieldItemKind::Field => {
-                    cur = types
-                        .get(&cur)
-                        .expect("invalid reference")
-                        .resolve_ref_single(item.name.clone())?;
+                ReferenceSegment::Down { .. } | ReferenceSegment::Virtual(_) => {
+                    cur = types[cur].resolve_ref_single(item.segment.clone(), types)?;
                     if item.to.get().is_valid() {
                         assert!(item.to.get() == cur);
                     } else {
                         item.to.set(cur);
                     }
                 }
-                mir::FieldItemKind::Virtual => {
-                    let ty = types.iter().find(|t| t.1.name.item == Ident::new("usize"));
-                    ensure!(ty.is_some(), "expected to find defined usize");
-                    cur = *ty.unwrap().0;
-                    item.to.set(cur);
-                }
             }
         }
         Ok(cur)
     }
 
-    fn resolve_ref_single(&self, name: Ident) -> Result<TypeId> {
-        Ok(match &self.kind {
-            mir::TypeKind::Container { fields, .. } => {
+    fn resolve_ref_single(&self, segment: ReferenceSegment, types: &TypeMap) -> Result<TypeId> {
+        Ok(match (segment, &self.kind) {
+            (
+                segment
+                @
+                (ReferenceSegment::Virtual(_)
+                | ReferenceSegment::Down {
+                    ignore_delegation: false,
+                    ..
+                }),
+                mir::TypeKind::Container {
+                    delegate_all: Some(to),
+                    fields,
+                    ..
+                },
+            ) => {
+                let target = fields
+                    .iter()
+                    .find(|f| &f.name == to)
+                    .ok_or_else(|| anyhow!("delegate_all field not found: {:?}", to))?
+                    .ty
+                    .target;
+                types[target]
+                    .resolve_ref_single(segment, types)
+                    .with_context(|| format!("failed to resolve delegated to {:?}", to))?
+            }
+            (ReferenceSegment::Down { to, .. }, mir::TypeKind::Container { fields, .. }) => {
                 fields
                     .iter()
-                    .find(|f| f.name == name)
-                    .ok_or_else(|| anyhow!("field not found: {:?}", name))?
+                    .find(|f| f.name == to)
+                    .ok_or_else(|| anyhow!("field not found: {:?}", to))?
                     .ty
                     .target
             }
-            _ => bail!("unknown field: {:?}", name),
+            (ReferenceSegment::Virtual(name), mir::TypeKind::DynamicArray { .. })
+                if name.as_str() == "size" =>
+            {
+                let ty = types
+                    .0
+                    .iter()
+                    .find(|t| t.1.name.item == Ident::new("usize"));
+                ensure!(ty.is_some(), "expected to find defined usize");
+
+                *ty.unwrap().0
+            }
+            (s, t) => bail!("type {:?} has no fields, but referenced {:?}", t, s),
         })
     }
 
@@ -175,12 +207,12 @@ impl Definition {
     }
 }
 
-pub fn resolve_types(types: &mut HashMap<TypeId, Definition>) -> Result<()> {
+pub fn resolve_types(types: &mut TypeMap) -> Result<()> {
     let mut collector = TypeUsageCollector::default();
 
     loop {
         collector.reset_validity();
-        for (i, d) in types.iter() {
+        for (i, d) in types.0.iter() {
             d.resolve_types(*i, &types, &mut collector)?;
         }
         if collector.has_invalid && !collector.has_valid {
@@ -189,13 +221,13 @@ pub fn resolve_types(types: &mut HashMap<TypeId, Definition>) -> Result<()> {
         } else if !collector.has_invalid && !collector.has_valid {
             break;
         }
-        let count_resolved = types.len();
-        for (i, d) in types.iter_mut() {
+        let count_resolved = types.0.len();
+        for (i, d) in types.0.iter_mut() {
             d.propogate_types(*i, &collector)?;
         }
     }
 
-    for (_, d) in types.iter() {
+    for (_, d) in types.0.iter() {
         d.assert_no_unresolved()
     }
 

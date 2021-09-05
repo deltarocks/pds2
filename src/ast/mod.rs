@@ -140,12 +140,37 @@ impl Statement {
 }
 
 #[derive(Clone)]
-pub struct BaseReference(pub Vec<(bool, Ident)>);
+pub enum ReferenceSegment {
+    Down { to: Ident, ignore_delegation: bool },
+    Virtual(Ident),
+    Arg(Ident),
+}
+impl ReferenceSegment {
+    fn name(&self) -> String {
+        match self {
+            ReferenceSegment::Down { to, .. } => to.as_str().to_string(),
+            ReferenceSegment::Virtual(v) => v.as_str().to_string(),
+            ReferenceSegment::Arg(a) => a.as_str().to_string(),
+        }
+    }
+}
+impl Debug for ReferenceSegment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReferenceSegment::Down { to, .. } => write!(f, "{:?}", to),
+            ReferenceSegment::Virtual(v) => write!(f, "@{:?}", v),
+            ReferenceSegment::Arg(a) => write!(f, "${:?}", a),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct BaseReference(pub Vec<ReferenceSegment>);
 impl BaseReference {
     pub fn name(&self) -> String {
         self.0
             .iter()
-            .map(|p| p.1.as_str())
+            .map(|p| p.name())
             .collect::<Vec<_>>()
             .join("_")
     }
@@ -160,14 +185,11 @@ impl TryFrom<Reference> for BaseReference {
 }
 impl Debug for BaseReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (i, (virt, path)) in self.0.iter().enumerate() {
+        for (i, item) in self.0.iter().enumerate() {
             if i != 0 {
                 write!(f, "/")?;
             }
-            if *virt {
-                write!(f, "@")?;
-            }
-            write!(f, "{:?}", path)?;
+            write!(f, "{:?}", item)?;
         }
         Ok(())
     }
@@ -181,6 +203,9 @@ pub struct Reference {
 impl Reference {
     pub fn name(&self) -> String {
         self.path.name()
+    }
+    pub fn parse(s: &str) -> Result<Self> {
+        Ok(parse::parse_reference(s)?)
     }
 }
 impl Debug for Reference {
@@ -208,6 +233,7 @@ pub enum Value {
     Internal(String),
     Unset,
 }
+
 impl From<Item> for Value {
     fn from(i: Item) -> Self {
         Self::Item(i)
@@ -216,6 +242,11 @@ impl From<Item> for Value {
 impl From<i64> for Value {
     fn from(i: i64) -> Self {
         Self::Int(i)
+    }
+}
+impl From<u32> for Value {
+    fn from(i: u32) -> Self {
+        Self::Int(i as i64)
     }
 }
 impl From<Reference> for Value {
@@ -246,7 +277,7 @@ impl ItemArgs {
             .unnamed
             .get(id)
             .cloned()
-            .unwrap_or_else(|| Value::Unset);
+            .unwrap_or_else(|| Value::Unset.into());
         T::parse(value).with_context(|| format!("parsing argument {} ({})", id, name))
     }
     pub fn named<T: ParseValue>(&self, name: impl Into<Ident>) -> Result<T> {
@@ -332,6 +363,17 @@ impl ParseValue for Reference {
 impl ParseValue for Value {
     fn parse(value: Value) -> Result<Self> {
         Ok(value)
+    }
+}
+impl ParseValue for Item {
+    fn parse(value: Value) -> Result<Self> {
+        if value.is_unset() {
+            bail!("missing item")
+        }
+        match value {
+            Value::Item(i) => Ok(i),
+            _ => bail!("expected item"),
+        }
     }
 }
 

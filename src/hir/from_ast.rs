@@ -1,11 +1,13 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, convert::TryInto};
 
 use crate::{
-    ast::{Block, Ident, Item, Value},
-    hir::{Array, Container, ContainerFieldType, NamespaceItem, NativeTypeKind, Union},
+    ast::{Block, Ident, Item, Reference, Value},
+    hir::{
+        Array, ArrayLength, Container, ContainerFieldType, NamespaceItem, NativeTypeKind, Union,
+    },
 };
 
-use super::{IdGenerator, Namespace, Type, TypeKind};
+use super::{IdGenerator, Namespace, Type, TypeKind, UnionTag};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 
 pub fn parse_ast(ast: Block) -> Result<Namespace> {
@@ -73,13 +75,16 @@ impl Container {
             fields.push((name, field))
         }
 
-        Ok(Container { virt, fields })
+        Ok(Container {
+            virt,
+            fields,
+            delegate_all: None,
+        })
     }
 }
 
 impl Union {
-    fn from_ast(value: Item) -> Result<Self> {
-        let tag = value.args.named("tag")?;
+    fn from_ast_with_tag(tag: UnionTag, value: Item) -> Result<Self> {
         let mut matches = Vec::new();
         let mut default = None;
 
@@ -128,24 +133,99 @@ impl Union {
             default,
         })
     }
+    fn from_ast(value: Item) -> Result<TypeKind> {
+        match value.args.named("tagType")? {
+            Some(t) => {
+                return Ok(TypeKind::Container(Container {
+                    virt: true,
+                    fields: vec![
+                        (
+                            "_tag".into(),
+                            ContainerFieldType::Virtual(
+                                Reference::parse("./union/@tag").unwrap(),
+                                TypeKind::from_ast(t, vec![])?,
+                            ),
+                        ),
+                        (
+                            "union".into(),
+                            ContainerFieldType::Normal(
+                                Self::from_ast_with_tag(
+                                    UnionTag::LoadFrom(Reference::parse("./_tag").unwrap()),
+                                    value,
+                                )
+                                .map(TypeKind::Union)?,
+                            ),
+                        ),
+                    ],
+                    delegate_all: Some("union".into()),
+                }));
+            }
+            None => {}
+        };
+        let tag = match value.args.named("tag")? {
+            Some(r) => UnionTag::LoadFrom(r),
+            None => bail!("neither tag nor tagType is specified"),
+        };
+        Self::from_ast_with_tag(tag, value).map(TypeKind::Union)
+    }
 }
 
 impl Array {
-    fn from_ast(value: Item, mut items: Vec<Value>) -> Result<Self> {
+    fn from_ast_with_length(
+        length: ArrayLength,
+        _value: Item,
+        mut items: Vec<Value>,
+    ) -> Result<Self> {
         let type_item = items
             .remove(0)
             .into_item()
             .ok_or_else(|| anyhow!("array item should be item"))?;
-        let length = match value.args.named("length")? {
-            Value::Reference(r) => Ok(r),
-            Value::Int(v) => Err(v),
-            v => bail!("array length should be reference or int, got {:?}", v),
-        };
 
         Ok(Array {
             length,
             ty: Box::new(TypeKind::from_ast(type_item, items)?),
         })
+    }
+    fn from_ast(value: Item, items: Vec<Value>) -> Result<TypeKind> {
+        match value.args.named("lengthType")? {
+            Some(t) => {
+                return Ok(TypeKind::Container(Container {
+                    virt: true,
+                    fields: vec![
+                        (
+                            "_size".into(),
+                            ContainerFieldType::Virtual(
+                                Reference::parse("./._array/@size").unwrap(),
+                                TypeKind::from_ast(t, vec![])?,
+                            ),
+                        ),
+                        (
+                            "_array".into(),
+                            ContainerFieldType::Normal(
+                                Self::from_ast_with_length(
+                                    ArrayLength::LoadFrom(Reference::parse("../._size").unwrap()),
+                                    value,
+                                    items,
+                                )
+                                .map(TypeKind::Array)?,
+                            ),
+                        ),
+                    ],
+                    delegate_all: Some("_array".into()),
+                }));
+            }
+            None => {}
+        };
+        let length = match value.args.named("length")? {
+            Value::Reference(r) => ArrayLength::LoadFrom(r),
+            Value::Int(v) => ArrayLength::Fixed(
+                v.try_into()
+                    .map_err(|_| anyhow!("bad length for fixed-sized array"))?,
+            ),
+            Value::Unset => bail!("neigher length nor lengthType is set for array"),
+            v => bail!("array length should be reference or int, got {:?}", v),
+        };
+        Self::from_ast_with_length(length, value, items).map(TypeKind::Array)
     }
 }
 
@@ -159,9 +239,9 @@ impl TypeKind {
                 }
                 "union" => {
                     ensure!(items.is_empty(), "union has no items");
-                    TypeKind::Union(Union::from_ast(value).context("parsing union")?)
+                    Union::from_ast(value).context("parsing union")?
                 }
-                "array" => TypeKind::Array(Array::from_ast(value, items).context("parsing array")?),
+                "array" => Array::from_ast(value, items).context("parsing array")?,
                 _ => {
                     ensure!(items.is_empty(), "unexpected values");
                     ensure!(value.block.is_empty(), "unexpected block");

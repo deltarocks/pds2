@@ -61,6 +61,7 @@ impl Container {
             match v {
                 ContainerFieldType::Normal(n) => n.rewrite_paths_to_absolute(current_ns),
                 ContainerFieldType::Virtual(_, n) => n.rewrite_paths_to_absolute(current_ns),
+                ContainerFieldType::Delegate(_) => {}
             }
         }
     }

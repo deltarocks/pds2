@@ -1,10 +1,11 @@
 use crate::{
     ast::{self, Ident, Path, Reference},
     hir::{self, TypeId},
-    mir::{self, FieldItem, FieldItemKind},
+    mir::{self, FieldItem},
+    should_be_desugared,
 };
-use anyhow::{anyhow, bail, Result};
-use std::{collections::HashMap, convert::TryInto};
+use anyhow::{bail, Result};
+use std::collections::HashMap;
 
 use super::{Definition, Field, Type, TypeKind, TypeMap, Value};
 
@@ -53,12 +54,17 @@ impl TypeKind {
                                 ty: Type::from_hir(t),
                                 load_from: Some(Field::from_hir(r)),
                             },
+                            hir::ContainerFieldType::Delegate(_) => should_be_desugared!(f),
                         })
                     })
                     .collect::<Result<_>>()?,
+                delegate_all: c.delegate_all.clone(),
             },
             hir::TypeKind::Union(u) => Self::Union {
-                tag: u.tag.clone().try_into()?,
+                tag: match &u.tag {
+                    hir::UnionTag::LoadFrom(r) => Field::from_hir(r),
+                    hir::UnionTag::Type(_) => should_be_desugared!(u.tag),
+                },
                 matches: u
                     .matches
                     .iter()
@@ -76,14 +82,15 @@ impl TypeKind {
                     .map(|d| (d.0.clone(), Type::from_hir(&d.1))),
             },
             hir::TypeKind::Array(a) => match &a.length {
-                Ok(r) => Self::DynamicArray {
-                    size_ref: r.clone().try_into().unwrap(),
+                hir::ArrayLength::LoadFrom(r) => Self::DynamicArray {
+                    size_ref: Field::from_hir(r),
                     t: Type::from_hir(&a.ty),
                 },
-                Err(s) => Self::FixedSizeArray {
-                    size: (*s).try_into().map_err(|_| anyhow!("invalid size"))?,
+                hir::ArrayLength::Fixed(v) => Self::FixedSizeArray {
+                    size: *v,
                     t: Type::from_hir(&a.ty),
                 },
+                hir::ArrayLength::Type(_) => should_be_desugared!(a),
             },
             hir::TypeKind::Reference(_, _) => todo!(),
             hir::TypeKind::Native(n) => Self::Native(n.clone()),
@@ -115,15 +122,10 @@ impl Field {
             hir.path
                 .0
                 .iter()
-                .enumerate()
-                .map(|(i, (virt, name))| FieldItem {
+                .cloned()
+                .map(|segment| FieldItem {
                     from: Default::default(),
-                    kind: match () {
-                        _ if *virt && i == 0 => FieldItemKind::Argument,
-                        _ if *virt => FieldItemKind::Virtual,
-                        _ => FieldItemKind::Field,
-                    },
-                    name: name.clone(),
+                    segment,
                     to: Default::default(),
                 })
                 .collect(),
@@ -153,8 +155,8 @@ pub fn from_hir_internal(
 pub fn from_hir(hir: &hir::Namespace) -> Result<TypeMap> {
     let mut out = HashMap::new();
     from_hir_internal(hir, &mut Vec::new(), &mut out)?;
-    super::pass::resolve_types(&mut out)?;
     let mut out = TypeMap(out.into_iter().collect());
+    super::pass::resolve_types(&mut out)?;
     super::pass::resolve_field_types(&mut out);
     Ok(out)
 }

@@ -1,4 +1,4 @@
-use crate::ast::Ident;
+use crate::ast::{Ident, ReferenceSegment};
 use crate::hir::TypeId;
 use crate::mir::{self, Field, Type, TypeKind, TypeMap};
 use crate::pi;
@@ -36,22 +36,23 @@ pub fn generate_read_reference(types: &TypeMap, from_locals: bool, input: &Field
     let mut pi = PrintItems::new();
     pi!(pi => "&{" INDENT NL);
     for (i, field) in input.0.iter().enumerate() {
-        match field.kind {
-            mir::FieldItemKind::Argument => {
+        match &field.segment {
+            ReferenceSegment::Arg(name) => {
+                assert_eq!(i, 0);
                 pi!(pi =>
                     "let _0 = &args;" NL
-                    "let _0: &" {=types.ty(field.to.get())} " = &_0." {?field.name} ";" NL
+                    "let _0: &" {=types.ty(field.to.get())} " = &_0." {?name} ";" NL
                 );
             }
-            mir::FieldItemKind::Field => {
+            ReferenceSegment::Down { to, .. } => {
                 if i == 0 && from_locals {
-                    pi!(pi => "let _0: &" {=types.ty(field.to.get())} " = &" {?field.name} ";" NL)
+                    pi!(pi => "let _0: &" {=types.ty(field.to.get())} " = &" {?to} ";" NL)
                 } else {
-                    pi!(pi => "let _0: &" {=types.ty(field.to.get())} " = &_0." {?field.name} ";" NL)
+                    pi!(pi => "let _0: &" {=types.ty(field.to.get())} " = &_0." {?to} ";" NL)
                 }
             }
-            mir::FieldItemKind::Virtual => {
-                pi!(pi => "let _0: &" {=types.ty(field.to.get())} " = &" {=types.virt(field.from.get(), field.name.clone())} "(&_0);" NL);
+            ReferenceSegment::Virtual(name) => {
+                pi!(pi => "let _0: &" {=types.ty(field.to.get())} " = &" {=types.virt(field.from.get(), name.clone())} "(&_0);" NL);
             }
         }
     }
@@ -159,8 +160,8 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput) -> Result<(
                         "pub fn deserialize(input: &mut Input"
                         {if has_args => " , args: Args<'_>"}
                         ") -> Result<Ty> {" INDENT NL
-                            "let mut out = Vec::with_capacity(*args." {?size_ref.0[0].1} " as usize);" NL
-                            "for _ in 0..(*args." {?size_ref.0[0].1} " as usize) {" INDENT NL
+                            "let mut out = Vec::with_capacity(*" {<generate_read_reference(input, false, size_ref)} " as usize);" NL
+                            "for _ in 0..(*" {<generate_read_reference(input, false, size_ref)} " as usize) {" INDENT NL
                                 "out.push(" {=input.deserialize(t.target)} "(input)?);" NL
                             DEDENT "}" NL
                             "Ok(out)" NL
@@ -173,7 +174,7 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput) -> Result<(
                                 ".sum()" NL DEDENT
                         DEDENT "}" NL
 
-                        "pub fn virtual_len(_0: &Ty) -> super::pds_usize::Ty {" INDENT NL
+                        "pub fn virtual_size(_0: &Ty) -> super::pds_usize::Ty {" INDENT NL
                             "_0.len() as super::pds_usize::Ty" NL
                         DEDENT "}" NL
                     );

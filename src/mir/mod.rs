@@ -1,15 +1,10 @@
 mod from_hir;
-use std::{
-    cell::Cell,
-    collections::{BTreeMap, HashMap},
-    ops::Index,
-};
-
 pub use from_hir::from_hir;
+use std::{cell::Cell, collections::BTreeMap, ops::Index};
 mod pass;
 
 use crate::{
-    ast::{BaseReference, Ident, Path},
+    ast::{Ident, Path, ReferenceSegment},
     hir::{NativeTypeKind, TypeId},
 };
 
@@ -38,18 +33,19 @@ pub enum TypeKind {
     Container {
         virt: bool,
         fields: Vec<ContainerField>,
+        delegate_all: Option<Ident>,
     },
     Union {
-        tag: BaseReference,
+        tag: Field,
         matches: Vec<(Value, Ident, Type)>,
         default: Option<(Ident, Type)>,
     },
     FixedSizeArray {
-        size: usize,
+        size: u32,
         t: Type,
     },
     DynamicArray {
-        size_ref: BaseReference,
+        size_ref: Field,
         t: Type,
     },
     Native(NativeTypeKind),
@@ -86,13 +82,35 @@ pub enum FieldItemKind {
     Virtual,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FieldItem {
     pub from: Cell<TypeId>,
-    pub kind: FieldItemKind,
-    pub name: Ident,
+    pub segment: ReferenceSegment,
     pub to: Cell<TypeId>,
 }
 
-#[derive(Debug, Clone)]
+impl std::fmt::Debug for FieldItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.from.get().is_valid() {
+            write!(f, "<{:?}>", self.from.get())?;
+        }
+        write!(f, "{:?}", self.segment)?;
+        if self.to.get().is_valid() {
+            write!(f, "<{:?}>", self.to.get())?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
 pub struct Field(pub Vec<FieldItem>);
+
+impl std::fmt::Debug for Field {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, ".")?;
+        for item in &self.0 {
+            write!(f, "/{:?}", item)?;
+        }
+        Ok(())
+    }
+}

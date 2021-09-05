@@ -37,7 +37,26 @@ impl TypeKind {
                                     )
                                     .then(t.to_ast()),
                             }),
+                            ContainerFieldType::Delegate(to) => out.push(ast::Statement {
+                                attributes: Default::default(),
+                                items: Item::simple_builder("delegate_field")
+                                    .args(
+                                        ItemArgs::builder()
+                                            .arg(Item::new_simple(name).into())
+                                            .named("to", Item::new_simple(to).into()),
+                                    )
+                                    .build_values(),
+                            }),
                         }
+                    }
+
+                    if let Some(to) = c.delegate_all {
+                        out.push(ast::Statement {
+                            attributes: Default::default(),
+                            items: Item::simple_builder("delegate_all")
+                                .args(ItemArgs::builder().named("to", Item::new_simple(to).into()))
+                                .build_values(),
+                        })
                     }
 
                     ast::Block {
@@ -47,7 +66,14 @@ impl TypeKind {
                 })
                 .build_values(),
             super::TypeKind::Union(r) => Item::simple_builder("union")
-                .args(ItemArgs::builder().named("tag", r.tag.into()))
+                .args(match r.tag {
+                    crate::hir::UnionTag::LoadFrom(r) => ItemArgs::builder().named("tag", r.into()),
+                    crate::hir::UnionTag::Type(t) => {
+                        let chain = t.to_ast();
+                        assert_eq!(chain.len(), 1);
+                        ItemArgs::builder().named("tagType", chain.into_iter().next().unwrap())
+                    }
+                })
                 .block({
                     let mut out = Vec::new();
 
@@ -80,13 +106,19 @@ impl TypeKind {
                 })
                 .build_values(),
             super::TypeKind::Array(a) => Item::simple_builder("array")
-                .args(ItemArgs::builder().named(
-                    "length",
-                    match a.length {
-                        Ok(r) => r.into(),
-                        Err(n) => n.into(),
-                    },
-                ))
+                .args(match a.length {
+                    crate::hir::ArrayLength::LoadFrom(r) => {
+                        ItemArgs::builder().named("length", r.into())
+                    }
+                    crate::hir::ArrayLength::Fixed(r) => {
+                        ItemArgs::builder().named("length", r.into())
+                    }
+                    crate::hir::ArrayLength::Type(t) => {
+                        let chain = t.to_ast();
+                        assert_eq!(chain.len(), 1);
+                        ItemArgs::builder().named("lengthType", chain.into_iter().next().unwrap())
+                    }
+                })
                 .then(a.ty.to_ast()),
             super::TypeKind::Reference(Err(r), _) => Item::path_builder(r).build_values(),
             super::TypeKind::Reference(Ok(r), args) => {
