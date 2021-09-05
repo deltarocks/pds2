@@ -162,6 +162,7 @@ pub fn upgrade_type(value: Value) -> Result<Vec<ast::Value>> {
                         .ok_or_else(|| anyhow!("array data should be object"))?;
                     ensure!(data.len() == 2, "unknown array fields");
                     let ty = data.get("type").ok_or_else(|| anyhow!("missing type"))?;
+                    let ty = upgrade_type(ty.clone())?;
                     if let Some(count_type) = data.get("countType") {
                         let parsed = upgrade_type(count_type.clone())?;
                         ensure!(
@@ -171,7 +172,7 @@ pub fn upgrade_type(value: Value) -> Result<Vec<ast::Value>> {
                         let v = parsed[0].item().unwrap().clone();
                         Item::simple_builder("array")
                             .args(ItemArgs::builder().named("lengthType", ast::Value::Item(v)))
-                            .build_values()
+                            .then(ty)
                     } else if let Some(count) = data.get("count") {
                         let reference = count.as_str().ok_or_else(|| anyhow!("bad reference"))?;
                         Item::simple_builder("array")
@@ -179,7 +180,7 @@ pub fn upgrade_type(value: Value) -> Result<Vec<ast::Value>> {
                                 "length",
                                 ast::Value::Reference(parse_reference(reference)?),
                             ))
-                            .build_values()
+                            .then(ty)
                     } else {
                         bail!("unknown array kind");
                     }
