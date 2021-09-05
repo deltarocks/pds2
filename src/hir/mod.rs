@@ -33,15 +33,28 @@ pub struct Container {
 }
 
 #[derive(Debug)]
+pub enum UnionTag {
+    LoadFrom(Reference),
+    Type(TypeKind),
+}
+
+#[derive(Debug)]
 pub struct Union {
-    pub tag: Reference,
+    pub tag: UnionTag,
     pub matches: Vec<(Value, Ident, TypeKind)>,
     pub default: Option<(Ident, Box<TypeKind>)>,
 }
 
 #[derive(Debug)]
+pub enum ArrayLength {
+    LoadFrom(Reference),
+    Fixed(u32),
+    Type(TypeKind),
+}
+
+#[derive(Debug)]
 pub struct Array {
-    pub length: Result<Reference, i64>,
+    pub length: ArrayLength,
     pub ty: Box<TypeKind>,
 }
 
