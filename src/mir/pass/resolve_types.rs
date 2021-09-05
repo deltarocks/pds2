@@ -83,6 +83,7 @@ impl Definition {
                 matches,
                 default,
             } => {
+                Self::resolve_ref(self_id, types, &tag)?;
                 for (_, _, ty) in matches {
                     for (name, r) in &ty.args {
                         out.used(ty.target, name, Self::resolve_ref(self_id, types, &r)?)
@@ -221,7 +222,6 @@ pub fn resolve_types(types: &mut TypeMap) -> Result<()> {
         } else if !collector.has_invalid && !collector.has_valid {
             break;
         }
-        let count_resolved = types.0.len();
         for (i, d) in types.0.iter_mut() {
             d.propogate_types(*i, &collector)?;
         }
