@@ -27,7 +27,7 @@ impl Type {
 impl Value {
     fn from_hir(hir: &ast::Value) -> Result<Self> {
         Ok(match hir {
-            ast::Value::String { string, is_block } => Self::String(string.clone()),
+            ast::Value::String { string, .. } => Self::String(string.clone()),
             ast::Value::Int(i) => Self::Signed(*i as i128),
             _ => bail!("unexpected value type"),
         })
