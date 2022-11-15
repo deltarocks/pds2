@@ -5,9 +5,9 @@ use crate::{
 	should_be_desugared,
 };
 use anyhow::{bail, Result};
-use std::{collections::HashMap, rc::Rc};
+use std::collections::HashMap;
 
-use super::{Definition, Field, NativeTypeKind, Type, TypeKind, TypeMap, Value};
+use super::{Definition, Field, NativeType, Type, TypeKind, TypeMap, Value};
 
 impl Type {
 	fn from_hir(kind: &hir::TypeKind) -> Self {
@@ -103,17 +103,11 @@ impl TypeKind {
 				hir::ArrayLength::Type(_) => should_be_desugared!(a),
 			},
 			hir::TypeKind::Reference { .. } => todo!("type alias"),
-			hir::TypeKind::Native(hir::NativeTypeKind::Int(size)) => {
-				Self::Native(NativeTypeKind::Int(*size))
-			}
-			hir::TypeKind::Native(hir::NativeTypeKind::Uint(size)) => {
-				Self::Native(NativeTypeKind::Uint(*size))
-			}
-			hir::TypeKind::Native(hir::NativeTypeKind::Opaque {
+			hir::TypeKind::Native(hir::NativeType {
 				virtual_fields,
 				specializer,
 				specialization,
-			}) => Self::Native(NativeTypeKind::Opaque {
+			}) => Self::Native(NativeType {
 				virtual_fields: virtual_fields
 					.iter()
 					.map(|(name, ty)| (name.clone(), Type::from_hir(ty)))
@@ -124,7 +118,6 @@ impl TypeKind {
 					.map(|(n, v)| (n.clone(), Type::from_hir(v)))
 					.collect(),
 			}),
-			hir::TypeKind::Native(hir::NativeTypeKind::Pending) => unreachable!(),
 			hir::TypeKind::Void => Self::Void,
 		})
 	}

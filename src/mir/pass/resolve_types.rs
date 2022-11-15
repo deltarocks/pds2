@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use crate::{
 	ast::{Ident, ReferenceSegment},
 	hir::TypeId,
-	mir::{self, Definition, Field, NativeTypeKind, TypeMap},
+	mir::{self, Definition, Field, NativeType, TypeMap},
 };
 
 #[derive(Default, Debug)]
@@ -198,10 +198,10 @@ impl Definition {
 			}
 			(
 				ReferenceSegment::Virtual(name),
-				mir::TypeKind::Native(NativeTypeKind::Opaque {
+				mir::TypeKind::Native(NativeType {
 					virtual_fields,
-					specializer,
-					specialization,
+					specializer: _,
+					specialization: _,
 				}),
 			) => {
 				let (_, ty) = virtual_fields

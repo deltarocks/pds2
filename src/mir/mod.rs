@@ -29,16 +29,12 @@ pub struct ContainerField {
 }
 
 #[derive(Debug)]
-pub enum NativeTypeKind {
-	Int(u32),
-	Uint(u32),
-	Opaque {
-		// Which user defined function should be called to generate parser for this type
-		specializer: Option<Ident>,
-		// Which monomorphized generics this opaque type has
-		specialization: Vec<(Ident, Type)>,
-		virtual_fields: Vec<(Ident, Type)>,
-	},
+pub struct NativeType {
+	// Which user defined function should be called to generate parser for this type
+	pub specializer: Option<Ident>,
+	// Which monomorphized generics this opaque type has
+	pub specialization: Vec<(Ident, Type)>,
+	pub virtual_fields: Vec<(Ident, Type)>,
 }
 
 #[derive(Debug)]
@@ -61,7 +57,7 @@ pub enum TypeKind {
 		size_ref: Field,
 		t: Type,
 	},
-	Native(NativeTypeKind),
+	Native(NativeType),
 	Void,
 }
 

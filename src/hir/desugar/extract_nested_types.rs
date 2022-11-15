@@ -42,7 +42,7 @@ use std::cell::Cell;
 
 use crate::{
 	ast::{BaseReference, Ident, Reference, ReferenceSegment},
-	hir::{IdGenerator, Namespace, NamespaceItem, NativeTypeKind, Type, TypeKind},
+	hir::{IdGenerator, Namespace, NamespaceItem, NativeType, Type, TypeKind},
 	should_be_desugared,
 };
 
@@ -102,7 +102,7 @@ impl TypeReceiver {
 		if let TypeKind::Reference { .. } = ty {
 			return;
 		}
-		let vty = std::mem::replace(ty, TypeKind::Native(NativeTypeKind::Pending));
+		let vty = std::mem::replace(ty, TypeKind::Void);
 		let id = self.id.next();
 		self.extracted.push((
 			self.path.clone(),
@@ -234,7 +234,7 @@ impl TypeKind {
 					receiver.pop()
 				}
 			}
-			TypeKind::Native(NativeTypeKind::Opaque {
+			TypeKind::Native(NativeType {
 				virtual_fields,
 				specializer: _,
 				specialization,
@@ -249,7 +249,6 @@ impl TypeKind {
 					receiver.pop();
 				}
 			}
-			TypeKind::Native(_) => {}
 			TypeKind::Void => {}
 		}
 	}

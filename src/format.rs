@@ -1,7 +1,5 @@
 use dprint_core::formatting::PrintItems;
-use jrsonnet_evaluator::{
-	function::FuncVal, gc::GcHashMap, throw, typed::Typed, IStr, ObjValue, Result, Val,
-};
+use jrsonnet_evaluator::{throw, typed::Typed, ObjValue, Result, Val};
 
 use crate::pi;
 

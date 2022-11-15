@@ -62,7 +62,7 @@ impl TypeKind {
 						ContainerFieldType::Virtual(_, t) => {
 							t.monomorphize(collector, forty);
 						}
-						ContainerFieldType::Delegate(d) => {}
+						ContainerFieldType::Delegate(_) => {}
 					}
 					collector.pop();
 				}
@@ -93,18 +93,14 @@ impl TypeKind {
 			}
 			TypeKind::Native(value) => {
 				dbg!("mono params", forty);
-				match value {
-					crate::hir::NativeTypeKind::Int(_) => todo!(),
-					crate::hir::NativeTypeKind::Uint(_) => todo!(),
-					crate::hir::NativeTypeKind::Opaque {
-						virtual_fields: _,
-						specializer: _,
-						specialization,
-					} => {
-						assert!(specialization.is_empty(), "should only be visited once");
-						*specialization = forty.clone();
-					}
-					crate::hir::NativeTypeKind::Pending => todo!(),
+				let crate::hir::NativeType {
+					virtual_fields: _,
+					specializer: _,
+					specialization,
+				} = value;
+				{
+					assert!(specialization.is_empty(), "should only be visited once");
+					*specialization = forty.clone();
 				}
 			}
 		}

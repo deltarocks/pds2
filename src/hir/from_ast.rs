@@ -1,10 +1,8 @@
-use std::{collections::BTreeMap, convert::TryInto, rc::Rc};
+use std::{collections::BTreeMap, convert::TryInto};
 
 use crate::{
 	ast::{Block, Ident, Item, ParseValue, Reference, Statement, Value},
-	hir::{
-		Array, ArrayLength, Container, ContainerFieldType, NamespaceItem, NativeTypeKind, Union,
-	},
+	hir::{Array, ArrayLength, Container, ContainerFieldType, NamespaceItem, NativeType, Union},
 };
 
 use super::{IdGenerator, Namespace, Type, TypeKind, UnionTag};
@@ -267,12 +265,12 @@ impl TypeKind {
 					Union::from_ast(value).context("parsing union")?
 				}
 				"array" => Array::from_ast(value, items).context("parsing array")?,
-				"option" => TypeKind::Union(Union {
-					tag: UnionTag::Type(Box::new(TypeKind::Native(NativeTypeKind::Uint(1)))),
-					// TODO: fill variants
-					matches: vec![],
-					default: None,
-				}),
+				// "option" => TypeKind::Union(Union {
+				// 	tag: UnionTag::Type(Box::new(TypeKind::Native(NativeType::Uint(1)))),
+				// 	// TODO: fill variants
+				// 	matches: vec![],
+				// 	default: None,
+				// }),
 				_ => {
 					// ensure!(items.is_empty(), "unexpected values");
 					ensure!(value.block.is_empty(), "unexpected block");
@@ -365,7 +363,7 @@ impl Namespace {
 										.remove(0)
 										.into_item()
 										.ok_or_else(|| anyhow!("missing virtual field type"))?;
-									let block = item.block;
+									// let block = item.block;
 									Self::VirtualField(
 										item.args.arg(0, "field name")?,
 										TypeKind::from_ast(type_item, items)?,
@@ -406,7 +404,7 @@ impl Namespace {
 							_id: Default::default(),
 							types,
 							params,
-							kind: TypeKind::Native(NativeTypeKind::Opaque {
+							kind: TypeKind::Native(NativeType {
 								specializer,
 								virtual_fields,
 								specialization: Vec::new(),

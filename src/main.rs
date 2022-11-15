@@ -6,7 +6,7 @@ use dprint_core::formatting::PrintOptions;
 use format::SpecializerObj;
 use generator::GeneratorTypes;
 use jrsonnet_evaluator::{typed::Typed, FileImportResolver, State};
-use std::{fmt::Debug, path::PathBuf};
+use std::path::PathBuf;
 pub mod ast;
 pub mod format;
 pub mod generator;

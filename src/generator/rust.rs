@@ -335,7 +335,7 @@ pub fn generator(
 				unreachable!();
 			};
 			match native {
-				mir::NativeTypeKind::Opaque {
+				mir::NativeType {
 					specializer: Some(specializer),
 					specialization,
 					virtual_fields: _,

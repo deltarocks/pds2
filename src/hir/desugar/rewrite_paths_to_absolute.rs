@@ -24,8 +24,7 @@
 use crate::{
 	ast::Ident,
 	hir::{
-		Container, ContainerFieldType, Namespace, NamespaceItem, NativeTypeKind, Type, TypeKind,
-		Union,
+		Container, ContainerFieldType, Namespace, NamespaceItem, NativeType, Type, TypeKind, Union,
 	},
 };
 
@@ -45,7 +44,7 @@ impl TypeKind {
 			}
 			TypeKind::Reference { .. } => unreachable!(),
 			TypeKind::Void => {}
-			TypeKind::Native(NativeTypeKind::Opaque {
+			TypeKind::Native(NativeType {
 				virtual_fields,
 				specializer: _,
 				specialization,
@@ -55,7 +54,6 @@ impl TypeKind {
 					ty.rewrite_paths_to_absolute(current_ns)
 				}
 			}
-			TypeKind::Native(_) => {}
 		}
 	}
 }

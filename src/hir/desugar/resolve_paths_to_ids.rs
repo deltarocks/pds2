@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::{
 	ast::{Ident, Path},
-	hir::{id_generator::TypeId, Namespace, NativeTypeKind, Type, TypeKind},
+	hir::{id_generator::TypeId, Namespace, NativeType, Type, TypeKind},
 };
 
 impl TypeKind {
@@ -65,7 +65,7 @@ impl TypeKind {
 				}
 			}
 			TypeKind::Reference { .. } => {}
-			TypeKind::Native(NativeTypeKind::Opaque {
+			TypeKind::Native(NativeType {
 				virtual_fields,
 				specializer: _,
 				specialization,
@@ -78,7 +78,6 @@ impl TypeKind {
 					fix_path(paths, &mut field.1)?;
 				}
 			}
-			TypeKind::Native(_) => {}
 			TypeKind::Void => {}
 		}
 		Ok(())

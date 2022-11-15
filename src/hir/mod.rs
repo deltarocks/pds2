@@ -63,15 +63,10 @@ pub struct Array {
 }
 
 #[derive(Debug, Clone)]
-pub enum NativeTypeKind {
-	Int(u32),
-	Uint(u32),
-	Opaque {
-		virtual_fields: Vec<(Ident, TypeKind)>,
-		specializer: Option<Ident>,
-		specialization: Vec<(Ident, TypeKind)>,
-	},
-	Pending,
+pub struct NativeType {
+	pub virtual_fields: Vec<(Ident, TypeKind)>,
+	pub specializer: Option<Ident>,
+	pub specialization: Vec<(Ident, TypeKind)>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,7 +80,7 @@ pub enum TypeKind {
 		args: Vec<(Ident, Reference)>,
 		types: Vec<(Ident, TypeKind)>,
 	},
-	Native(NativeTypeKind),
+	Native(NativeType),
 }
 impl TypeKind {
 	fn assert_reference(&self) {
