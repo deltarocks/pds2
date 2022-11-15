@@ -1,6 +1,6 @@
 use crate::{
 	ast::{self, Ident, Path, Reference},
-	hir::{self, TypeId},
+	hir::{self, ReferenceKind, TypeId},
 	mir::{self, FieldItem},
 	should_be_desugared,
 };
@@ -13,7 +13,7 @@ impl Type {
 	fn from_hir(kind: &hir::TypeKind) -> Self {
 		match kind {
 			hir::TypeKind::Reference {
-				ty: Ok(target),
+				ty: ReferenceKind::Resolved(target),
 				args,
 				types,
 			} => {

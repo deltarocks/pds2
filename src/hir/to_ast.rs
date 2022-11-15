@@ -5,7 +5,7 @@ use crate::{
 	hir::ContainerFieldType,
 };
 
-use super::{Namespace, Type, TypeKind};
+use super::{Namespace, ReferenceKind, Type, TypeKind};
 
 impl TypeKind {
 	fn to_ast(self) -> Vec<ast::Value> {
@@ -120,9 +120,12 @@ impl TypeKind {
 					}
 				})
 				.then(a.ty.to_ast()),
-			super::TypeKind::Reference { ty: Err(r), .. } => Item::path_builder(r).build_values(),
 			super::TypeKind::Reference {
-				ty: Ok(r),
+				ty: ReferenceKind::Path(r),
+				..
+			} => Item::path_builder(r).build_values(),
+			super::TypeKind::Reference {
+				ty: ReferenceKind::Resolved(r),
 				args,
 				types,
 			} => {
@@ -133,6 +136,7 @@ impl TypeKind {
 			}
 			TypeKind::Void => vec![],
 			TypeKind::Native(_) => unreachable!(),
+			_ => todo!(),
 		}
 	}
 }

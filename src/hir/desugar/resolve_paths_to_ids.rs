@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::{
 	ast::{Ident, Path},
-	hir::{id_generator::TypeId, Namespace, NativeType, Type, TypeKind},
+	hir::{id_generator::TypeId, Namespace, NativeType, ReferenceKind, Type, TypeKind},
 };
 
 impl TypeKind {
@@ -20,13 +20,14 @@ impl TypeKind {
 	) -> Result<()> {
 		fn fix_path(paths: &HashMap<Path, TypeId>, t: &mut TypeKind) -> Result<()> {
 			match t {
-				TypeKind::Reference { ty, types, .. } if ty.is_err() => {
-					*ty = Ok(*paths.get(&ty.clone().err().unwrap()).ok_or_else(|| {
-						anyhow!(
-							"path not found: {:?}, possible paths: {:?}",
-							ty.clone().err().unwrap(),
-							paths
-						)
+				TypeKind::Reference {
+					ty: ty @ ReferenceKind::Path(_),
+					types,
+					..
+				} => {
+					let path = ty.path().unwrap();
+					*ty = ReferenceKind::Resolved(*paths.get(path).ok_or_else(|| {
+						anyhow!("path not found: {:?}, possible paths: {:?}", path, paths)
 					})?);
 					for (_, ty) in types.iter_mut() {
 						ty.resolve_paths_to_ids(paths)?;
@@ -56,10 +57,17 @@ impl TypeKind {
 				}
 			}
 			TypeKind::Array(t) => fix_path(paths, &mut t.ty)?,
-			TypeKind::Reference { ty, types, .. } if ty.is_err() => {
-				*ty = Ok(*paths
-					.get(&ty.clone().err().unwrap())
-					.ok_or_else(|| anyhow!("path not found: {:?}", ty.clone().err().unwrap()))?);
+			TypeKind::Reference {
+				ty: ty @ ReferenceKind::Path(_),
+				types,
+				..
+			} => {
+				let path = ty.path().unwrap();
+				*ty = ReferenceKind::Resolved(
+					*paths
+						.get(path)
+						.ok_or_else(|| anyhow!("path not found: {:?}", path))?,
+				);
 				for (_, ty) in types.iter_mut() {
 					fix_path(paths, ty)?;
 				}

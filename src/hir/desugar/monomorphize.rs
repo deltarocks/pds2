@@ -6,7 +6,7 @@ use crate::{
 	ast::Ident,
 	hir::{
 		id_generator::PendingTypeId, ArrayLength, ContainerFieldType, IdGenerator, Namespace,
-		NamespaceItem, Type, TypeId, TypeKind, UnionTag,
+		NamespaceItem, ReferenceKind, Type, TypeId, TypeKind, UnionTag,
 	},
 	should_be_desugared,
 };
@@ -87,8 +87,9 @@ impl TypeKind {
 			TypeKind::Reference { ty, args: _, types } => {
 				if !types.is_empty() {
 					let types = mem::take(types);
-					let monoty = collector.collect(ty.clone().expect("paths are resolved"), types);
-					*ty = Ok(monoty);
+					let monoty = collector
+						.collect(ty.clone().resolved().expect("paths are resolved"), types);
+					*ty = ReferenceKind::Resolved(monoty);
 				}
 			}
 			TypeKind::Native(value) => {

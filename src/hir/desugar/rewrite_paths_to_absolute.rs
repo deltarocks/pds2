@@ -24,7 +24,8 @@
 use crate::{
 	ast::Ident,
 	hir::{
-		Container, ContainerFieldType, Namespace, NamespaceItem, NativeType, Type, TypeKind, Union,
+		Container, ContainerFieldType, Namespace, NamespaceItem, NativeType, ReferenceKind, Type,
+		TypeKind, Union,
 	},
 };
 
@@ -35,7 +36,9 @@ impl TypeKind {
 			TypeKind::Union(u) => u.rewrite_paths_to_absolute(current_ns),
 			TypeKind::Array(a) => a.ty.rewrite_paths_to_absolute(current_ns),
 			TypeKind::Reference {
-				ty: Err(p), types, ..
+				ty: ReferenceKind::Path(p),
+				types,
+				..
 			} => {
 				p.rewrite_to_absolute(current_ns);
 				for (_, ty) in types.iter_mut() {

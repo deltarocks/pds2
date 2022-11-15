@@ -2,7 +2,10 @@ use std::{collections::BTreeMap, convert::TryInto};
 
 use crate::{
 	ast::{Block, Ident, Item, ParseValue, Reference, Statement, Value},
-	hir::{Array, ArrayLength, Container, ContainerFieldType, NamespaceItem, NativeType, Union},
+	hir::{
+		Array, ArrayLength, Container, ContainerFieldType, NamespaceItem, NativeType,
+		ReferenceKind, Union,
+	},
 };
 
 use super::{IdGenerator, Namespace, Type, TypeKind, UnionTag};
@@ -299,7 +302,7 @@ impl TypeKind {
 					}
 
 					return Ok(TypeKind::Reference {
-						ty: Err(value.name),
+						ty: ReferenceKind::Path(value.name),
 						args,
 						types,
 					});
@@ -308,7 +311,7 @@ impl TypeKind {
 			Ok(kind)
 		} else {
 			Ok(TypeKind::Reference {
-				ty: Err(value.name),
+				ty: ReferenceKind::Path(value.name),
 				args: vec![],
 				types: vec![],
 			})
@@ -347,7 +350,7 @@ impl Namespace {
 					enum NativeStmt {
 						Param(Ident),
 						VirtualField(Ident, TypeKind),
-						Type(Ident),
+						Type(Ident, Option<TypeKind>),
 					}
 					impl NativeStmt {
 						fn from_ast(value: Statement) -> Result<Self> {
@@ -370,8 +373,16 @@ impl Namespace {
 									)
 								}
 								"type" => {
-									ensure!(items.is_empty());
-									Self::Type(item.args.arg(0, "type name")?)
+									let default = if items.is_empty() {
+										None
+									} else {
+										let type_item = items
+											.remove(0)
+											.into_item()
+											.ok_or_else(|| anyhow!("missing virtual field type"))?;
+										Some(TypeKind::from_ast(type_item, items)?)
+									};
+									Self::Type(item.args.arg(0, "type name")?, default)
 								}
 								n => {
 									bail!("unknown native statement: {n:?}")
@@ -388,7 +399,7 @@ impl Namespace {
 						match stmt {
 							NativeStmt::Param(name) => params.push(name),
 							NativeStmt::VirtualField(name, ty) => virtual_fields.push((name, ty)),
-							NativeStmt::Type(ty) => types.push(ty),
+							NativeStmt::Type(ty, default) => types.push((ty, default)),
 						}
 					}
 

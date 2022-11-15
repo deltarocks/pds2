@@ -42,7 +42,7 @@ use std::cell::Cell;
 
 use crate::{
 	ast::{BaseReference, Ident, Reference, ReferenceSegment},
-	hir::{IdGenerator, Namespace, NamespaceItem, NativeType, Type, TypeKind},
+	hir::{IdGenerator, Namespace, NamespaceItem, NativeType, ReferenceKind, Type, TypeKind},
 	should_be_desugared,
 };
 
@@ -114,7 +114,7 @@ impl TypeReceiver {
 			},
 		));
 		*ty = TypeKind::Reference {
-			ty: Ok(id),
+			ty: ReferenceKind::Resolved(id),
 			args: collector.args,
 			types: vec![],
 		}

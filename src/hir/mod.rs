@@ -1,5 +1,4 @@
 use crate::ast::{Ident, Path, Reference, Value};
-use anyhow::Result;
 use std::{cell::Cell, collections::BTreeMap};
 mod from_ast;
 pub use from_ast::parse_ast;
@@ -70,13 +69,43 @@ pub struct NativeType {
 }
 
 #[derive(Debug, Clone)]
+pub enum ReferenceKind {
+	Resolved(TypeId),
+	Path(Path),
+	Generic(Ident),
+}
+impl ReferenceKind {
+	pub fn is_path(&self) -> bool {
+		matches!(self, Self::Path(_))
+	}
+	pub fn path(&self) -> Option<&Path> {
+		match self {
+			Self::Path(p) => Some(p),
+			_ => None,
+		}
+	}
+	pub fn is_resolved(&self) -> bool {
+		matches!(self, Self::Resolved(_))
+	}
+	pub fn resolved(&self) -> Option<TypeId> {
+		match self {
+			Self::Resolved(p) => Some(*p),
+			_ => None,
+		}
+	}
+	pub fn is_generic(&self) -> bool {
+		matches!(self, Self::Generic(_))
+	}
+}
+
+#[derive(Debug, Clone)]
 pub enum TypeKind {
 	Void,
 	Container(Container),
 	Union(Union),
 	Array(Array),
 	Reference {
-		ty: Result<TypeId, Path>,
+		ty: ReferenceKind,
 		args: Vec<(Ident, Reference)>,
 		types: Vec<(Ident, TypeKind)>,
 	},
@@ -94,7 +123,7 @@ impl TypeKind {
 pub struct Type {
 	_id: Cell<TypeId>,
 	pub params: Vec<Ident>,
-	pub types: Vec<Ident>,
+	pub types: Vec<(Ident, Option<TypeKind>)>,
 	pub kind: TypeKind,
 }
 
