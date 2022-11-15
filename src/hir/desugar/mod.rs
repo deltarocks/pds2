@@ -1,8 +1,10 @@
 mod extract_nested_types;
 mod give_all_types_ids;
+mod monomorphize;
 mod resolve_paths_to_ids;
 mod rewrite_paths_to_absolute;
 pub use extract_nested_types::extract_nested_types;
 pub use give_all_types_ids::give_all_types_ids;
+pub use monomorphize::monomorphize;
 pub use resolve_paths_to_ids::resolve_paths_to_ids;
 pub use rewrite_paths_to_absolute::rewrite_paths_to_absolute;

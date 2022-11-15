@@ -1,10 +1,14 @@
+#![feature(drain_filter, btree_drain_filter)]
+
+use anyhow::anyhow;
+use clap::Parser;
 use dprint_core::formatting::PrintOptions;
+use format::SpecializerObj;
 use generator::GeneratorTypes;
+use jrsonnet_evaluator::{typed::Typed, FileImportResolver, State};
 use std::{fmt::Debug, path::PathBuf};
-use structopt::clap::AppSettings::*;
-use structopt::StructOpt;
-mod a;
 pub mod ast;
+pub mod format;
 pub mod generator;
 pub mod hir;
 pub mod mir;
@@ -12,16 +16,16 @@ pub mod upgrade;
 
 #[macro_export]
 macro_rules! should_be_desugared {
-    ($v:expr) => {
-        unreachable!("should be desugared: {:?}", $v)
-    };
+	($v:expr) => {
+		unreachable!("should be desugared: {:?}", $v)
+	};
 }
 
 pub mod pds {
-    #![allow(non_camel_case_types)]
-    use std::io::Cursor;
+	#![allow(non_camel_case_types)]
+	use std::io::Cursor;
 
-    macro_rules! impl_for_num {
+	macro_rules! impl_for_num {
         (@single $n:ident => $ty:ident) => {
             pub mod $n {
                 use super::{Output, Input, Result};
@@ -52,19 +56,19 @@ pub mod pds {
             )*
         };
     }
-    impl_for_num!(
-        pds_i8 => i8,
-        pds_u8 => u8,
-        pds_i16 => i16,
-        pds_u16 => u16,
-        pds_i32 => i32,
-        pds_u32 => u32,
-        pds_i64 => i64,
-        pds_u64 => u64,
-        pds_i128 => i128,
-        pds_u128 => u128
-    );
-    macro_rules! impl_for_le_num {
+	impl_for_num!(
+		pds_i8 => i8,
+		pds_u8 => u8,
+		pds_i16 => i16,
+		pds_u16 => u16,
+		pds_i32 => i32,
+		pds_u32 => u32,
+		pds_i64 => i64,
+		pds_u64 => u64,
+		pds_i128 => i128,
+		pds_u128 => u128
+	);
+	macro_rules! impl_for_le_num {
         (@single $n:ident => $ty:ident) => {
             pub mod $n {
                 use super::{Output, Input, Result};
@@ -95,70 +99,73 @@ pub mod pds {
             )*
         };
     }
-    impl_for_le_num!(
-        pds_i8_le => i8,
-        pds_u8_le => u8,
-        pds_i16_le => i16,
-        pds_u16_le => u16,
-        pds_i32_le => i32,
-        pds_u32_le => u32,
-        pds_i64_le => i64,
-        pds_u64_le => u64,
-        pds_i128_le => i128,
-        pds_u128_le => u128
-    );
+	impl_for_le_num!(
+		pds_i8_le => i8,
+		pds_u8_le => u8,
+		pds_i16_le => i16,
+		pds_u16_le => u16,
+		pds_i32_le => i32,
+		pds_u32_le => u32,
+		pds_i64_le => i64,
+		pds_u64_le => u64,
+		pds_i128_le => i128,
+		pds_u128_le => u128
+	);
 
-    pub use pds_u64 as pds_usize;
+	pub use pds_u64 as pds_usize;
 
-    #[derive(Default)]
-    pub struct Input(Cursor<Vec<u8>>);
-    #[derive(Default)]
-    pub struct Output(pub Vec<u8>);
-    pub type Result<T> = anyhow::Result<T>;
-    // #[test]
-    // fn test() {
-    //     let mut out = Output::default();
-    //     let data = arrayreftest {
-    //         field: arrayreftest_field {
-    //             arr: vec![1, 2, 3, 4],
-    //         },
-    //     };
-    // }
+	#[derive(Default)]
+	pub struct Input(Cursor<Vec<u8>>);
+	#[derive(Default)]
+	pub struct Output(pub Vec<u8>);
+	pub type Result<T> = anyhow::Result<T>;
+	// #[test]
+	// fn test() {
+	//     let mut out = Output::default();
+	//     let data = arrayreftest {
+	//         field: arrayreftest_field {
+	//             arr: vec![1, 2, 3, 4],
+	//         },
+	//     };
+	// }
 }
 
-#[derive(StructOpt, Debug)]
-#[structopt(setting(ColorAuto), setting(ColoredHelp))]
+#[derive(Parser)]
 enum Opts {
-    /// Compile .pds definition to code
-    #[structopt(setting(ColorAuto), setting(ColoredHelp))]
-    Compile {
-        /// .pds source code
-        from: PathBuf,
-        /// Generation target
-        generator: GeneratorTypes,
-        /// Print AST
-        #[structopt(long)]
-        print_ast: bool,
-        /// Print generated HIR
-        #[structopt(long)]
-        print_hir: bool,
-        /// Print generated MIR
-        #[structopt(long)]
-        print_mir: bool,
-    },
-    /// Convert .json definition to code
-    #[structopt(setting(ColorAuto), setting(ColoredHelp))]
-    Upgrade {
-        /// .json source code
-        from: PathBuf,
-    },
-    /// Reformat .pds definition code
-    #[structopt(setting(ColorAuto), setting(ColoredHelp))]
-    Format { from: PathBuf },
+	/// Compile .pds definition to code
+	Compile {
+		/// .pds source code
+		from: PathBuf,
+		/// Generation target
+		generator: GeneratorTypes,
+		/// Print AST
+		#[clap(long)]
+		print_ast: bool,
+		/// Print generated HIR
+		#[clap(long)]
+		print_hir: bool,
+		/// Print generated MIR
+		#[clap(long)]
+		print_mir: bool,
+
+		/// Where to write generated files to
+		#[clap(long)]
+		to: PathBuf,
+		/// Definition of where to look for specializers
+		#[clap(long)]
+		specializer: Option<PathBuf>,
+	},
+	/// Convert protodef .json definition to code
+	Upgrade {
+		/// .json source code
+		from: PathBuf,
+	},
+	/// Reformat .pds definition code
+	Format { from: PathBuf },
 }
 
 trait Desugar<Pass> {
-    fn desugar(&mut self, pass: &mut Pass);
+	fn desugar(&mut self, pass: &mut Pass);
 }
 
 #[macro_export]
@@ -187,19 +194,19 @@ macro_rules! pi {
         $pi.extend($v);
     };
     (@single $pi:ident => {=$v:expr}) => {
-        $pi.push_str(&format!("{}", $v))
+        $pi.push_string(format!("{}", $v))
     };
     (@single $pi:ident => {?$v:expr}) => {
-        $pi.push_str(&format!("{:?}", $v))
+        $pi.push_string(format!("{:?}", $v))
     };
     (@single $pi:ident => NL) => {
-        $pi.push_signal(Signal::NewLine)
+        $pi.push_signal(dprint_core::formatting::Signal::NewLine)
     };
     (@single $pi:ident => INDENT) => {
-        $pi.push_signal(Signal::StartIndent)
+        $pi.push_signal(dprint_core::formatting::Signal::StartIndent)
     };
     (@single $pi:ident => DEDENT) => {
-        $pi.push_signal(Signal::FinishIndent)
+        $pi.push_signal(dprint_core::formatting::Signal::FinishIndent)
     };
     ($pi:ident => $($tt:tt)+) => {{
         $(
@@ -209,64 +216,80 @@ macro_rules! pi {
 }
 
 fn main() -> anyhow::Result<()> {
-    let opts = Opts::from_args();
-    match opts {
-        Opts::Compile {
-            from,
-            generator,
-            print_ast,
-            print_hir,
-            print_mir,
-        } => {
-            let data = std::fs::read_to_string(&from)?;
-            let parsed = ast::parse(&data)?;
+	let opts = Opts::parse();
+	match opts {
+		Opts::Compile {
+			from,
+			generator,
+			print_ast,
+			print_hir,
+			print_mir,
 
-            if print_ast {
-                dbg!(&parsed);
-            }
+			to,
+			specializer,
+		} => {
+			let data = std::fs::read_to_string(from)?;
+			let parsed = ast::parse(&data)?;
 
-            let hir = hir::parse_ast(parsed)?;
+			if print_ast {
+				dbg!(&parsed);
+			}
 
-            if print_hir {
-                dbg!(&hir);
-            }
+			let hir = hir::parse_ast(parsed)?;
 
-            let mir = mir::from_hir(&hir)?;
+			if print_hir {
+				dbg!(&hir);
+			}
 
-            if print_mir {
-                dbg!(&mir);
-            }
+			let mir = mir::from_hir(&hir)?;
 
-            let mut out = Default::default();
-            generator.generator()(&mir, &mut out)?;
+			if print_mir {
+				dbg!(&mir);
+			}
 
-            for (file, value) in out {
-                let out = dprint_core::formatting::format(
-                    || value,
-                    PrintOptions {
-                        max_width: 100,
-                        indent_width: 4,
-                        use_tabs: true,
-                        new_line_text: "\n",
-                    },
-                );
-                println!("// File: {:?}", file);
-                println!("{}", out);
-            }
-        }
-        Opts::Format { from } => {
-            let data = std::fs::read_to_string(&from)?;
-            let parsed = ast::parse(&data)?;
-            let out = ast::format(&parsed);
-            println!("{}", out);
-        }
-        Opts::Upgrade { from } => {
-            let data = std::fs::read_to_string(&from)?;
-            let parsed = serde_json::from_str(&data)?;
-            let upgraded = upgrade::upgrade(parsed)?;
-            let out = ast::format(&upgraded);
-            println!("{}", out);
-        }
-    }
-    Ok(())
+			let state = State::default();
+			state.set_import_resolver(Box::new(FileImportResolver::new(Vec::new())));
+			let specializer = if let Some(specializer) = specializer {
+				SpecializerObj::from_untyped(state.import(specializer).map_err(|e| anyhow!("{e}"))?)
+					.map_err(|e| anyhow!("{e}"))?
+			} else {
+				SpecializerObj::default()
+			};
+
+			let mut out = Default::default();
+			generator.generator()(&mir, &mut out, &specializer)?;
+
+			std::fs::create_dir_all(&to)?;
+			for (_file, value) in out {
+				let mut file = to.clone();
+				file.push(_file);
+				let out = dprint_core::formatting::format(
+					|| value,
+					PrintOptions {
+						max_width: 100,
+						indent_width: 4,
+						use_tabs: true,
+						new_line_text: "\n",
+					},
+				);
+				let out = format!("// This file is automatically generated\n{out}");
+
+				std::fs::write(file, out)?;
+			}
+		}
+		Opts::Format { from } => {
+			let data = std::fs::read_to_string(from)?;
+			let parsed = ast::parse(&data)?;
+			let out = ast::format(&parsed);
+			println!("{}", out);
+		}
+		Opts::Upgrade { from } => {
+			let data = std::fs::read_to_string(from)?;
+			let parsed = serde_json::from_str(&data)?;
+			let upgraded = upgrade::upgrade(parsed)?;
+			let out = ast::format(&upgraded);
+			println!("{}", out);
+		}
+	}
+	Ok(())
 }

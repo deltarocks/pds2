@@ -6,13 +6,18 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.43"
-derivative = "2.2.0"
-dprint-core = "0.44.0"
-peg = "0.7.0"
-rand = "0.8.4"
-structopt = "0.3.22"
-serde_json = "*"
+anyhow = "1.0"
+clap = { version = "4.0", features = ["derive"] }
+derivative = "2.2"
+dprint-core = "0.59.0"
+jrsonnet-evaluator = { git = "https://github.com/CertainLach/jrsonnet.git", branch = "breaking-refactors", version = "0.5.0" }
+jrsonnet-gcmodule = "0.3.4"
+peg = "0.8.1"
+rand = "0.8.5"
+serde_json = "1.0"
 
 [features]
 trace = ["peg/trace"]
+
+[workspace]
+members = ["example/rust"]

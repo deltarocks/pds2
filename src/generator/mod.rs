@@ -1,34 +1,39 @@
 use anyhow::{bail, Result};
+use clap::ValueEnum;
 use dprint_core::formatting::PrintItems;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
-use crate::mir;
+use crate::{format::SpecializerObj, mir};
 
 mod rust;
+// mod typescript;
 
 pub type GeneratorOutput = HashMap<PathBuf, PrintItems>;
-pub type Generator = fn(input: &mir::TypeMap, output: &mut GeneratorOutput) -> Result<()>;
+pub type Generator =
+	fn(input: &mir::TypeMap, output: &mut GeneratorOutput, spec: &SpecializerObj) -> Result<()>;
 
-#[derive(Debug)]
+#[derive(Debug, ValueEnum, Clone)]
 pub enum GeneratorTypes {
-    Rust,
+	Rust,
+	// Typescript,
 }
 
 impl GeneratorTypes {
-    pub fn generator(&self) -> Generator {
-        match self {
-            GeneratorTypes::Rust => rust::generator,
-        }
-    }
+	pub fn generator(&self) -> Generator {
+		match self {
+			GeneratorTypes::Rust => rust::generator,
+			// GeneratorTypes::Typescript => typescript::generator,
+		}
+	}
 }
 
 impl FromStr for GeneratorTypes {
-    type Err = anyhow::Error;
+	type Err = anyhow::Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "rust" => Ok(Self::Rust),
-            n => bail!("unknown generator type: {}", n),
-        }
-    }
+	fn from_str(s: &str) -> Result<Self, Self::Err> {
+		match s {
+			"rust" => Ok(Self::Rust),
+			n => bail!("unknown generator type: {}", n),
+		}
+	}
 }
