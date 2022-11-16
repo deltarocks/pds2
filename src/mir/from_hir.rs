@@ -91,17 +91,6 @@ impl TypeKind {
 					.as_ref()
 					.map(|d| (d.0.clone(), Type::from_hir(&d.1))),
 			},
-			hir::TypeKind::Array(a) => match &a.length {
-				hir::ArrayLength::LoadFrom(r) => Self::DynamicArray {
-					size_ref: Field::from_hir(r),
-					t: Type::from_hir(&a.ty),
-				},
-				hir::ArrayLength::Fixed(v) => Self::FixedSizeArray {
-					size: *v,
-					t: Type::from_hir(&a.ty),
-				},
-				hir::ArrayLength::Type(_) => should_be_desugared!(a),
-			},
 			hir::TypeKind::Reference { .. } => todo!("type alias"),
 			hir::TypeKind::Native(hir::NativeType {
 				virtual_fields,

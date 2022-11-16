@@ -1,12 +1,14 @@
 //! Generate static version of every generic struct usage
 
-use std::mem;
+use std::{collections::HashSet, mem};
+
+use anyhow::{anyhow, bail, Result};
 
 use crate::{
 	ast::Ident,
 	hir::{
-		id_generator::PendingTypeId, ArrayLength, ContainerFieldType, IdGenerator, Namespace,
-		NamespaceItem, ReferenceKind, Type, TypeId, TypeKind, UnionTag,
+		id_generator::PendingTypeId, ContainerFieldType, IdGenerator, Namespace, NamespaceItem,
+		ReferenceKind, Type, TypeId, TypeKind, UnionTag,
 	},
 	should_be_desugared,
 };
@@ -23,6 +25,7 @@ struct Monomorphization {
 
 struct MonoCollector {
 	id: IdGenerator,
+	generic: HashSet<TypeId>,
 	path: Vec<Ident>,
 	extracted: Vec<Monomorphization>,
 	added: Vec<(Vec<Ident>, Type)>,
@@ -45,22 +48,29 @@ impl MonoCollector {
 		});
 		id
 	}
+	fn is_generic(&self, ty: TypeId) -> bool {
+		self.generic.contains(&ty)
+	}
 	fn add(&mut self, ty: Type) {
 		self.added.push((self.path.clone(), ty));
 	}
 }
 
 impl TypeKind {
-	fn monomorphize(&mut self, collector: &mut MonoCollector, forty: &Vec<(Ident, TypeKind)>) {
+	fn monomorphize(
+		&mut self,
+		collector: &mut MonoCollector,
+		forty: &Vec<(Ident, TypeKind)>,
+	) -> Result<()> {
 		match self {
 			TypeKind::Void => {}
 			TypeKind::Container(container) => {
 				for (name, field) in container.fields.iter_mut() {
 					collector.push(name.clone());
 					match field {
-						ContainerFieldType::Normal(n) => n.monomorphize(collector, forty),
+						ContainerFieldType::Normal(n) => n.monomorphize(collector, forty)?,
 						ContainerFieldType::Virtual(_, t) => {
-							t.monomorphize(collector, forty);
+							t.monomorphize(collector, forty)?;
 						}
 						ContainerFieldType::Delegate(_) => {}
 					}
@@ -73,19 +83,32 @@ impl TypeKind {
 					UnionTag::Type(_) => should_be_desugared!(u.tag),
 				}
 				for (_value, _ident, ty) in u.matches.iter_mut() {
-					ty.monomorphize(collector, forty)
+					ty.monomorphize(collector, forty)?;
 				}
-			}
-			TypeKind::Array(arr) => {
-				match arr.length {
-					ArrayLength::LoadFrom(_) => {}
-					ArrayLength::Fixed(_) => {}
-					ArrayLength::Type(_) => should_be_desugared!(arr),
-				}
-				arr.ty.monomorphize(collector, forty)
 			}
 			TypeKind::Reference { ty, args: _, types } => {
-				if !types.is_empty() {
+				if ty.is_generic() {
+					let generic = ty.generic().unwrap();
+					let r = &forty
+						.iter()
+						.find(|(n, _)| n == &generic)
+						.ok_or_else(|| {
+							anyhow!("generic not found: {generic:?}, in scope: {forty:?}")
+						})?
+						.1;
+					r.assert_reference();
+					assert!(types.is_empty(), "no HKT for now");
+					let TypeKind::Reference {
+						ty: nty,
+						args,
+						types,
+					} = r else {
+						unreachable!()
+					};
+					assert!(args.is_empty() && types.is_empty());
+					*ty = nty.clone();
+				}
+				if collector.is_generic(ty.resolved().unwrap()) {
 					let types = mem::take(types);
 					let monoty = collector
 						.collect(ty.clone().resolved().expect("paths are resolved"), types);
@@ -93,24 +116,27 @@ impl TypeKind {
 				}
 			}
 			TypeKind::Native(value) => {
-				dbg!("mono params", forty);
 				let crate::hir::NativeType {
 					virtual_fields: _,
 					specializer: _,
 					specialization,
 				} = value;
 				{
-					assert!(specialization.is_empty(), "should only be visited once");
-					*specialization = forty.clone();
+					for (n, k) in specialization.iter_mut() {
+						collector.push(n.clone());
+						k.monomorphize(collector, forty)?;
+						collector.pop();
+					}
 				}
 			}
 		}
+		Ok(())
 	}
 }
 impl Type {
-	fn monomorphize(&mut self, collector: &mut MonoCollector) {
+	fn monomorphize(&mut self, collector: &mut MonoCollector) -> Result<()> {
 		if self.types.is_empty() {
-			self.kind.monomorphize(collector, &Vec::new());
+			self.kind.monomorphize(collector, &Vec::new())?;
 		} else {
 			for mono in collector
 				.extracted
@@ -118,40 +144,54 @@ impl Type {
 				.collect::<Vec<_>>()
 			{
 				let mut mono_kind = self.kind.clone();
-				mono_kind.monomorphize(collector, &mono.types);
+				let mut types = mono.types.clone();
+				for (n, t) in self.types.iter() {
+					if types.iter().any(|(cn, _)| cn == n) {
+						continue;
+					}
+					if t.is_some() {
+						types.push((n.clone(), t.clone().unwrap()));
+					} else {
+						bail!("missing generic parameter: {:?}, passed: {:?}", n, types)
+					}
+				}
+				mono_kind.monomorphize(collector, &types)?;
 				let new_type = Type::new(mono.mono_type, self.params.clone(), mono_kind);
 				collector.add(new_type);
 			}
 		}
+		Ok(())
 	}
 }
 
 impl Namespace {
-	fn monomorphize(&mut self, collector: &mut MonoCollector) {
+	// Acquire set of types, references to whose should be monomorphised
+	fn get_generic_types(&self, out: &mut HashSet<TypeId>) {
+		for (_, item) in self.items.iter() {
+			match item {
+				NamespaceItem::Inner(ns) => ns.get_generic_types(out),
+				NamespaceItem::Type(ty) => {
+					if !ty.types.is_empty() {
+						out.insert(ty.id());
+					}
+				}
+			}
+		}
+	}
+	fn monomorphize(&mut self, collector: &mut MonoCollector) -> Result<()> {
 		for (name, item) in self.items.iter_mut() {
 			collector.push(name.clone());
 			collector.push("mono");
 			match item {
-				NamespaceItem::Inner(ns) => ns.monomorphize(collector),
+				NamespaceItem::Inner(ns) => ns.monomorphize(collector)?,
 				NamespaceItem::Type(ty) => {
-					ty.monomorphize(collector);
+					ty.monomorphize(collector)?;
 				}
 			}
 			collector.pop();
 			collector.pop();
 		}
-		// for (path, ty) in collector.extracted {
-		// 	let mut name = path
-		// 		.iter()
-		// 		.map(|c| c.as_str())
-		// 		.collect::<Vec<_>>()
-		// 		.join("_");
-		// 	while self.items.contains_key(&Ident::new(&name)) {
-		// 		name += "_yet_another";
-		// 	}
-		// 	self.items
-		// 		.insert((&name as &str).into(), NamespaceItem::Type(ty));
-		// }
+		Ok(())
 	}
 	fn remove_generic(&mut self) {
 		let removed = self
@@ -168,15 +208,19 @@ impl Namespace {
 	}
 }
 
-pub fn monomorphize(id: IdGenerator, ir: &mut Namespace) {
+pub fn monomorphize(id: IdGenerator, ir: &mut Namespace) -> Result<()> {
+	let mut generic = HashSet::new();
+	ir.get_generic_types(&mut generic);
+
 	let mut collector = MonoCollector {
 		id,
+		generic,
 		path: Vec::new(),
 		extracted: Vec::new(),
 		added: Vec::new(),
 	};
 	loop {
-		ir.monomorphize(&mut collector);
+		ir.monomorphize(&mut collector)?;
 
 		let left_unimplemented = collector
 			.extracted
@@ -186,9 +230,7 @@ pub fn monomorphize(id: IdGenerator, ir: &mut Namespace) {
 		if left_unimplemented == 0 {
 			break;
 		}
-		eprintln!("Left to implement: {}", left_unimplemented)
 	}
-	eprintln!("Adding {:?}", collector.added);
 	for (path, ty) in collector.added {
 		let mut name = path
 			.iter()
@@ -201,6 +243,7 @@ pub fn monomorphize(id: IdGenerator, ir: &mut Namespace) {
 		ir.items
 			.insert((&name as &str).into(), NamespaceItem::Type(ty));
 	}
-	ir.remove_generic()
+	ir.remove_generic();
+	Ok(())
 	// dbg!(collector.extracted);
 }

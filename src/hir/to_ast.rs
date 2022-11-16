@@ -105,21 +105,6 @@ impl TypeKind {
 					}
 				})
 				.build_values(),
-			super::TypeKind::Array(a) => Item::simple_builder("array")
-				.args(match a.length {
-					crate::hir::ArrayLength::LoadFrom(r) => {
-						ItemArgs::builder().named("length", r.into())
-					}
-					crate::hir::ArrayLength::Fixed(r) => {
-						ItemArgs::builder().named("length", r.into())
-					}
-					crate::hir::ArrayLength::Type(t) => {
-						let chain = t.to_ast();
-						assert_eq!(chain.len(), 1);
-						ItemArgs::builder().named("lengthType", chain.into_iter().next().unwrap())
-					}
-				})
-				.then(a.ty.to_ast()),
 			super::TypeKind::Reference {
 				ty: ReferenceKind::Path(r),
 				..

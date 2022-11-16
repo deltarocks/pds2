@@ -14,10 +14,7 @@ use crate::{
 };
 
 impl TypeKind {
-	fn resolve_paths_to_ids(
-		&mut self,
-		paths: &std::collections::HashMap<Path, TypeId>,
-	) -> Result<()> {
+	fn resolve_paths_to_ids(&mut self, paths: &HashMap<Path, TypeId>) -> Result<()> {
 		fn fix_path(paths: &HashMap<Path, TypeId>, t: &mut TypeKind) -> Result<()> {
 			match t {
 				TypeKind::Reference {
@@ -56,7 +53,6 @@ impl TypeKind {
 					fix_path(paths, def)?
 				}
 			}
-			TypeKind::Array(t) => fix_path(paths, &mut t.ty)?,
 			TypeKind::Reference {
 				ty: ty @ ReferenceKind::Path(_),
 				types,
@@ -78,10 +74,9 @@ impl TypeKind {
 				specializer: _,
 				specialization,
 			}) => {
-				assert!(
-					specialization.is_empty(),
-					"only set during monomorphization"
-				);
+				for (_, v) in specialization.iter_mut() {
+					fix_path(paths, v)?;
+				}
 				for field in virtual_fields.iter_mut() {
 					fix_path(paths, &mut field.1)?;
 				}
@@ -93,10 +88,12 @@ impl TypeKind {
 }
 
 impl Type {
-	fn resolve_paths_to_ids(
-		&mut self,
-		paths: &std::collections::HashMap<Path, TypeId>,
-	) -> Result<()> {
+	fn resolve_paths_to_ids(&mut self, paths: &HashMap<Path, TypeId>) -> Result<()> {
+		for (_, t) in self.types.iter_mut() {
+			if let Some(t) = t {
+				t.resolve_paths_to_ids(paths)?;
+			}
+		}
 		self.kind.resolve_paths_to_ids(paths)
 	}
 }

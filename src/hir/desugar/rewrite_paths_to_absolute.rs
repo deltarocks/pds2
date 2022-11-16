@@ -21,6 +21,8 @@
 //!
 //! After this pass every defined path is absolute
 
+use std::collections::HashSet;
+
 use crate::{
 	ast::Ident,
 	hir::{
@@ -30,19 +32,39 @@ use crate::{
 };
 
 impl TypeKind {
-	fn rewrite_paths_to_absolute(&mut self, current_ns: &[Ident]) {
+	fn rewrite_paths_to_absolute(&mut self, current_ns: &[Ident], generics: &HashSet<Ident>) {
 		match self {
-			TypeKind::Container(c) => c.rewrite_paths_to_absolute(current_ns),
-			TypeKind::Union(u) => u.rewrite_paths_to_absolute(current_ns),
-			TypeKind::Array(a) => a.ty.rewrite_paths_to_absolute(current_ns),
+			TypeKind::Container(c) => c.rewrite_paths_to_absolute(current_ns, generics),
+			TypeKind::Union(u) => u.rewrite_paths_to_absolute(current_ns, generics),
 			TypeKind::Reference {
-				ty: ReferenceKind::Path(p),
+				ty: ty @ ReferenceKind::Path(_),
 				types,
 				..
 			} => {
-				p.rewrite_to_absolute(current_ns);
+				// Try to resolve generic
+				{
+					let p = ty.path().unwrap();
+					if let Some(p) = p.simple_name() {
+						if generics.contains(&p) {
+							*ty = ReferenceKind::Generic(p);
+						}
+					}
+				}
+				// Try to resolve absolute path
+				if let Some(p) = ty.path_mut() {
+					p.rewrite_to_absolute(current_ns);
+				}
 				for (_, ty) in types.iter_mut() {
-					ty.rewrite_paths_to_absolute(current_ns)
+					ty.rewrite_paths_to_absolute(current_ns, generics)
+				}
+			}
+			TypeKind::Reference {
+				ty: ReferenceKind::Generic(_),
+				types,
+				..
+			} => {
+				for (_, ty) in types.iter_mut() {
+					ty.rewrite_paths_to_absolute(current_ns, generics)
 				}
 			}
 			TypeKind::Reference { .. } => unreachable!(),
@@ -52,9 +74,11 @@ impl TypeKind {
 				specializer: _,
 				specialization,
 			}) => {
-				assert!(specialization.is_empty(), "only set after monomorphization");
+				for (_, ty) in specialization.iter_mut() {
+					ty.rewrite_paths_to_absolute(current_ns, generics)
+				}
 				for (_, ty) in virtual_fields.iter_mut() {
-					ty.rewrite_paths_to_absolute(current_ns)
+					ty.rewrite_paths_to_absolute(current_ns, generics)
 				}
 			}
 		}
@@ -63,26 +87,42 @@ impl TypeKind {
 
 impl Type {
 	fn rewrite_paths_to_absolute(&mut self, current_ns: &[Ident]) {
-		self.kind.rewrite_paths_to_absolute(current_ns);
+		let generics = self
+			.types
+			.iter()
+			.map(|(n, _)| n.clone())
+			.collect::<HashSet<_>>();
+		for (_, t) in self.types.iter_mut() {
+			if let Some(t) = t {
+				t.rewrite_paths_to_absolute(current_ns, &generics);
+			}
+		}
+		self.kind.rewrite_paths_to_absolute(current_ns, &generics);
 	}
 }
 
 impl Union {
-	pub fn rewrite_paths_to_absolute(&mut self, current_ns: &[Ident]) {
+	pub fn rewrite_paths_to_absolute(&mut self, current_ns: &[Ident], generics: &HashSet<Ident>) {
 		for (_, _, t) in self.matches.iter_mut() {
-			t.rewrite_paths_to_absolute(current_ns)
+			t.rewrite_paths_to_absolute(current_ns, generics)
 		}
 		if let Some((_, d)) = &mut self.default {
-			d.rewrite_paths_to_absolute(current_ns)
+			d.rewrite_paths_to_absolute(current_ns, generics)
 		}
 	}
 }
 impl Container {
-	pub(crate) fn rewrite_paths_to_absolute(&mut self, current_ns: &[Ident]) {
+	pub(crate) fn rewrite_paths_to_absolute(
+		&mut self,
+		current_ns: &[Ident],
+		generics: &HashSet<Ident>,
+	) {
 		for (_, v) in self.fields.iter_mut() {
 			match v {
-				ContainerFieldType::Normal(n) => n.rewrite_paths_to_absolute(current_ns),
-				ContainerFieldType::Virtual(_, n) => n.rewrite_paths_to_absolute(current_ns),
+				ContainerFieldType::Normal(n) => n.rewrite_paths_to_absolute(current_ns, generics),
+				ContainerFieldType::Virtual(_, n) => {
+					n.rewrite_paths_to_absolute(current_ns, generics)
+				}
 				ContainerFieldType::Delegate(_) => {}
 			}
 		}

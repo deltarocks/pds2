@@ -3,6 +3,24 @@ use std::{cell::Cell, fmt, rc::Rc};
 use jrsonnet_evaluator::typed::{ComplexValType, Typed};
 
 #[derive(Clone)]
+pub struct NameIdGenerator {
+	id: Rc<Cell<u64>>,
+}
+
+impl NameIdGenerator {
+	pub fn new() -> Self {
+		Self {
+			id: Rc::new(Cell::new(1)),
+		}
+	}
+	pub fn next(&self) -> u64 {
+		let next = self.id.get();
+		self.id.set(next + 1);
+		next
+	}
+}
+
+#[derive(Clone)]
 pub struct IdGenerator {
 	id: Rc<Cell<u64>>,
 }

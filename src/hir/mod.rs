@@ -84,6 +84,12 @@ impl ReferenceKind {
 			_ => None,
 		}
 	}
+	pub fn path_mut(&mut self) -> Option<&mut Path> {
+		match self {
+			Self::Path(p) => Some(p),
+			_ => None,
+		}
+	}
 	pub fn is_resolved(&self) -> bool {
 		matches!(self, Self::Resolved(_))
 	}
@@ -96,6 +102,18 @@ impl ReferenceKind {
 	pub fn is_generic(&self) -> bool {
 		matches!(self, Self::Generic(_))
 	}
+	pub fn generic(&self) -> Option<Ident> {
+		match self {
+			Self::Generic(p) => Some(p.clone()),
+			_ => None,
+		}
+	}
+	pub fn generic_mut(&mut self) -> Option<&mut Ident> {
+		match self {
+			Self::Generic(p) => Some(p),
+			_ => None,
+		}
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -103,7 +121,6 @@ pub enum TypeKind {
 	Void,
 	Container(Container),
 	Union(Union),
-	Array(Array),
 	Reference {
 		ty: ReferenceKind,
 		args: Vec<(Ident, Reference)>,
