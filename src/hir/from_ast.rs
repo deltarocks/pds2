@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-	ast::{Block, Ident, Item, ParseValue, Reference, Statement, Value},
+	ast::{Block, FieldRef, Ident, Item, ParseValue, Statement, Value},
 	hir::{Container, ContainerFieldType, NamespaceItem, NativeType, ReferenceKind, Union},
 };
 
@@ -184,7 +184,7 @@ impl Union {
 					(
 						"_tag".into(),
 						ContainerFieldType::Virtual(
-							Reference::parse("./union/@tag").unwrap(),
+							FieldRef::parse("./union/@tag").unwrap(),
 							TypeKind::from_ast(t, vec![])?,
 						),
 					),
@@ -192,7 +192,7 @@ impl Union {
 						"union".into(),
 						ContainerFieldType::Normal(
 							Self::from_ast_with_tag(
-								UnionTag::LoadFrom(Reference::parse("./_tag").unwrap()),
+								UnionTag::LoadFrom(FieldRef::parse("./_tag").unwrap()),
 								value,
 							)
 							.map(TypeKind::Union)?,

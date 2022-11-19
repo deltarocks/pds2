@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 
 use crate::{
-	ast::{Ident, ReferenceSegment},
+	ast::{FieldRefSegment, Ident},
 	hir::TypeId,
 	mir::{self, Definition, Field, NativeType, TypeMap},
 };
@@ -116,7 +116,7 @@ impl Definition {
 				item.from.set(cur);
 			}
 			match &item.segment {
-				ReferenceSegment::Arg(name) => {
+				FieldRefSegment::Arg(name) => {
 					assert_eq!(i, 0);
 					let id = types[from]
 						.params
@@ -140,7 +140,7 @@ impl Definition {
 						item.to.set(cur);
 					}
 				}
-				ReferenceSegment::Down { .. } | ReferenceSegment::Virtual(_) => {
+				FieldRefSegment::Down { .. } | FieldRefSegment::Virtual(_) => {
 					cur = types[cur].resolve_ref_single(item.segment.clone(), types)?;
 					if item.to.get().is_valid() {
 						assert!(item.to.get() == cur);
@@ -153,11 +153,11 @@ impl Definition {
 		Ok(cur)
 	}
 
-	fn resolve_ref_single(&self, segment: ReferenceSegment, types: &TypeMap) -> Result<TypeId> {
+	fn resolve_ref_single(&self, segment: FieldRefSegment, types: &TypeMap) -> Result<TypeId> {
 		Ok(match (segment, &self.kind) {
 			(
-				segment @ (ReferenceSegment::Virtual(_)
-				| ReferenceSegment::Down {
+				segment @ (FieldRefSegment::Virtual(_)
+				| FieldRefSegment::Down {
 					ignore_delegation: false,
 					..
 				}),
@@ -177,7 +177,7 @@ impl Definition {
 					.resolve_ref_single(segment, types)
 					.with_context(|| format!("failed to resolve delegated to {:?}", to))?
 			}
-			(ReferenceSegment::Down { to, .. }, mir::TypeKind::Container { fields, .. }) => {
+			(FieldRefSegment::Down { to, .. }, mir::TypeKind::Container { fields, .. }) => {
 				fields
 					.iter()
 					.find(|f| f.name == to)
@@ -185,7 +185,7 @@ impl Definition {
 					.ty
 					.target
 			}
-			(ReferenceSegment::Virtual(name), mir::TypeKind::DynamicArray { .. })
+			(FieldRefSegment::Virtual(name), mir::TypeKind::DynamicArray { .. })
 				if name.as_str() == "size" =>
 			{
 				let ty = types
@@ -197,7 +197,7 @@ impl Definition {
 				*ty.unwrap().0
 			}
 			(
-				ReferenceSegment::Virtual(name),
+				FieldRefSegment::Virtual(name),
 				mir::TypeKind::Native(NativeType {
 					virtual_fields,
 					specializer: _,

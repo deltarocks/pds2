@@ -1,5 +1,5 @@
 use crate::{
-	ast::{self, Ident, Path, Reference},
+	ast::{self, FieldRef, Ident, Path},
 	hir::{self, ReferenceKind, TypeId},
 	mir::{self, FieldItem},
 	should_be_desugared,
@@ -129,7 +129,7 @@ impl Definition {
 }
 
 impl Field {
-	fn from_hir(hir: &Reference) -> Self {
+	fn from_hir(hir: &FieldRef) -> Self {
 		assert!(hir.up == 0);
 
 		Self(

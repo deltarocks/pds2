@@ -1,5 +1,5 @@
 use crate::ast::{
-	self, builder::ItemArgsBuilder, BaseReference, Block, Ident, Item, ItemArgs, ReferenceSegment,
+	self, builder::ItemArgsBuilder, BaseFieldRef, Block, FieldRefSegment, Ident, Item, ItemArgs,
 	Statement,
 };
 use anyhow::{anyhow, bail, ensure, Result};
@@ -24,7 +24,7 @@ grammar protodef() for str {
 }
 );
 
-pub fn parse_reference(r: &str, extra_ups: usize) -> Result<ast::Reference> {
+pub fn parse_reference(r: &str, extra_ups: usize) -> Result<ast::FieldRef> {
 	let path = protodef::path(r)?;
 	for i in path.items.iter().skip(1) {
 		ensure!(
@@ -32,17 +32,17 @@ pub fn parse_reference(r: &str, extra_ups: usize) -> Result<ast::Reference> {
 			"argument only can be first"
 		)
 	}
-	Ok(ast::Reference {
+	Ok(ast::FieldRef {
 		up: path.up + extra_ups,
-		path: BaseReference(
+		path: BaseFieldRef(
 			path.items
 				.into_iter()
 				.map(|i| match i {
-					ProtodefPathItem::Down(v) => ReferenceSegment::Down {
+					ProtodefPathItem::Down(v) => FieldRefSegment::Down {
 						to: v,
 						ignore_delegation: false,
 					},
-					ProtodefPathItem::Arg(v) => ReferenceSegment::Arg(v),
+					ProtodefPathItem::Arg(v) => FieldRefSegment::Arg(v),
 				})
 				.collect::<Vec<_>>(),
 		),
@@ -135,7 +135,7 @@ pub fn upgrade_type(value: Value) -> Result<Vec<ast::Value>> {
 						} else if let Some(val) = k.strip_suffix("To") {
 							args = args.named(
 								val,
-								ast::Value::Reference(parse_reference(
+								ast::Value::FieldRef(parse_reference(
 									v.as_str().ok_or_else(|| anyhow!("bad reference value"))?,
 									1,
 								)?),

@@ -1,4 +1,4 @@
-use crate::ast::{Ident, Path, Reference, Value};
+use crate::ast::{FieldRef, Ident, Path, Value};
 use std::{cell::Cell, collections::BTreeMap};
 mod from_ast;
 pub use from_ast::parse_ast;
@@ -24,7 +24,7 @@ pub struct Namespace {
 #[derive(Debug, Clone)]
 pub enum ContainerFieldType {
 	Normal(TypeKind),
-	Virtual(Reference, TypeKind),
+	Virtual(FieldRef, TypeKind),
 	Delegate(Ident),
 }
 
@@ -37,7 +37,7 @@ pub struct Container {
 
 #[derive(Debug, Clone)]
 pub enum UnionTag {
-	LoadFrom(Reference),
+	LoadFrom(FieldRef),
 	Type(Box<TypeKind>),
 }
 
@@ -50,7 +50,7 @@ pub struct Union {
 
 #[derive(Debug, Clone)]
 pub enum ArrayLength {
-	LoadFrom(Reference),
+	LoadFrom(FieldRef),
 	Fixed(u32),
 	Type(Box<TypeKind>),
 }
@@ -123,7 +123,7 @@ pub enum TypeKind {
 	Union(Union),
 	Reference {
 		ty: ReferenceKind,
-		args: Vec<(Ident, Reference)>,
+		args: Vec<(Ident, FieldRef)>,
 		types: Vec<(Ident, TypeKind)>,
 	},
 	Native(NativeType),

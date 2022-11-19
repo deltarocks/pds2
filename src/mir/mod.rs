@@ -4,7 +4,7 @@ use std::{cell::Cell, collections::BTreeMap, ops::Index};
 mod pass;
 
 use crate::{
-	ast::{Ident, Path, ReferenceSegment},
+	ast::{FieldRefSegment, Ident, Path},
 	hir::TypeId,
 };
 
@@ -95,7 +95,7 @@ pub enum FieldItemKind {
 #[derive(Clone)]
 pub struct FieldItem {
 	pub from: Cell<TypeId>,
-	pub segment: ReferenceSegment,
+	pub segment: FieldRefSegment,
 	pub to: Cell<TypeId>,
 }
 

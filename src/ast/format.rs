@@ -130,7 +130,7 @@ impl Value {
 					out.push_str("\"\"\"");
 				}
 			}
-			Value::Reference(r) => {
+			Value::FieldRef(r) => {
 				if let Some(before_block) = before_block {
 					out.push_info(before_block);
 				}
@@ -154,6 +154,11 @@ impl Value {
 				out.push_str(" !>");
 			}
 			Value::Unset => unreachable!(),
+			Value::FunctionCall(n, args) => {
+				out.push_str("%");
+				out.push_string(n.as_str().to_string());
+				args.print(out)
+			}
 		}
 	}
 }

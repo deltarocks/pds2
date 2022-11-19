@@ -41,7 +41,7 @@
 use std::cell::Cell;
 
 use crate::{
-	ast::{BaseReference, Ident, Reference, ReferenceSegment},
+	ast::{BaseFieldRef, FieldRef, FieldRefSegment, Ident},
 	hir::{IdGenerator, Namespace, NamespaceItem, NativeType, ReferenceKind, Type, TypeKind},
 };
 
@@ -119,12 +119,12 @@ impl TypeReceiver {
 
 #[derive(Default)]
 struct ReferenceCollector {
-	args: Vec<(Ident, Reference)>,
+	args: Vec<(Ident, FieldRef)>,
 	params: Vec<Ident>,
 }
 impl ReferenceCollector {
 	/// Rewrites references to parent type fields as arguments
-	fn collect(&mut self, r: &mut Reference) {
+	fn collect(&mut self, r: &mut FieldRef) {
 		if r.up == 0 {
 			return;
 		}
@@ -134,9 +134,9 @@ impl ReferenceCollector {
 
 		self.args.push((name.clone(), orig));
 
-		*r = Reference {
+		*r = FieldRef {
 			up: 0,
-			path: BaseReference(vec![ReferenceSegment::Arg(name.clone())]),
+			path: BaseFieldRef(vec![FieldRefSegment::Arg(name.clone())]),
 		};
 		self.params.push(name);
 	}

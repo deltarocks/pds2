@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::ast::{Ident, ReferenceSegment};
+use crate::ast::{FieldRefSegment, Ident};
 use crate::format::SpecializerObj;
 use crate::hir::TypeId;
 use crate::mir::{self, Field, Type, TypeKind, TypeMap};
@@ -119,21 +119,21 @@ fn generate_read_reference(
 	pi!(pi => "&{" INDENT NL);
 	for (i, field) in input.0.iter().enumerate() {
 		match &field.segment {
-			ReferenceSegment::Arg(name) => {
+			FieldRefSegment::Arg(name) => {
 				assert_eq!(i, 0);
 				pi!(pi =>
 					"let _0 = &args;" NL
 					"let _0: &" {=types.ty(field.to.get())} " = &_0." {?name} ";" NL
 				);
 			}
-			ReferenceSegment::Down { to, .. } => {
+			FieldRefSegment::Down { to, .. } => {
 				if i == 0 && from_locals {
 					pi!(pi => "let _0: &" {=types.ty(field.to.get())} " = &" {?to} ";" NL)
 				} else {
 					pi!(pi => "let _0: &" {=types.ty(field.to.get())} " = &_0." {?to} ";" NL)
 				}
 			}
-			ReferenceSegment::Virtual(name) => {
+			FieldRefSegment::Virtual(name) => {
 				pi!(pi => "let _0: &" {=types.ty(field.to.get())} " = &" {=types.virt(field.from.get(), name.clone())} "(&_0);" NL);
 			}
 		}

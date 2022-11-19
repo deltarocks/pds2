@@ -46,7 +46,7 @@ rule value() -> Value
 	/ s:string_singleline() { Value::String { is_block: false, string: s } }
 	/ i:$(['0'..='9']+) { Value::Int(i.parse().unwrap()) }
 	/ i:item() { Value::Item(i) }
-	/ r:reference() { Value::Reference(r) }
+	/ r:reference() { Value::FieldRef(r) }
 
 rule item() -> Item
 	= ident:item_path() args:itemArgs()? block:itemBlock()? {
@@ -86,15 +86,15 @@ rule string_singleline() -> String
 	/ expected!("string")
 rule stringChar() -> char
 	= !['"' | '\n'] c:$[_] { c.chars().next().unwrap() }
-pub rule reference_segment() -> ReferenceSegment
-	= "@" id:baseIdent() { ReferenceSegment::Virtual(id) }
-	/ "$" id:baseIdent() { ReferenceSegment::Arg(id) }
-	/ ignore:"."? id: baseIdent() { ReferenceSegment::Down{to:id, ignore_delegation: ignore.is_some()} }
-pub rule reference() -> Reference
+pub rule reference_segment() -> FieldRefSegment
+	= "@" id:baseIdent() { FieldRefSegment::Virtual(id) }
+	/ "$" id:baseIdent() { FieldRefSegment::Arg(id) }
+	/ ignore:"."? id: baseIdent() { FieldRefSegment::Down{to:id, ignore_delegation: ignore.is_some()} }
+pub rule reference() -> FieldRef
 	= ups:(p:"../"+ {p.len()} / "./" {0}) path: reference_segment() ++ ("/") {
-		Reference {
+		FieldRef {
 			up: ups,
-			path: BaseReference(path),
+			path: BaseFieldRef(path),
 		}
 	}
 
@@ -127,6 +127,6 @@ rule eol()
 pub fn parse(input: &str) -> Result<Block, ParseError<LineCol>> {
 	pds_parser::root(input)
 }
-pub fn parse_reference(input: &str) -> Result<Reference, ParseError<LineCol>> {
+pub fn parse_reference(input: &str) -> Result<FieldRef, ParseError<LineCol>> {
 	pds_parser::reference(input)
 }

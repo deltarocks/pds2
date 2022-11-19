@@ -14,14 +14,14 @@
 
 use std::collections::BTreeMap;
 
-use crate::ast::{Ident, BaseReference, ReferenceSegment};
+use crate::ast::{BaseFieldRef, FieldRefSegment, Ident};
 use crate::hir::{ContainerFieldType, Namespace, NamespaceItem, Type, TypeId, TypeKind};
 use anyhow::Result;
 
 #[derive(Debug)]
 struct Alias {
 	target: TypeId,
-	remap_arguments: BTreeMap<Ident, BaseReference>,
+	remap_arguments: BTreeMap<Ident, BaseFieldRef>,
 }
 
 impl TypeKind {
@@ -44,10 +44,14 @@ impl TypeKind {
 				if let Some(alias) = aliases.get(&resolved) {
 					*self = TypeKind::Reference {
 						ty: crate::hir::ReferenceKind::Resolved(alias.target),
-						args: args.iter()
+						args: args
+							.iter()
 							.map(|(name, value)| {
 								let mut value = value.clone();
-								let remap = alias.remap_arguments.get(name).expect("TODO: unused argument?");
+								let remap = alias
+									.remap_arguments
+									.get(name)
+									.expect("TODO: unused argument?");
 								value.path.0.extend_from_slice(&remap.0);
 								(name.clone(), value)
 							})
@@ -91,7 +95,7 @@ impl Namespace {
 								assert_eq!(value.up, 0);
 								let mut refer = value.path.clone();
 								let first_segment = refer.0.remove(0);
-								let ReferenceSegment::Arg(arg) = first_segment else {panic!()};
+								let FieldRefSegment::Arg(arg) = first_segment else {panic!()};
 								assert_eq!(&arg, name);
 								(name.clone(), refer)
 							})

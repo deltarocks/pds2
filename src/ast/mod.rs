@@ -148,33 +148,33 @@ impl Statement {
 }
 
 #[derive(Clone)]
-pub enum ReferenceSegment {
+pub enum FieldRefSegment {
 	Down { to: Ident, ignore_delegation: bool },
 	Virtual(Ident),
 	Arg(Ident),
 }
-impl ReferenceSegment {
+impl FieldRefSegment {
 	fn name(&self) -> String {
 		match self {
-			ReferenceSegment::Down { to, .. } => to.as_str().to_string(),
-			ReferenceSegment::Virtual(v) => v.as_str().to_string(),
-			ReferenceSegment::Arg(a) => a.as_str().to_string(),
+			FieldRefSegment::Down { to, .. } => to.as_str().to_string(),
+			FieldRefSegment::Virtual(v) => v.as_str().to_string(),
+			FieldRefSegment::Arg(a) => a.as_str().to_string(),
 		}
 	}
 }
-impl Debug for ReferenceSegment {
+impl Debug for FieldRefSegment {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		match self {
-			ReferenceSegment::Down { to, .. } => write!(f, "{:?}", to),
-			ReferenceSegment::Virtual(v) => write!(f, "@{:?}", v),
-			ReferenceSegment::Arg(a) => write!(f, "${:?}", a),
+			FieldRefSegment::Down { to, .. } => write!(f, "{:?}", to),
+			FieldRefSegment::Virtual(v) => write!(f, "@{:?}", v),
+			FieldRefSegment::Arg(a) => write!(f, "${:?}", a),
 		}
 	}
 }
 
 #[derive(Clone)]
-pub struct BaseReference(pub Vec<ReferenceSegment>);
-impl BaseReference {
+pub struct BaseFieldRef(pub Vec<FieldRefSegment>);
+impl BaseFieldRef {
 	pub fn name(&self) -> String {
 		self.0
 			.iter()
@@ -183,15 +183,15 @@ impl BaseReference {
 			.join("_")
 	}
 }
-impl TryFrom<Reference> for BaseReference {
+impl TryFrom<FieldRef> for BaseFieldRef {
 	type Error = anyhow::Error;
 
-	fn try_from(value: Reference) -> Result<Self, Self::Error> {
+	fn try_from(value: FieldRef) -> Result<Self, Self::Error> {
 		ensure!(value.up == 0, "not a based reference: {:?}", value);
 		Ok(value.path)
 	}
 }
-impl Debug for BaseReference {
+impl Debug for BaseFieldRef {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		for (i, item) in self.0.iter().enumerate() {
 			if i != 0 {
@@ -204,11 +204,11 @@ impl Debug for BaseReference {
 }
 
 #[derive(Clone)]
-pub struct Reference {
+pub struct FieldRef {
 	pub up: usize,
-	pub path: BaseReference,
+	pub path: BaseFieldRef,
 }
-impl Reference {
+impl FieldRef {
 	pub fn name(&self) -> String {
 		self.path.name()
 	}
@@ -216,7 +216,7 @@ impl Reference {
 		Ok(parse::parse_reference(s)?)
 	}
 }
-impl Debug for Reference {
+impl Debug for FieldRef {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		if self.up == 0 {
 			write!(f, ".")?
@@ -235,7 +235,8 @@ impl Debug for Reference {
 #[derive(Debug, Clone)]
 pub enum Value {
 	String { string: String, is_block: bool },
-	Reference(Reference),
+	FieldRef(FieldRef),
+	FunctionCall(Ident, ItemArgs),
 	Int(i64),
 	Item(Item),
 	Internal(String),
@@ -257,9 +258,9 @@ impl From<u32> for Value {
 		Self::Int(i as i64)
 	}
 }
-impl From<Reference> for Value {
-	fn from(r: Reference) -> Self {
-		Self::Reference(r)
+impl From<FieldRef> for Value {
+	fn from(r: FieldRef) -> Self {
+		Self::FieldRef(r)
 	}
 }
 
@@ -345,12 +346,9 @@ impl ParseValue for Ident {
 		if value.is_unset() {
 			bail!("missing identifier")
 		}
-		match value {
-			Value::Int(v) => {
-				// deprecated
-				return Ok(format!("v{}", v).as_str().into());
-			}
-			_ => {}
+		if let Value::Int(v) = value {
+			// deprecated
+			return Ok(format!("v{}", v).as_str().into());
 		}
 		let item = value
 			.into_item()
@@ -359,13 +357,13 @@ impl ParseValue for Ident {
 			.ok_or_else(|| anyhow!("expected identifer"))
 	}
 }
-impl ParseValue for Reference {
+impl ParseValue for FieldRef {
 	fn parse(value: Value) -> Result<Self> {
 		if value.is_unset() {
 			bail!("missing reference");
 		}
 		match value {
-			Value::Reference(v) => Ok(v),
+			Value::FieldRef(v) => Ok(v),
 			_ => bail!("expected reference"),
 		}
 	}
@@ -435,8 +433,8 @@ impl Value {
 		}
 	}
 
-	pub fn reference(&self) -> Option<Reference> {
-		if let Value::Reference(r) = self {
+	pub fn reference(&self) -> Option<FieldRef> {
+		if let Value::FieldRef(r) = self {
 			Some(r.clone())
 		} else {
 			None
