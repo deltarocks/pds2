@@ -91,7 +91,7 @@ impl TypeKind {
 					.as_ref()
 					.map(|d| (d.0.clone(), Type::from_hir(&d.1))),
 			},
-			hir::TypeKind::Reference { .. } => todo!("type alias"),
+			hir::TypeKind::Reference { .. } => todo!("type alias: {hir:?}"),
 			hir::TypeKind::Native(hir::NativeType {
 				virtual_fields,
 				specializer,

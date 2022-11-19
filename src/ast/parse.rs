@@ -16,7 +16,13 @@ rule traced<T>(e: rule<T>) -> T =
 pub rule root() -> Block
 	= traced(<root0()>);
 rule root0() -> Block
-	= _ stmts:statement()* { Block { statements: stmts, root: true } }
+	= attrs:(_ a:insideBlockAttr() {a})* _ stmts:statement()* {
+		Block {
+			attributes: attrs.iter().cloned().collect(),
+			statements: stmts,
+			root: true
+		}
+	}
 
 rule statement() -> Statement
 	= attrs:(_ s:statementAttr() _ {s})* _ items:valueChain() _ ";" _ {
@@ -29,6 +35,8 @@ rule statement() -> Statement
 	  }
 rule statementAttr() -> (Ident, Vec<Value>)
 	= "@" name:baseIdent() val:valueChain() { (name, val) }
+rule insideBlockAttr() -> (Ident, Vec<Value>)
+	= "@!" name:baseIdent() val:valueChain() { (name, val) }
 
 rule valueChain() -> Vec<Value>
 	= value() ++ (_ "=>" _)
@@ -45,7 +53,7 @@ rule item() -> Item
 		  Item {
 			  name: ident,
 			  args: args.unwrap_or_default(),
-			  block: block.unwrap_or_else(|| Block { statements: vec![], root: false }),
+			  block: block.unwrap_or_else(|| Block { attributes: HashMap::new(), statements: vec![], root: false }),
 		  }
 	  }
 rule itemArgs() -> ItemArgs
@@ -63,7 +71,13 @@ rule itemArgs() -> ItemArgs
 rule itemArg() -> (Option<Ident>, Value)
 	= tag:(t:baseIdent() ":" {t})? _ val:value() _ { (tag, val) }
 rule itemBlock() -> Block
-	= "{" s:statement()* "}" _ { Block { statements: s, root: false } }
+	= "{" attrs:(a:insideBlockAttr() _ {a})* s:statement()* "}" _ {
+		Block {
+			attributes: attrs.iter().cloned().collect(),
+			statements: s,
+			root: false,
+		}
+	}
 
 rule string_block() -> String
 	= "\"\"\"\n" s:$((!"\"\"\"\n" [_])+) "\"\"\"\n" { s.trim().to_string() }

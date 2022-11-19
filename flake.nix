@@ -22,7 +22,7 @@
             openssl
             lld
             ((rustChannelOf { date = "2022-11-10"; channel = "nightly"; }).default.override {
-              extensions = [ "rust-src" ];
+              extensions = [ "rust-src" "rust-analyzer" ];
             })
           ];
         };

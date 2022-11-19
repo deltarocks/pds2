@@ -1,9 +1,9 @@
 //! Resolve paths to ids desugaring pass
 //!
-//! This pass resolves all RelativeNamedReference's to Reference's,
+//! This pass resolves all absolute path type references with resolved,
 //! and throws error if named type can't be resolved
 //!
-//! After this pass no RelativeNamedReference should exist in IR
+//! After this every type reference is either generic, or resolved (by-id)
 
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
@@ -15,70 +15,52 @@ use crate::{
 
 impl TypeKind {
 	fn resolve_paths_to_ids(&mut self, paths: &HashMap<Path, TypeId>) -> Result<()> {
-		fn fix_path(paths: &HashMap<Path, TypeId>, t: &mut TypeKind) -> Result<()> {
-			match t {
-				TypeKind::Reference {
-					ty: ty @ ReferenceKind::Path(_),
-					types,
-					..
-				} => {
-					let path = ty.path().unwrap();
-					*ty = ReferenceKind::Resolved(*paths.get(path).ok_or_else(|| {
-						anyhow!("path not found: {:?}, possible paths: {:?}", path, paths)
-					})?);
-					for (_, ty) in types.iter_mut() {
-						ty.resolve_paths_to_ids(paths)?;
-					}
-				}
-				TypeKind::Reference { .. } => {}
-				_ => unreachable!(),
-			}
-			Ok(())
-		}
 		match self {
-			TypeKind::Container(c) => {
-				for (_, v) in c.fields.iter_mut() {
-					match v {
-						crate::hir::ContainerFieldType::Normal(t) => fix_path(paths, t)?,
-						crate::hir::ContainerFieldType::Virtual(_, p) => fix_path(paths, p)?,
-						crate::hir::ContainerFieldType::Delegate(_) => {}
-					}
-				}
-			}
-			TypeKind::Union(u) => {
-				for (_, _, t) in u.matches.iter_mut() {
-					fix_path(paths, t)?
-				}
-				if let Some((_, def)) = &mut u.default {
-					fix_path(paths, def)?
-				}
-			}
 			TypeKind::Reference {
 				ty: ty @ ReferenceKind::Path(_),
 				types,
 				..
 			} => {
 				let path = ty.path().unwrap();
-				*ty = ReferenceKind::Resolved(
-					*paths
-						.get(path)
-						.ok_or_else(|| anyhow!("path not found: {:?}", path))?,
-				);
+				*ty = ReferenceKind::Resolved(*paths.get(path).ok_or_else(|| {
+					anyhow!("path not found: {:?}, possible paths: {:?}", path, paths)
+				})?);
 				for (_, ty) in types.iter_mut() {
-					fix_path(paths, ty)?;
+					ty.resolve_paths_to_ids(paths)?;
 				}
 			}
 			TypeKind::Reference { .. } => {}
+			TypeKind::Container(c) => {
+				for (_, v) in c.fields.iter_mut() {
+					match v {
+						crate::hir::ContainerFieldType::Normal(t) => {
+							t.resolve_paths_to_ids(paths)?
+						}
+						crate::hir::ContainerFieldType::Virtual(_, p) => {
+							p.resolve_paths_to_ids(paths)?
+						}
+						crate::hir::ContainerFieldType::Delegate(_) => {}
+					}
+				}
+			}
+			TypeKind::Union(u) => {
+				for (_, _, t) in u.matches.iter_mut() {
+					t.resolve_paths_to_ids(paths)?;
+				}
+				if let Some((_, def)) = &mut u.default {
+					def.resolve_paths_to_ids(paths)?;
+				}
+			}
 			TypeKind::Native(NativeType {
 				virtual_fields,
 				specializer: _,
 				specialization,
 			}) => {
 				for (_, v) in specialization.iter_mut() {
-					fix_path(paths, v)?;
+					v.resolve_paths_to_ids(paths)?;
 				}
-				for field in virtual_fields.iter_mut() {
-					fix_path(paths, &mut field.1)?;
+				for (_, v) in virtual_fields.iter_mut() {
+					v.resolve_paths_to_ids(paths)?;
 				}
 			}
 			TypeKind::Void => {}

@@ -32,8 +32,12 @@ pub struct ItemBuilder {
 }
 
 impl ItemBuilder {
-	pub fn args(mut self, args: ItemArgsBuilder) -> Self {
+	pub fn argsb(mut self, args: ItemArgsBuilder) -> Self {
 		self.item.args = args.build();
+		self
+	}
+	pub fn args(mut self, args: ItemArgs) -> Self {
+		self.item.args = args;
 		self
 	}
 	pub fn block(mut self, block: Block) -> Self {

@@ -19,7 +19,14 @@
 //! def(type0) => root::u8;
 //! ```
 //!
-//! After this pass every defined path is absolute
+//! It also expands simple paths to generics
+//! ```pds
+//! def(type0) {type(Value)} => Value (as path, ::Value);
+//! =>
+//! def(type0) {type(Value)} => Value (as generic, ReferenceKind::Generic)
+//! ```
+//!
+//! After this pass every type reference is either absolute, replaced with generic, or resolved (by-id)
 
 use std::collections::HashSet;
 
@@ -59,7 +66,7 @@ impl TypeKind {
 				}
 			}
 			TypeKind::Reference {
-				ty: ReferenceKind::Generic(_),
+				ty: ReferenceKind::Generic(_) | ReferenceKind::Resolved(_),
 				types,
 				..
 			} => {
@@ -67,7 +74,6 @@ impl TypeKind {
 					ty.rewrite_paths_to_absolute(current_ns, generics)
 				}
 			}
-			TypeKind::Reference { .. } => unreachable!(),
 			TypeKind::Void => {}
 			TypeKind::Native(NativeType {
 				virtual_fields,

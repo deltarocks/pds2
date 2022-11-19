@@ -11,12 +11,15 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 pub fn parse_ast(ast: Block) -> Result<Namespace> {
 	let mut ns = Namespace::from_ast(ast).context("parsing AST to IR")?;
 	let id = IdGenerator::new();
-	super::desugar::rewrite_paths_to_absolute(&mut ns);
-	super::desugar::extract_nested_types(id.clone(), &mut ns);
 	super::desugar::give_all_types_ids(id.clone(), &mut ns);
+
+	super::desugar::rewrite_paths_to_absolute(&mut ns);
 	super::desugar::resolve_paths_to_ids(&mut ns).context("resolving paths")?;
-	dbg!(&ns);
-	super::desugar::monomorphize(id, &mut ns)?;
+
+	super::desugar::monomorphize(id.clone(), &mut ns)?;
+
+	super::desugar::extract_nested_types(id, &mut ns);
+	super::desugar::replace_aliases(&mut ns)?;
 	Ok(ns)
 }
 
@@ -174,33 +177,30 @@ impl Union {
 		})
 	}
 	fn from_ast(value: Item) -> Result<TypeKind> {
-		match value.args.named("tagType")? {
-			Some(t) => {
-				return Ok(TypeKind::Container(Container {
-					virt: true,
-					fields: vec![
-						(
-							"_tag".into(),
-							ContainerFieldType::Virtual(
-								Reference::parse("./union/@tag").unwrap(),
-								TypeKind::from_ast(t, vec![])?,
-							),
+		if let Some(t) = value.args.named("tagType")? {
+			return Ok(TypeKind::Container(Container {
+				virt: true,
+				fields: vec![
+					(
+						"_tag".into(),
+						ContainerFieldType::Virtual(
+							Reference::parse("./union/@tag").unwrap(),
+							TypeKind::from_ast(t, vec![])?,
 						),
-						(
-							"union".into(),
-							ContainerFieldType::Normal(
-								Self::from_ast_with_tag(
-									UnionTag::LoadFrom(Reference::parse("./_tag").unwrap()),
-									value,
-								)
-								.map(TypeKind::Union)?,
-							),
+					),
+					(
+						"union".into(),
+						ContainerFieldType::Normal(
+							Self::from_ast_with_tag(
+								UnionTag::LoadFrom(Reference::parse("./_tag").unwrap()),
+								value,
+							)
+							.map(TypeKind::Union)?,
 						),
-					],
-					delegate_all: Some("union".into()),
-				}));
-			}
-			None => {}
+					),
+				],
+				delegate_all: Some("union".into()),
+			}));
 		};
 		let tag = match value.args.named("tag")? {
 			Some(r) => UnionTag::LoadFrom(r),
@@ -222,12 +222,6 @@ impl TypeKind {
 					ensure!(items.is_empty(), "union has no items");
 					Union::from_ast(value).context("parsing union")?
 				}
-				// "option" => TypeKind::Union(Union {
-				// 	tag: UnionTag::Type(Box::new(TypeKind::Native(NativeType::Uint(1)))),
-				// 	// TODO: fill variants
-				// 	matches: vec![],
-				// 	default: None,
-				// }),
 				_ => {
 					// ensure!(items.is_empty(), "unexpected values");
 					ensure!(value.block.is_empty(), "unexpected block");

@@ -11,7 +11,7 @@ impl TypeKind {
 	fn to_ast(self) -> Vec<ast::Value> {
 		match self {
 			super::TypeKind::Container(c) => Item::simple_builder("container")
-				.args(if c.virt {
+				.argsb(if c.virt {
 					ItemArgs::builder().named("virtual", Item::new_simple("true").into())
 				} else {
 					ItemArgs::builder()
@@ -24,13 +24,13 @@ impl TypeKind {
 							ContainerFieldType::Normal(t) => out.push(ast::Statement {
 								attributes: Default::default(),
 								items: Item::simple_builder("field")
-									.args(ItemArgs::builder().arg(Item::new_simple(name).into()))
+									.argsb(ItemArgs::builder().arg(Item::new_simple(name).into()))
 									.then(t.to_ast()),
 							}),
 							ContainerFieldType::Virtual(r, t) => out.push(ast::Statement {
 								attributes: Default::default(),
 								items: Item::simple_builder("virtual_field")
-									.args(
+									.argsb(
 										ItemArgs::builder()
 											.arg(Item::new_simple(name).into())
 											.named("value", r.into()),
@@ -40,7 +40,7 @@ impl TypeKind {
 							ContainerFieldType::Delegate(to) => out.push(ast::Statement {
 								attributes: Default::default(),
 								items: Item::simple_builder("delegate_field")
-									.args(
+									.argsb(
 										ItemArgs::builder()
 											.arg(Item::new_simple(name).into())
 											.named("to", Item::new_simple(to).into()),
@@ -54,19 +54,20 @@ impl TypeKind {
 						out.push(ast::Statement {
 							attributes: Default::default(),
 							items: Item::simple_builder("delegate_all")
-								.args(ItemArgs::builder().named("to", Item::new_simple(to).into()))
+								.argsb(ItemArgs::builder().named("to", Item::new_simple(to).into()))
 								.build_values(),
 						})
 					}
 
 					ast::Block {
+						attributes: Default::default(),
 						statements: out,
 						root: false,
 					}
 				})
 				.build_values(),
 			super::TypeKind::Union(r) => Item::simple_builder("union")
-				.args(match r.tag {
+				.argsb(match r.tag {
 					crate::hir::UnionTag::LoadFrom(r) => ItemArgs::builder().named("tag", r.into()),
 					crate::hir::UnionTag::Type(t) => {
 						let chain = t.to_ast();
@@ -81,7 +82,7 @@ impl TypeKind {
 						out.push(ast::Statement {
 							attributes: Default::default(),
 							items: Item::simple_builder("variant")
-								.args(
+								.argsb(
 									ItemArgs::builder()
 										.arg(Item::new_simple(k).into())
 										.named("match", v),
@@ -94,12 +95,13 @@ impl TypeKind {
 						out.push(ast::Statement {
 							attributes: Default::default(),
 							items: Item::simple_builder("default")
-								.args(ItemArgs::builder().arg(Item::new_simple(k).into()))
+								.argsb(ItemArgs::builder().arg(Item::new_simple(k).into()))
 								.then(t.to_ast()),
 						})
 					}
 
 					ast::Block {
+						attributes: Default::default(),
 						statements: out,
 						root: false,
 					}
@@ -151,13 +153,14 @@ impl Namespace {
 					attributes: HashMap::new(),
 					items: {
 						ast::Item::simple_builder(if t.is_native() { "def_native" } else { "def" })
-							.args(ItemArgs::builder().arg(Item::new_simple(name).into()))
+							.argsb(ItemArgs::builder().arg(Item::new_simple(name).into()))
 							.then(t.to_ast())
 					},
 				}),
 			}
 		}
 		ast::Block {
+			attributes: Default::default(),
 			statements: out,
 			root: false,
 		}

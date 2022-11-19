@@ -112,6 +112,7 @@ impl Debug for Path {
 
 #[derive(Debug, Clone, Default)]
 pub struct Block {
+	pub attributes: Attributes,
 	pub statements: Vec<Statement>,
 	pub root: bool,
 }

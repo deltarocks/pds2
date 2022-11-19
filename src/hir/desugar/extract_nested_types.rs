@@ -42,10 +42,7 @@ use std::cell::Cell;
 
 use crate::{
 	ast::{BaseReference, Ident, Reference, ReferenceSegment},
-	hir::{
-		id_generator::NameIdGenerator, IdGenerator, Namespace, NamespaceItem, NativeType,
-		ReferenceKind, Type, TypeKind,
-	},
+	hir::{IdGenerator, Namespace, NamespaceItem, NativeType, ReferenceKind, Type, TypeKind},
 };
 
 impl Namespace {
@@ -99,19 +96,15 @@ impl TypeReceiver {
 		ty.extract_nested_types(self);
 
 		let mut collector = ReferenceCollector::default();
-		let mut generics = GenericCollector::new();
-		ty.rewrite_references(&mut collector, &mut generics);
+		ty.rewrite_references(&mut collector);
 
-		if let TypeKind::Reference { .. } = ty {
-			return;
-		}
 		let vty = std::mem::replace(ty, TypeKind::Void);
 		let id = self.id.next();
 		self.extracted.push((
 			self.path.clone(),
 			Type {
 				_id: Cell::new(id),
-				types: generics.definition,
+				types: Vec::new(),
 				params: collector.params,
 				kind: vty,
 			},
@@ -119,44 +112,8 @@ impl TypeReceiver {
 		*ty = TypeKind::Reference {
 			ty: ReferenceKind::Resolved(id),
 			args: collector.args,
-			types: generics.usage,
+			types: Vec::new(),
 		}
-	}
-}
-
-struct GenericCollector {
-	usage: Vec<(Ident, TypeKind)>,
-	definition: Vec<(Ident, Option<TypeKind>)>,
-	// replacements: HashMap<Ident, Ident>,
-	name_id: NameIdGenerator,
-}
-impl GenericCollector {
-	fn new() -> Self {
-		Self {
-			usage: Vec::new(),
-			definition: Vec::new(),
-			// replacements: HashMap::new(),
-			name_id: NameIdGenerator::new(),
-		}
-	}
-	fn collect(&mut self, r: &mut ReferenceKind) {
-		if !r.is_generic() {
-			return;
-		}
-		let generic = r.generic_mut().unwrap().clone();
-		// let new_name = Ident::new(&format!("{generic:?}_Generic{}", self.name_id.next()));
-		*r = ReferenceKind::Generic(generic.clone());
-
-		// self.replacements.push((generic.clone(), new_name.clone()));
-		self.definition.push((generic.clone(), None));
-		self.usage.push((
-			generic.clone(),
-			TypeKind::Reference {
-				ty: ReferenceKind::Generic(generic),
-				args: vec![],
-				types: vec![],
-			},
-		));
 	}
 }
 
@@ -186,22 +143,18 @@ impl ReferenceCollector {
 }
 
 impl TypeKind {
-	fn rewrite_references(
-		&mut self,
-		collector: &mut ReferenceCollector,
-		generics: &mut GenericCollector,
-	) {
+	fn rewrite_references(&mut self, collector: &mut ReferenceCollector) {
 		match self {
 			TypeKind::Container(c) => {
 				for (_, f) in &mut c.fields {
 					match f {
 						crate::hir::ContainerFieldType::Normal(n) => {
 							n.assert_reference();
-							n.rewrite_references(collector, generics)
+							n.rewrite_references(collector)
 						}
 						crate::hir::ContainerFieldType::Virtual(r, n) => {
 							n.assert_reference();
-							n.rewrite_references(collector, generics);
+							n.rewrite_references(collector);
 							collector.collect(r)
 						}
 						crate::hir::ContainerFieldType::Delegate(_) => {}
@@ -209,23 +162,22 @@ impl TypeKind {
 				}
 			}
 			TypeKind::Reference { ty: _, args, types } => {
-				// generics.collect(ty);
 				for arg in args.iter_mut() {
 					collector.collect(&mut arg.1);
 				}
 				for (_name, ty) in types.iter_mut() {
 					ty.assert_reference();
-					ty.rewrite_references(collector, generics);
+					ty.rewrite_references(collector);
 				}
 			}
 			TypeKind::Union(u) => {
 				for (_, _, c) in &mut u.matches {
 					c.assert_reference();
-					c.rewrite_references(collector, generics);
+					c.rewrite_references(collector);
 				}
 				if let Some((_, def)) = &mut u.default {
 					def.assert_reference();
-					def.rewrite_references(collector, generics);
+					def.rewrite_references(collector);
 				}
 			}
 			TypeKind::Native(_) => unreachable!(),

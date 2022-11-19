@@ -108,11 +108,14 @@ impl TypeKind {
 					assert!(args.is_empty() && types.is_empty());
 					*ty = nty.clone();
 				}
+
 				if collector.is_generic(ty.resolved().unwrap()) {
 					let types = mem::take(types);
 					let monoty = collector
 						.collect(ty.clone().resolved().expect("paths are resolved"), types);
 					*ty = ReferenceKind::Resolved(monoty);
+				} else {
+					assert!(types.is_empty());
 				}
 			}
 			TypeKind::Native(value) => {
@@ -135,30 +138,29 @@ impl TypeKind {
 }
 impl Type {
 	fn monomorphize(&mut self, collector: &mut MonoCollector) -> Result<()> {
+		for mono in collector
+			.extracted
+			.drain_filter(|f| f.target == self.id())
+			.collect::<Vec<_>>()
+		{
+			let mut mono_kind = self.kind.clone();
+			let mut types = mono.types.clone();
+			for (n, t) in self.types.iter() {
+				if types.iter().any(|(cn, _)| cn == n) {
+					continue;
+				}
+				if t.is_some() {
+					types.push((n.clone(), t.clone().unwrap()));
+				} else {
+					bail!("missing generic parameter: {:?}, passed: {:?}", n, types)
+				}
+			}
+			mono_kind.monomorphize(collector, &types)?;
+			let new_type = Type::new(mono.mono_type, self.params.clone(), mono_kind);
+			collector.add(new_type);
+		}
 		if self.types.is_empty() {
 			self.kind.monomorphize(collector, &Vec::new())?;
-		} else {
-			for mono in collector
-				.extracted
-				.drain_filter(|f| f.target == self.id())
-				.collect::<Vec<_>>()
-			{
-				let mut mono_kind = self.kind.clone();
-				let mut types = mono.types.clone();
-				for (n, t) in self.types.iter() {
-					if types.iter().any(|(cn, _)| cn == n) {
-						continue;
-					}
-					if t.is_some() {
-						types.push((n.clone(), t.clone().unwrap()));
-					} else {
-						bail!("missing generic parameter: {:?}, passed: {:?}", n, types)
-					}
-				}
-				mono_kind.monomorphize(collector, &types)?;
-				let new_type = Type::new(mono.mono_type, self.params.clone(), mono_kind);
-				collector.add(new_type);
-			}
 		}
 		Ok(())
 	}
@@ -166,17 +168,19 @@ impl Type {
 
 impl Namespace {
 	// Acquire set of types, references to whose should be monomorphised
-	fn get_generic_types(&self, out: &mut HashSet<TypeId>) {
+	fn get_generic_types(&self, out: &mut HashSet<TypeId>) -> bool {
+		let mut found = false;
 		for (_, item) in self.items.iter() {
 			match item {
-				NamespaceItem::Inner(ns) => ns.get_generic_types(out),
+				NamespaceItem::Inner(ns) => found |= ns.get_generic_types(out),
 				NamespaceItem::Type(ty) => {
-					if !ty.types.is_empty() {
-						out.insert(ty.id());
+					if !ty.types.is_empty() && out.insert(ty.id()) {
+						found = true
 					}
 				}
 			}
 		}
+		found
 	}
 	fn monomorphize(&mut self, collector: &mut MonoCollector) -> Result<()> {
 		for (name, item) in self.items.iter_mut() {
@@ -209,25 +213,24 @@ impl Namespace {
 }
 
 pub fn monomorphize(id: IdGenerator, ir: &mut Namespace) -> Result<()> {
-	let mut generic = HashSet::new();
-	ir.get_generic_types(&mut generic);
-
 	let mut collector = MonoCollector {
 		id,
-		generic,
+		generic: HashSet::new(),
 		path: Vec::new(),
 		extracted: Vec::new(),
 		added: Vec::new(),
 	};
 	loop {
+		ir.get_generic_types(&mut collector.generic);
 		ir.monomorphize(&mut collector)?;
+		let found = ir.get_generic_types(&mut collector.generic);
 
 		let left_unimplemented = collector
 			.extracted
 			.iter()
 			.filter(|e| !e.implemented)
 			.count();
-		if left_unimplemented == 0 {
+		if left_unimplemented == 0 && !found {
 			break;
 		}
 	}
