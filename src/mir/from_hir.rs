@@ -1,6 +1,6 @@
 use crate::{
 	ast::{self, FieldRef, Ident, Path},
-	hir::{self, ReferenceKind, TypeId},
+	hir::{self, Reference, ReferenceKind, TypeId},
 	mir::{self, FieldItem},
 	should_be_desugared,
 };
@@ -12,11 +12,11 @@ use super::{Definition, Field, NativeType, Type, TypeKind, TypeMap, Value};
 impl Type {
 	fn from_hir(kind: &hir::TypeKind) -> Self {
 		match kind {
-			hir::TypeKind::Reference {
+			hir::TypeKind::Reference(Reference {
 				ty: ReferenceKind::Resolved(target),
 				args,
 				types,
-			} => {
+			}) => {
 				assert!(types.is_empty(), "monomorphization should be done");
 				Self {
 					target: *target,
@@ -70,28 +70,7 @@ impl TypeKind {
 					.collect::<Result<_>>()?,
 				delegate_all: c.delegate_all.clone(),
 			},
-			hir::TypeKind::Union(u) => Self::Union {
-				tag: match &u.tag {
-					hir::UnionTag::LoadFrom(r) => Field::from_hir(r),
-					hir::UnionTag::Type(_) => should_be_desugared!(u.tag),
-				},
-				matches: u
-					.matches
-					.iter()
-					.map(|v| {
-						(
-							mir::Value::from_hir(&v.0).unwrap(),
-							v.1.clone(),
-							Type::from_hir(&v.2),
-						)
-					})
-					.collect(),
-				default: u
-					.default
-					.as_ref()
-					.map(|d| (d.0.clone(), Type::from_hir(&d.1))),
-			},
-			hir::TypeKind::Reference { .. } => todo!("type alias: {hir:?}"),
+			hir::TypeKind::Reference(Reference { .. }) => todo!("type alias: {hir:?}"),
 			hir::TypeKind::Native(hir::NativeType {
 				virtual_fields,
 				specializer,

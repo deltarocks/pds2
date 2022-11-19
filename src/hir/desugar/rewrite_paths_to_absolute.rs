@@ -33,8 +33,8 @@ use std::collections::HashSet;
 use crate::{
 	ast::Ident,
 	hir::{
-		Container, ContainerFieldType, Namespace, NamespaceItem, NativeType, ReferenceKind, Type,
-		TypeKind, Union,
+		Container, ContainerFieldType, Namespace, NamespaceItem, NativeType, Reference,
+		ReferenceKind, Type, TypeKind,
 	},
 };
 
@@ -42,12 +42,11 @@ impl TypeKind {
 	fn rewrite_paths_to_absolute(&mut self, current_ns: &[Ident], generics: &HashSet<Ident>) {
 		match self {
 			TypeKind::Container(c) => c.rewrite_paths_to_absolute(current_ns, generics),
-			TypeKind::Union(u) => u.rewrite_paths_to_absolute(current_ns, generics),
-			TypeKind::Reference {
+			TypeKind::Reference(Reference {
 				ty: ty @ ReferenceKind::Path(_),
 				types,
 				..
-			} => {
+			}) => {
 				// Try to resolve generic
 				{
 					let p = ty.path().unwrap();
@@ -65,11 +64,11 @@ impl TypeKind {
 					ty.rewrite_paths_to_absolute(current_ns, generics)
 				}
 			}
-			TypeKind::Reference {
+			TypeKind::Reference(Reference {
 				ty: ReferenceKind::Generic(_) | ReferenceKind::Resolved(_),
 				types,
 				..
-			} => {
+			}) => {
 				for (_, ty) in types.iter_mut() {
 					ty.rewrite_paths_to_absolute(current_ns, generics)
 				}
@@ -107,16 +106,6 @@ impl Type {
 	}
 }
 
-impl Union {
-	pub fn rewrite_paths_to_absolute(&mut self, current_ns: &[Ident], generics: &HashSet<Ident>) {
-		for (_, _, t) in self.matches.iter_mut() {
-			t.rewrite_paths_to_absolute(current_ns, generics)
-		}
-		if let Some((_, d)) = &mut self.default {
-			d.rewrite_paths_to_absolute(current_ns, generics)
-		}
-	}
-}
 impl Container {
 	pub(crate) fn rewrite_paths_to_absolute(
 		&mut self,

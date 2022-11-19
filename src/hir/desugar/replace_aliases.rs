@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 
 use crate::ast::{BaseFieldRef, FieldRefSegment, Ident};
-use crate::hir::{ContainerFieldType, Namespace, NamespaceItem, Type, TypeId, TypeKind};
+use crate::hir::{ContainerFieldType, Namespace, NamespaceItem, Reference, Type, TypeId, TypeKind};
 use anyhow::Result;
 
 #[derive(Debug)]
@@ -37,12 +37,11 @@ impl TypeKind {
 					}
 				}
 			}
-			TypeKind::Union(_) => todo!(),
-			TypeKind::Reference { ty, args, types } => {
+			TypeKind::Reference(Reference { ty, args, types }) => {
 				assert!(types.is_empty());
 				let resolved = ty.resolved().unwrap();
 				if let Some(alias) = aliases.get(&resolved) {
-					*self = TypeKind::Reference {
+					*self = TypeKind::Reference(Reference {
 						ty: crate::hir::ReferenceKind::Resolved(alias.target),
 						args: args
 							.iter()
@@ -57,7 +56,7 @@ impl TypeKind {
 							})
 							.collect(),
 						types: Vec::new(),
-					}
+					})
 				}
 			}
 			TypeKind::Native(n) => {
@@ -85,7 +84,7 @@ impl Namespace {
 			match item {
 				NamespaceItem::Inner(ns) => found |= ns.collect_aliases(out),
 				NamespaceItem::Type(t) => {
-					if let TypeKind::Reference { ty, args, types } = &mut t.kind {
+					if let TypeKind::Reference(Reference { ty, args, types }) = &mut t.kind {
 						assert!(types.is_empty());
 						assert!(ty.is_resolved());
 						let resolved = ty.resolved().unwrap();

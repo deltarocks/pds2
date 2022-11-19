@@ -1,6 +1,7 @@
-use crate::ast::{FieldRef, Ident, Path, Value};
+use crate::ast::{FieldRef, Ident, Path};
 use std::{cell::Cell, collections::BTreeMap};
 mod from_ast;
+use anyhow::Result;
 pub use from_ast::parse_ast;
 mod desugar;
 pub use to_ast::to_ast;
@@ -15,10 +16,27 @@ pub enum NamespaceItem {
 	Inner(Namespace),
 	Type(Type),
 }
+impl Traverse for NamespaceItem {
+	fn traverse(&mut self, visitor: &mut impl Visitor) -> Result<()> {
+		match self {
+			NamespaceItem::Inner(ns) => ns.traverse(visitor)?,
+			NamespaceItem::Type(t) => t.traverse(visitor)?,
+		}
+		Ok(())
+	}
+}
 
 #[derive(Debug)]
 pub struct Namespace {
 	pub items: BTreeMap<Ident, NamespaceItem>,
+}
+impl Traverse for Namespace {
+	fn traverse(&mut self, visitor: &mut impl Visitor) -> Result<()> {
+		for (_, v) in self.items.iter_mut() {
+			v.traverse(visitor)?;
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +45,19 @@ pub enum ContainerFieldType {
 	Virtual(FieldRef, TypeKind),
 	Delegate(Ident),
 }
+impl Traverse for ContainerFieldType {
+	fn traverse(&mut self, visitor: &mut impl Visitor) -> Result<()> {
+		match self {
+			ContainerFieldType::Normal(t) => t.traverse(visitor)?,
+			ContainerFieldType::Virtual(f, t) => {
+				visitor.visit_field_ref(f)?;
+				t.traverse(visitor)?
+			}
+			ContainerFieldType::Delegate(_) => {}
+		}
+		Ok(())
+	}
+}
 
 #[derive(Debug, Clone)]
 pub struct Container {
@@ -34,31 +65,13 @@ pub struct Container {
 	pub fields: Vec<(Ident, ContainerFieldType)>,
 	pub delegate_all: Option<Ident>,
 }
-
-#[derive(Debug, Clone)]
-pub enum UnionTag {
-	LoadFrom(FieldRef),
-	Type(Box<TypeKind>),
-}
-
-#[derive(Debug, Clone)]
-pub struct Union {
-	pub tag: UnionTag,
-	pub matches: Vec<(Value, Ident, TypeKind)>,
-	pub default: Option<(Ident, Box<TypeKind>)>,
-}
-
-#[derive(Debug, Clone)]
-pub enum ArrayLength {
-	LoadFrom(FieldRef),
-	Fixed(u32),
-	Type(Box<TypeKind>),
-}
-
-#[derive(Debug, Clone)]
-pub struct Array {
-	pub length: ArrayLength,
-	pub ty: Box<TypeKind>,
+impl Traverse for Container {
+	fn traverse(&mut self, visitor: &mut impl Visitor) -> Result<()> {
+		for (_, f) in self.fields.iter_mut() {
+			f.traverse(visitor)?;
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +79,17 @@ pub struct NativeType {
 	pub virtual_fields: Vec<(Ident, TypeKind)>,
 	pub specializer: Option<Ident>,
 	pub specialization: Vec<(Ident, TypeKind)>,
+}
+impl Traverse for NativeType {
+	fn traverse(&mut self, visitor: &mut impl Visitor) -> Result<()> {
+		for (_, t) in self.virtual_fields.iter_mut() {
+			t.traverse(visitor)?;
+		}
+		for (_, t) in self.specialization.iter_mut() {
+			t.traverse(visitor)?;
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -117,23 +141,48 @@ impl ReferenceKind {
 }
 
 #[derive(Debug, Clone)]
+pub struct Reference {
+	pub ty: ReferenceKind,
+	pub args: Vec<(Ident, FieldRef)>,
+	pub types: Vec<(Ident, TypeKind)>,
+}
+impl Traverse for Reference {
+	fn traverse(&mut self, visitor: &mut impl Visitor) -> Result<()> {
+		for (_, f) in self.args.iter_mut() {
+			visitor.visit_field_ref(f)?;
+		}
+		for (_, v) in self.types.iter_mut() {
+			v.traverse(visitor)?
+		}
+		Ok(())
+	}
+}
+
+#[derive(Debug, Clone)]
 pub enum TypeKind {
 	Void,
 	Container(Container),
-	Union(Union),
-	Reference {
-		ty: ReferenceKind,
-		args: Vec<(Ident, FieldRef)>,
-		types: Vec<(Ident, TypeKind)>,
-	},
+	Reference(Reference),
 	Native(NativeType),
 }
 impl TypeKind {
 	fn assert_reference(&self) {
 		match self {
-			TypeKind::Reference { .. } => {}
+			TypeKind::Reference(Reference { .. }) => {}
 			n => unreachable!("should not have nested: {:?}", n),
 		}
+	}
+}
+impl Traverse for TypeKind {
+	fn traverse(&mut self, visitor: &mut impl Visitor) -> Result<()> {
+		visitor.visit_type(self)?;
+		match self {
+			TypeKind::Void => {}
+			TypeKind::Container(c) => c.traverse(visitor)?,
+			TypeKind::Reference(r) => r.traverse(visitor)?,
+			TypeKind::Native(n) => n.traverse(visitor)?,
+		}
+		Ok(())
 	}
 }
 
@@ -142,6 +191,16 @@ pub struct Type {
 	pub params: Vec<Ident>,
 	pub types: Vec<(Ident, Option<TypeKind>)>,
 	pub kind: TypeKind,
+}
+impl Traverse for Type {
+	fn traverse(&mut self, visitor: &mut impl Visitor) -> Result<()> {
+		for (_, t) in self.types.iter_mut() {
+			if let Some(t) = t {
+				visitor.visit_type(t)?;
+			}
+		}
+		self.kind.traverse(visitor)
+	}
 }
 
 impl std::fmt::Debug for Type {
@@ -176,4 +235,12 @@ impl Type {
 	pub fn is_native(&self) -> bool {
 		matches!(self.kind, TypeKind::Native(_))
 	}
+}
+
+trait Visitor {
+	fn visit_field_ref(&mut self, field: &mut FieldRef) -> Result<()>;
+	fn visit_type(&mut self, value: &mut TypeKind) -> Result<()>;
+}
+trait Traverse {
+	fn traverse(&mut self, visitor: &mut impl Visitor) -> Result<()>;
 }

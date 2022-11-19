@@ -10,17 +10,17 @@ use std::collections::HashMap;
 
 use crate::{
 	ast::{Ident, Path},
-	hir::{id_generator::TypeId, Namespace, NativeType, ReferenceKind, Type, TypeKind},
+	hir::{id_generator::TypeId, Namespace, NativeType, Reference, ReferenceKind, Type, TypeKind},
 };
 
 impl TypeKind {
 	fn resolve_paths_to_ids(&mut self, paths: &HashMap<Path, TypeId>) -> Result<()> {
 		match self {
-			TypeKind::Reference {
+			TypeKind::Reference(Reference {
 				ty: ty @ ReferenceKind::Path(_),
 				types,
 				..
-			} => {
+			}) => {
 				let path = ty.path().unwrap();
 				*ty = ReferenceKind::Resolved(*paths.get(path).ok_or_else(|| {
 					anyhow!("path not found: {:?}, possible paths: {:?}", path, paths)
@@ -29,7 +29,7 @@ impl TypeKind {
 					ty.resolve_paths_to_ids(paths)?;
 				}
 			}
-			TypeKind::Reference { .. } => {}
+			TypeKind::Reference(Reference { .. }) => {}
 			TypeKind::Container(c) => {
 				for (_, v) in c.fields.iter_mut() {
 					match v {
@@ -41,14 +41,6 @@ impl TypeKind {
 						}
 						crate::hir::ContainerFieldType::Delegate(_) => {}
 					}
-				}
-			}
-			TypeKind::Union(u) => {
-				for (_, _, t) in u.matches.iter_mut() {
-					t.resolve_paths_to_ids(paths)?;
-				}
-				if let Some((_, def)) = &mut u.default {
-					def.resolve_paths_to_ids(paths)?;
 				}
 			}
 			TypeKind::Native(NativeType {

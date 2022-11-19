@@ -42,7 +42,9 @@ use std::cell::Cell;
 
 use crate::{
 	ast::{BaseFieldRef, FieldRef, FieldRefSegment, Ident},
-	hir::{IdGenerator, Namespace, NamespaceItem, NativeType, ReferenceKind, Type, TypeKind},
+	hir::{
+		IdGenerator, Namespace, NamespaceItem, NativeType, Reference, ReferenceKind, Type, TypeKind,
+	},
 };
 
 impl Namespace {
@@ -109,11 +111,11 @@ impl TypeReceiver {
 				kind: vty,
 			},
 		));
-		*ty = TypeKind::Reference {
+		*ty = TypeKind::Reference(Reference {
 			ty: ReferenceKind::Resolved(id),
 			args: collector.args,
 			types: Vec::new(),
-		}
+		})
 	}
 }
 
@@ -161,23 +163,13 @@ impl TypeKind {
 					}
 				}
 			}
-			TypeKind::Reference { ty: _, args, types } => {
+			TypeKind::Reference(Reference { ty: _, args, types }) => {
 				for arg in args.iter_mut() {
 					collector.collect(&mut arg.1);
 				}
 				for (_name, ty) in types.iter_mut() {
 					ty.assert_reference();
 					ty.rewrite_references(collector);
-				}
-			}
-			TypeKind::Union(u) => {
-				for (_, _, c) in &mut u.matches {
-					c.assert_reference();
-					c.rewrite_references(collector);
-				}
-				if let Some((_, def)) = &mut u.default {
-					def.assert_reference();
-					def.rewrite_references(collector);
 				}
 			}
 			TypeKind::Native(_) => unreachable!(),
@@ -199,18 +191,11 @@ impl TypeKind {
 					receiver.pop();
 				}
 			}
-			TypeKind::Union(r) => {
-				for (_, i, t) in &mut r.matches {
-					receiver.push(i.clone());
-					receiver.extract(t);
-					receiver.pop()
-				}
-			}
-			TypeKind::Reference {
+			TypeKind::Reference(Reference {
 				ty: _,
 				args: _,
 				types,
-			} => {
+			}) => {
 				for (i, ty) in types {
 					receiver.push(i.clone());
 					receiver.extract(ty);

@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 
 use crate::{
 	ast::{Block, FieldRef, Ident, Item, ParseValue, Statement, Value},
-	hir::{Container, ContainerFieldType, NamespaceItem, NativeType, ReferenceKind, Union},
+	hir::{Container, ContainerFieldType, NamespaceItem, NativeType, Reference, ReferenceKind},
 };
 
-use super::{IdGenerator, Namespace, Type, TypeKind, UnionTag};
+use super::{IdGenerator, Namespace, Type, TypeKind};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 
 pub fn parse_ast(ast: Block) -> Result<Namespace> {
@@ -121,95 +121,6 @@ impl Container {
 	}
 }
 
-impl Union {
-	fn from_ast_with_tag(tag: UnionTag, value: Item) -> Result<Self> {
-		let mut matches = Vec::new();
-		let mut default = None;
-
-		for stmt in value.block.statements {
-			let (_attrs, item, mut items) = stmt.pop_item()?;
-			match item.name.expect_simple_name()?.as_str() {
-				"variant" => {
-					let name: Ident = item.args.arg(0, "variant name")?;
-					let value = item.args.named("match")?;
-					if items.is_empty() {
-						matches.push((value, name.clone(), TypeKind::Void));
-					// bail!("union field has no type");
-					} else {
-						let type_item = items
-							.remove(0)
-							.into_item()
-							.ok_or_else(|| anyhow!("field item should be item"))?;
-						matches.push((
-							value,
-							name.clone(),
-							TypeKind::from_ast(type_item, items)
-								.with_context(|| format!("union {:?} field", name))?,
-						));
-					}
-				}
-				"default" => {
-					let name: Ident = item.args.arg(0, "default name")?;
-					let type_item = items
-						.remove(0)
-						.into_item()
-						.ok_or_else(|| anyhow!("field item should be item"))?;
-					ensure!(
-						default
-							.replace((
-								name.clone(),
-								Box::new(TypeKind::from_ast(type_item, items).with_context(
-									|| format!("default ({:?}) union field", name)
-								)?)
-							))
-							.is_none(),
-						"default is already set"
-					)
-				}
-				v => bail!("unknown union field type: {}", v),
-			};
-		}
-
-		Ok(Union {
-			tag,
-			matches,
-			default,
-		})
-	}
-	fn from_ast(value: Item) -> Result<TypeKind> {
-		if let Some(t) = value.args.named("tagType")? {
-			return Ok(TypeKind::Container(Container {
-				virt: true,
-				fields: vec![
-					(
-						"_tag".into(),
-						ContainerFieldType::Virtual(
-							FieldRef::parse("./union/@tag").unwrap(),
-							TypeKind::from_ast(t, vec![])?,
-						),
-					),
-					(
-						"union".into(),
-						ContainerFieldType::Normal(
-							Self::from_ast_with_tag(
-								UnionTag::LoadFrom(FieldRef::parse("./_tag").unwrap()),
-								value,
-							)
-							.map(TypeKind::Union)?,
-						),
-					),
-				],
-				delegate_all: Some("union".into()),
-			}));
-		};
-		let tag = match value.args.named("tag")? {
-			Some(r) => UnionTag::LoadFrom(r),
-			None => bail!("neither tag nor tagType is specified"),
-		};
-		Self::from_ast_with_tag(tag, value).map(TypeKind::Union)
-	}
-}
-
 impl TypeKind {
 	fn from_ast(value: Item, mut items: Vec<Value>) -> Result<Self> {
 		if let Some(simple) = value.name.simple_name() {
@@ -217,10 +128,6 @@ impl TypeKind {
 				"container" => {
 					ensure!(items.is_empty(), "container has no items");
 					TypeKind::Container(Container::from_ast(value).context("parsing container")?)
-				}
-				"union" => {
-					ensure!(items.is_empty(), "union has no items");
-					Union::from_ast(value).context("parsing union")?
 				}
 				_ => {
 					// ensure!(items.is_empty(), "unexpected values");
@@ -249,20 +156,20 @@ impl TypeKind {
 						types.push((Ident::new("Value"), kind));
 					}
 
-					return Ok(TypeKind::Reference {
+					return Ok(TypeKind::Reference(Reference {
 						ty: ReferenceKind::Path(value.name),
 						args,
 						types,
-					});
+					}));
 				}
 			};
 			Ok(kind)
 		} else {
-			Ok(TypeKind::Reference {
+			Ok(TypeKind::Reference(Reference {
 				ty: ReferenceKind::Path(value.name),
 				args: vec![],
 				types: vec![],
-			})
+			}))
 		}
 	}
 }
@@ -369,11 +276,11 @@ impl Namespace {
 									.map(|(n, _)| {
 										(
 											n.clone(),
-											TypeKind::Reference {
+											TypeKind::Reference(Reference {
 												ty: ReferenceKind::Generic(n.clone()),
 												args: vec![],
 												types: vec![],
-											},
+											}),
 										)
 									})
 									.collect(),

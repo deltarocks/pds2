@@ -5,7 +5,7 @@ use crate::{
 	hir::ContainerFieldType,
 };
 
-use super::{Namespace, ReferenceKind, Type, TypeKind};
+use super::{Namespace, Reference, ReferenceKind, Type, TypeKind};
 
 impl TypeKind {
 	fn to_ast(self) -> Vec<ast::Value> {
@@ -66,56 +66,15 @@ impl TypeKind {
 					}
 				})
 				.build_values(),
-			super::TypeKind::Union(r) => Item::simple_builder("union")
-				.argsb(match r.tag {
-					crate::hir::UnionTag::LoadFrom(r) => ItemArgs::builder().named("tag", r.into()),
-					crate::hir::UnionTag::Type(t) => {
-						let chain = t.to_ast();
-						assert_eq!(chain.len(), 1);
-						ItemArgs::builder().named("tagType", chain.into_iter().next().unwrap())
-					}
-				})
-				.block({
-					let mut out = Vec::new();
-
-					for (v, k, t) in r.matches {
-						out.push(ast::Statement {
-							attributes: Default::default(),
-							items: Item::simple_builder("variant")
-								.argsb(
-									ItemArgs::builder()
-										.arg(Item::new_simple(k).into())
-										.named("match", v),
-								)
-								.then(t.to_ast()),
-						})
-					}
-
-					if let Some((k, t)) = r.default {
-						out.push(ast::Statement {
-							attributes: Default::default(),
-							items: Item::simple_builder("default")
-								.argsb(ItemArgs::builder().arg(Item::new_simple(k).into()))
-								.then(t.to_ast()),
-						})
-					}
-
-					ast::Block {
-						attributes: Default::default(),
-						statements: out,
-						root: false,
-					}
-				})
-				.build_values(),
-			super::TypeKind::Reference {
+			super::TypeKind::Reference(Reference {
 				ty: ReferenceKind::Path(r),
 				..
-			} => Item::path_builder(r).build_values(),
-			super::TypeKind::Reference {
+			}) => Item::path_builder(r).build_values(),
+			super::TypeKind::Reference(Reference {
 				ty: ReferenceKind::Resolved(r),
 				args,
 				types,
-			} => {
+			}) => {
 				vec![Value::Internal(format!(
 					"type reference {:?} (args: {:?}, types: {:?})",
 					r, args, types

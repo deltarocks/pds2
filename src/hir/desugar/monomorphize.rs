@@ -8,7 +8,7 @@ use crate::{
 	ast::Ident,
 	hir::{
 		id_generator::PendingTypeId, ContainerFieldType, IdGenerator, Namespace, NamespaceItem,
-		ReferenceKind, Type, TypeId, TypeKind, UnionTag,
+		Reference, ReferenceKind, Type, TypeId, TypeKind,
 	},
 	should_be_desugared,
 };
@@ -77,16 +77,7 @@ impl TypeKind {
 					collector.pop();
 				}
 			}
-			TypeKind::Union(u) => {
-				match u.tag {
-					UnionTag::LoadFrom(_) => {}
-					UnionTag::Type(_) => should_be_desugared!(u.tag),
-				}
-				for (_value, _ident, ty) in u.matches.iter_mut() {
-					ty.monomorphize(collector, forty)?;
-				}
-			}
-			TypeKind::Reference { ty, args: _, types } => {
+			TypeKind::Reference(Reference { ty, args: _, types }) => {
 				if ty.is_generic() {
 					let generic = ty.generic().unwrap();
 					let r = &forty
@@ -98,11 +89,11 @@ impl TypeKind {
 						.1;
 					r.assert_reference();
 					assert!(types.is_empty(), "no HKT for now");
-					let TypeKind::Reference {
+					let TypeKind::Reference(Reference {
 						ty: nty,
 						args,
 						types,
-					} = r else {
+					}) = r else {
 						unreachable!()
 					};
 					assert!(args.is_empty() && types.is_empty());
