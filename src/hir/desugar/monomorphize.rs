@@ -10,7 +10,6 @@ use crate::{
 		id_generator::PendingTypeId, ContainerFieldType, IdGenerator, Namespace, NamespaceItem,
 		Reference, ReferenceKind, Type, TypeId, TypeKind,
 	},
-	should_be_desugared,
 };
 
 #[derive(Debug)]
@@ -188,19 +187,6 @@ impl Namespace {
 		}
 		Ok(())
 	}
-	fn remove_generic(&mut self) {
-		let removed = self
-			.items
-			.drain_filter(|_, i| match i {
-				NamespaceItem::Inner(ns) => {
-					ns.remove_generic();
-					false
-				}
-				NamespaceItem::Type(t) => !t.types.is_empty(),
-			})
-			.count();
-		println!("removed {removed} generic types")
-	}
 }
 
 pub fn monomorphize(id: IdGenerator, ir: &mut Namespace) -> Result<()> {
@@ -237,7 +223,7 @@ pub fn monomorphize(id: IdGenerator, ir: &mut Namespace) -> Result<()> {
 		ir.items
 			.insert((&name as &str).into(), NamespaceItem::Type(ty));
 	}
-	ir.remove_generic();
+	ir.retain_types(|t| t.types.is_empty());
 	Ok(())
 	// dbg!(collector.extracted);
 }

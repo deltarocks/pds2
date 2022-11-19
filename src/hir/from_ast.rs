@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-	ast::{Block, FieldRef, Ident, Item, ParseValue, Statement, Value},
+	ast::{Block, Ident, Item, ParseValue, Statement, Value},
 	hir::{Container, ContainerFieldType, NamespaceItem, NativeType, Reference, ReferenceKind},
 };
 
