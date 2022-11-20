@@ -11,14 +11,14 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 pub fn parse_ast(ast: Block) -> Result<Namespace> {
 	let mut ns = Namespace::from_ast(ast).context("parsing AST to IR")?;
 	let id = IdGenerator::new();
-	super::desugar::give_all_types_ids(id.clone(), &mut ns);
+	super::desugar::give_all_types_ids(id.clone(), &mut ns)?;
 
 	super::desugar::rewrite_paths_to_absolute(&mut ns);
 	super::desugar::resolve_paths_to_ids(&mut ns).context("resolving paths")?;
 
 	super::desugar::monomorphize(id.clone(), &mut ns)?;
 
-	super::desugar::extract_nested_types(id, &mut ns);
+	super::desugar::extract_nested_types(id, &mut ns)?;
 	super::desugar::replace_aliases(&mut ns)?;
 	Ok(ns)
 }
@@ -26,7 +26,7 @@ pub fn parse_ast(ast: Block) -> Result<Namespace> {
 impl Type {
 	pub fn from_ast(value: Item, items: Vec<Value>, block: Block) -> Result<Type> {
 		let mut params = Vec::new();
-		let mut types = Vec::new();
+		let mut types = BTreeMap::new();
 		for stmt in block.statements {
 			let (_attrs, item, mut items) = stmt.pop_item()?;
 			ensure!(items.is_empty(), "expected only one item");
@@ -50,7 +50,10 @@ impl Type {
 						Some(TypeKind::from_ast(type_item, items)?)
 					};
 
-					types.push((name, default))
+					ensure!(
+						types.insert(name.clone(), default).is_none(),
+						"generic set twice: {name:?}"
+					);
 				}
 				v => bail!("unknown def block statement type: {}", v),
 			};
@@ -134,13 +137,15 @@ impl TypeKind {
 					ensure!(value.block.is_empty(), "unexpected block");
 
 					let mut args = Vec::new();
-					let mut types = Vec::new();
+					let mut types = BTreeMap::new();
 					// We don't have reference resolved at this phase, so verify_unused check will only reject unused unnamed arguments
 					for name in value.args.named_names() {
 						if name.is_type_arg() {
 							let ty: Item = value.args.named(name.clone())?;
 							let kind = TypeKind::from_ast(ty, vec![])?;
-							types.push((name.clone(), kind));
+							if types.insert(name.clone(), kind).is_some() {
+								bail!("generic set twice: {name:?}")
+							}
 						} else {
 							args.push((name.clone(), value.args.named(name.clone())?));
 						}
@@ -153,7 +158,9 @@ impl TypeKind {
 							.into_item()
 							.ok_or_else(|| anyhow!("plain type value should be item"))?;
 						let kind = TypeKind::from_ast(item, items)?;
-						types.push((Ident::new("Value"), kind));
+						if types.insert(Ident::new("Value"), kind).is_some() {
+							bail!("generic set twice: Value");
+						}
 					}
 
 					return Ok(TypeKind::Reference(Reference {
@@ -168,7 +175,7 @@ impl TypeKind {
 			Ok(TypeKind::Reference(Reference {
 				ty: ReferenceKind::Path(value.name),
 				args: vec![],
-				types: vec![],
+				types: BTreeMap::new(),
 			}))
 		}
 	}
@@ -248,13 +255,16 @@ impl Namespace {
 
 					let mut params = Vec::new();
 					let mut virtual_fields = Vec::new();
-					let mut types = Vec::new();
+					let mut types = BTreeMap::new();
 					for statement in item.block.statements {
 						let stmt = NativeStmt::from_ast(statement)?;
 						match stmt {
 							NativeStmt::Param(name) => params.push(name),
 							NativeStmt::VirtualField(name, ty) => virtual_fields.push((name, ty)),
-							NativeStmt::Type(ty, default) => types.push((ty, default)),
+							NativeStmt::Type(ty, default) => ensure!(
+								types.insert(ty.clone(), default).is_none(),
+								"generic set twice: {ty:?}"
+							),
 						}
 					}
 
@@ -273,13 +283,15 @@ impl Namespace {
 								virtual_fields,
 								specialization: types
 									.iter()
-									.map(|(n, _)| {
+									.map(|(n, t)| {
 										(
 											n.clone(),
-											TypeKind::Reference(Reference {
-												ty: ReferenceKind::Generic(n.clone()),
-												args: vec![],
-												types: vec![],
+											t.clone().unwrap_or_else(|| {
+												TypeKind::Reference(Reference {
+													ty: ReferenceKind::Generic(n.clone()),
+													args: vec![],
+													types: BTreeMap::new(),
+												})
 											}),
 										)
 									})

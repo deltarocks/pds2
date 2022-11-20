@@ -15,7 +15,9 @@
 use std::collections::BTreeMap;
 
 use crate::ast::{BaseFieldRef, FieldRefSegment, Ident};
-use crate::hir::{Namespace, Reference, Traverse, TraverseSkip, TypeId, TypeKind, Visitor};
+use crate::hir::{
+	Namespace, Reference, ReferenceKind, Traverse, TraverseSkip, Type, TypeId, TypeKind, Visitor,
+};
 use anyhow::Result;
 
 #[derive(Debug)]
@@ -38,9 +40,9 @@ impl<'t> CollectAliasList<'t> {
 	}
 }
 impl Visitor for CollectAliasList<'_> {
-	fn visit_type(&mut self, typ: &mut crate::hir::Type) -> Result<()> {
+	fn visit_type(&mut self, typ: &mut Type) -> Result<()> {
 		if let TypeKind::Reference(Reference { ty, args, types }) = &mut typ.kind {
-			assert!(types.is_empty());
+			assert!(types.is_empty(), "{:?}", typ);
 			assert!(ty.is_resolved());
 			let resolved = ty.resolved().unwrap();
 			let remap_arguments = args
@@ -92,7 +94,7 @@ impl Visitor for ReplaceAliasedReferences<'_> {
 		let resolved = value.ty.resolved().unwrap();
 		if let Some(alias) = self.aliases.get(&resolved) {
 			*value = Reference {
-				ty: crate::hir::ReferenceKind::Resolved(alias.target),
+				ty: ReferenceKind::Resolved(alias.target),
 				args: value
 					.args
 					.iter()
@@ -106,7 +108,7 @@ impl Visitor for ReplaceAliasedReferences<'_> {
 						(name.clone(), value)
 					})
 					.collect(),
-				types: Vec::new(),
+				types: BTreeMap::new(),
 			};
 			self.replaced = true;
 		}

@@ -1,7 +1,4 @@
-use crate::ast::{
-	self, builder::ItemArgsBuilder, BaseFieldRef, Block, FieldRefSegment, Ident, Item, ItemArgs,
-	Statement,
-};
+use crate::ast::{self, BaseFieldRef, Block, FieldRefSegment, Ident, Item, ItemArgs, Statement};
 use anyhow::{anyhow, bail, ensure, Result};
 use inflector::Inflector;
 use serde_json::Value;

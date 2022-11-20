@@ -1,7 +1,7 @@
 use crate::ast::{FieldRef, Ident, Path};
 use std::{cell::Cell, collections::BTreeMap};
 mod from_ast;
-use anyhow::Result;
+use anyhow::{Context, Result};
 pub use from_ast::parse_ast;
 mod desugar;
 pub use to_ast::to_ast;
@@ -43,17 +43,58 @@ impl Namespace {
 			NamespaceItem::Type(t) => cond(t),
 		});
 	}
+	fn add_types(&mut self, types: impl IntoIterator<Item = (Ident, Type)>) {
+		let mut i = 0;
+		for (n, t) in types {
+			let name = n.as_str().to_owned();
+			let mut derived_name;
+			loop {
+				derived_name = Ident::new(&format!("{name}_{i}"));
+				if self.items.contains_key(&derived_name) {
+					i += 1;
+				} else {
+					break;
+				}
+			}
+			self.items.insert(derived_name, NamespaceItem::Type(t));
+		}
+	}
+	pub fn derive_types<F: FnMut(&mut Type) -> Result<Vec<Type>>>(
+		&mut self,
+		mut generator: F,
+	) -> Result<()> {
+		let mut new_types = Vec::new();
+		for (n, i) in self.items.iter_mut() {
+			match i {
+				NamespaceItem::Inner(i) => {
+					i.derive_types(
+						&mut generator as &mut dyn FnMut(&mut Type) -> Result<Vec<Type>>,
+					)?;
+				}
+				NamespaceItem::Type(t) => {
+					let new = generator(t)?;
+					new_types.extend(new.into_iter().map(|t| (n.clone(), t)))
+				}
+			}
+		}
+		self.add_types(new_types.into_iter());
+		Ok(())
+	}
 }
 impl Traverse for Namespace {
 	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
-		for (_, v) in self.items.iter_mut() {
-			v.traverse(visitor, skip)?;
+		for (n, v) in self.items.iter_mut() {
+			let res = v.traverse(visitor, skip);
+			match v {
+				NamespaceItem::Inner(_) => res.with_context(|| format!("namespace({n:?})"))?,
+				NamespaceItem::Type(_) => res.with_context(|| format!("def({n:?})"))?,
+			}
 		}
 		Ok(())
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ContainerFieldType {
 	Normal(TypeKind),
 	Virtual(FieldRef, TypeKind),
@@ -73,7 +114,7 @@ impl Traverse for ContainerFieldType {
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Container {
 	pub virt: bool,
 	pub fields: Vec<(Ident, ContainerFieldType)>,
@@ -81,14 +122,21 @@ pub struct Container {
 }
 impl Traverse for Container {
 	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
-		for (_, f) in self.fields.iter_mut() {
-			f.traverse(visitor, skip)?;
+		for (n, f) in self.fields.iter_mut() {
+			let res = f.traverse(visitor, skip);
+			match f {
+				ContainerFieldType::Normal(_) => res.with_context(|| format!("field({n:?})"))?,
+				ContainerFieldType::Virtual(_, _) => {
+					res.with_context(|| format!("virtual_field({n:?})"))?
+				}
+				ContainerFieldType::Delegate(_) => todo!(),
+			}
 		}
 		Ok(())
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NativeType {
 	pub virtual_fields: Vec<(Ident, TypeKind)>,
 	pub specializer: Option<Ident>,
@@ -96,17 +144,19 @@ pub struct NativeType {
 }
 impl Traverse for NativeType {
 	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
-		for (_, t) in self.virtual_fields.iter_mut() {
-			t.traverse(visitor, skip)?;
+		for (n, t) in self.virtual_fields.iter_mut() {
+			t.traverse(visitor, skip)
+				.with_context(|| format!("virtual_field({n:?})"))?;
 		}
-		for (_, t) in self.specialization.iter_mut() {
-			t.traverse(visitor, skip)?;
+		for (n, t) in self.specialization.iter_mut() {
+			t.traverse(visitor, skip)
+				.with_context(|| format!("type({n:?})"))?;
 		}
 		Ok(())
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReferenceKind {
 	Resolved(TypeId),
 	Path(Path),
@@ -154,26 +204,34 @@ impl ReferenceKind {
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Reference {
 	pub ty: ReferenceKind,
 	pub args: Vec<(Ident, FieldRef)>,
-	pub types: Vec<(Ident, TypeKind)>,
+	pub types: BTreeMap<Ident, TypeKind>,
 }
 impl Traverse for Reference {
 	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
-		visitor.visit_reference(self)?;
+		if !skip.contains(TraverseSkip::DFS) {
+			visitor.visit_reference(self).context("<ref>")?;
+		}
+
 		for (_, f) in self.args.iter_mut() {
 			visitor.visit_field_ref(f)?;
 		}
-		for (_, v) in self.types.iter_mut() {
-			v.traverse(visitor, skip)?
+		for (t, v) in self.types.iter_mut() {
+			v.traverse(visitor, skip)
+				.with_context(|| format!("<ref> {{{t:?}: <here>}}"))?
+		}
+
+		if skip.contains(TraverseSkip::DFS) {
+			visitor.visit_reference(self).context("<ref>")?;
 		}
 		Ok(())
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
 pub enum TypeKind {
 	Void,
 	Container(Container),
@@ -189,16 +247,23 @@ impl TypeKind {
 	}
 }
 impl Traverse for TypeKind {
-	fn traverse(&mut self, visitor: &mut impl Visitor, mut skip: TraverseSkip) -> Result<()> {
-		if !skip.contains(TraverseSkip::TOPLEVEL_TYPEKIND) {
+	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+		if !skip.contains(TraverseSkip::DFS) && !skip.contains(TraverseSkip::TOPLEVEL_TYPEKIND) {
 			visitor.visit_type_kind(self)?;
 		}
-		skip -= TraverseSkip::TOPLEVEL_TYPEKIND;
-		match self {
-			TypeKind::Void => {}
-			TypeKind::Container(c) => c.traverse(visitor, skip)?,
-			TypeKind::Reference(r) => r.traverse(visitor, skip)?,
-			TypeKind::Native(n) => n.traverse(visitor, skip)?,
+
+		{
+			let skip = skip - TraverseSkip::TOPLEVEL_TYPEKIND;
+			match self {
+				TypeKind::Void => {}
+				TypeKind::Container(c) => c.traverse(visitor, skip)?,
+				TypeKind::Reference(r) => r.traverse(visitor, skip)?,
+				TypeKind::Native(n) => n.traverse(visitor, skip)?,
+			}
+		}
+
+		if skip.contains(TraverseSkip::DFS) && !skip.contains(TraverseSkip::TOPLEVEL_TYPEKIND) {
+			visitor.visit_type_kind(self)?;
 		}
 		Ok(())
 	}
@@ -207,18 +272,30 @@ impl Traverse for TypeKind {
 pub struct Type {
 	_id: Cell<TypeId>,
 	pub params: Vec<Ident>,
-	pub types: Vec<(Ident, Option<TypeKind>)>,
+	pub types: BTreeMap<Ident, Option<TypeKind>>,
 	pub kind: TypeKind,
 }
 impl Traverse for Type {
 	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
-		visitor.visit_type(self)?;
+		if !self.types.is_empty() && skip.contains(TraverseSkip::SKIP_GENERIC_TYPES) {
+			return Ok(());
+		}
+
+		if !skip.contains(TraverseSkip::DFS) {
+			visitor.visit_type(self)?;
+		}
+
 		for (_, t) in self.types.iter_mut() {
 			if let Some(t) = t {
 				visitor.visit_type_kind(t)?;
 			}
 		}
-		self.kind.traverse(visitor, skip)
+		self.kind.traverse(visitor, skip)?;
+
+		if skip.contains(TraverseSkip::DFS) {
+			visitor.visit_type(self)?;
+		}
+		Ok(())
 	}
 }
 
@@ -233,11 +310,16 @@ impl std::fmt::Debug for Type {
 	}
 }
 impl Type {
-	pub fn new(id: PendingTypeId, params: Vec<Ident>, kind: TypeKind) -> Self {
+	pub fn new(
+		id: PendingTypeId,
+		params: Vec<Ident>,
+		kind: TypeKind,
+		types: BTreeMap<Ident, Option<TypeKind>>,
+	) -> Self {
 		Self {
 			_id: Cell::new(id.into_inner()),
 			params,
-			types: Vec::new(),
+			types,
 			kind,
 		}
 	}
@@ -257,6 +339,9 @@ impl Type {
 }
 
 trait Visitor {
+	fn enter_ns(&mut self, _ns: Ident) {}
+	fn leave_ns(&mut self) {}
+
 	fn visit_field_ref(&mut self, _field: &mut FieldRef) -> Result<()> {
 		Ok(())
 	}
@@ -273,7 +358,9 @@ trait Visitor {
 bitflags::bitflags! {
 	#[repr(transparent)]
 	pub struct TraverseSkip: u32 {
-		const TOPLEVEL_TYPEKIND = 0b00000001;
+		const TOPLEVEL_TYPEKIND = 1;
+		const DFS = 2;
+		const SKIP_GENERIC_TYPES = 4;
 	}
 }
 trait Traverse {

@@ -4,21 +4,18 @@
 //!
 //! After this pass all type ids can be safely unwrapped
 
-use crate::hir::{IdGenerator, Namespace};
+use anyhow::Result;
 
-impl Namespace {
-	fn give_all_types_ids(&mut self, id: IdGenerator) {
-		for (_, item) in self.items.iter_mut() {
-			match item {
-				crate::hir::NamespaceItem::Inner(t) => t.give_all_types_ids(id.clone()),
-				crate::hir::NamespaceItem::Type(t) => {
-					t.assign_id(&id);
-				}
-			}
-		}
+use crate::hir::{IdGenerator, Namespace, Traverse, TraverseSkip, Type, Visitor};
+
+struct AssignIds(IdGenerator);
+impl Visitor for AssignIds {
+	fn visit_type(&mut self, ty: &mut Type) -> Result<()> {
+		ty.assign_id(&self.0);
+		Ok(())
 	}
 }
 
-pub fn give_all_types_ids(id: IdGenerator, ns: &mut Namespace) {
-	ns.give_all_types_ids(id);
+pub fn give_all_types_ids(id: IdGenerator, ns: &mut Namespace) -> Result<()> {
+	ns.traverse(&mut AssignIds(id), TraverseSkip::empty())
 }

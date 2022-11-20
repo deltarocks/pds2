@@ -36,9 +36,9 @@ impl IdGenerator {
 		self.id.set(next + 1);
 		TypeId(next)
 	}
-	pub fn next_pending(&self) -> (TypeId, PendingTypeId) {
+	pub fn next_pending(&self) -> PendingTypeId {
 		let id = self.next();
-		(id, PendingTypeId(id))
+		PendingTypeId(id)
 	}
 }
 
@@ -70,6 +70,9 @@ struct JrTypeId {
 #[derive(Debug)]
 pub struct PendingTypeId(TypeId);
 impl PendingTypeId {
+	pub fn id(&self) -> TypeId {
+		self.0
+	}
 	pub fn into_inner(self) -> TypeId {
 		self.0
 	}

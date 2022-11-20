@@ -49,7 +49,7 @@ impl From<&str> for Ident {
 	}
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Path {
 	pub absolute: bool,
 	pub path: Vec<Ident>,
@@ -147,7 +147,7 @@ impl Statement {
 	}
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FieldRefSegment {
 	Down { to: Ident, ignore_delegation: bool },
 	Virtual(Ident),
@@ -172,7 +172,7 @@ impl Debug for FieldRefSegment {
 	}
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BaseFieldRef(pub Vec<FieldRefSegment>);
 impl BaseFieldRef {
 	pub fn name(&self) -> String {
@@ -203,7 +203,7 @@ impl Debug for BaseFieldRef {
 	}
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FieldRef {
 	pub up: usize,
 	pub path: BaseFieldRef,

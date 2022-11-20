@@ -215,7 +215,18 @@ macro_rules! pi {
     }};
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
+	if let Err(err) = try_main() {
+		let mut chain = err.chain().rev();
+		eprintln!("ERROR {}", chain.next().unwrap());
+		for ele in chain {
+			eprintln!("   at {ele}");
+		}
+		std::process::exit(1);
+	}
+}
+
+fn try_main() -> anyhow::Result<()> {
 	let opts = Opts::parse();
 	match opts {
 		Opts::Compile {
@@ -281,8 +292,8 @@ fn main() -> anyhow::Result<()> {
 				if let Some(file) = file {
 					std::fs::write(file, out)?;
 				} else {
-                    println!("{out}");
-                }
+					println!("{out}");
+				}
 			}
 		}
 		Opts::Format { from } => {

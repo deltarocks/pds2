@@ -1,229 +1,231 @@
 //! Generate static version of every generic struct usage
 
-use std::{collections::HashSet, mem};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 
 use crate::{
 	ast::Ident,
 	hir::{
-		id_generator::PendingTypeId, ContainerFieldType, IdGenerator, Namespace, NamespaceItem,
-		Reference, ReferenceKind, Type, TypeId, TypeKind,
+		id_generator::PendingTypeId, IdGenerator, Namespace, Reference, ReferenceKind, Traverse,
+		TraverseSkip, Type, TypeId, TypeKind, Visitor,
 	},
 };
 
-#[derive(Debug)]
-struct Monomorphization {
-	/// Id if the monomorpized type to be created
-	mono_type: PendingTypeId,
-	/// Type, to which mono_type should point
-	target: TypeId,
-	types: Vec<(Ident, TypeKind)>,
-	implemented: bool,
+struct HasGenericReferences<'t>(&'t mut bool);
+impl Visitor for HasGenericReferences<'_> {
+	fn visit_reference(&mut self, value: &mut Reference) -> Result<()> {
+		*self.0 |= value.ty.is_generic(); // || !value.types.is_empty();
+		Ok(())
+	}
 }
 
-struct MonoCollector {
+type Monomorphizations = BTreeMap<(TypeId, BTreeMap<Ident, Reference>), PendingTypeId>;
+
+struct FindGenericTypeReferences<'t> {
 	id: IdGenerator,
-	generic: HashSet<TypeId>,
-	path: Vec<Ident>,
-	extracted: Vec<Monomorphization>,
-	added: Vec<(Vec<Ident>, Type)>,
+	generic_types: &'t HashSet<TypeId>,
+	monos: &'t mut Monomorphizations,
+	found: &'t mut bool,
 }
-impl MonoCollector {
-	fn push(&mut self, ident: impl Into<Ident>) {
-		self.path.push(ident.into());
-	}
-	fn pop(&mut self) {
-		self.path.pop().expect("stack underflow");
-	}
-	fn collect(&mut self, ty: TypeId, types: Vec<(Ident, TypeKind)>) -> TypeId {
-		let (id, pending_id) = self.id.next_pending();
+impl Visitor for FindGenericTypeReferences<'_> {
+	fn visit_reference(&mut self, value: &mut Reference) -> Result<()> {
+		let Some(ty) = value.ty.resolved() else {
+			unreachable!()
+		};
+		if !self.generic_types.contains(&ty) {
+			ensure!(value.types.is_empty(), "type is not generic");
+			return Ok(());
+		}
 
-		self.extracted.push(Monomorphization {
-			mono_type: pending_id,
-			target: ty,
-			types,
-			implemented: false,
-		});
-		id
-	}
-	fn is_generic(&self, ty: TypeId) -> bool {
-		self.generic.contains(&ty)
-	}
-	fn add(&mut self, ty: Type) {
-		self.added.push((self.path.clone(), ty));
-	}
-}
+		let mut not_resolved_yet = false;
+		value.traverse(
+			&mut HasGenericReferences(&mut not_resolved_yet),
+			TraverseSkip::empty(),
+		)?;
+		if not_resolved_yet {
+			return Ok(());
+		}
 
-impl TypeKind {
-	fn monomorphize(
-		&mut self,
-		collector: &mut MonoCollector,
-		forty: &Vec<(Ident, TypeKind)>,
-	) -> Result<()> {
-		match self {
-			TypeKind::Void => {}
-			TypeKind::Container(container) => {
-				for (name, field) in container.fields.iter_mut() {
-					collector.push(name.clone());
-					match field {
-						ContainerFieldType::Normal(n) => n.monomorphize(collector, forty)?,
-						ContainerFieldType::Virtual(_, t) => {
-							t.monomorphize(collector, forty)?;
-						}
-						ContainerFieldType::Delegate(_) => {}
-					}
-					collector.pop();
-				}
+		let usage: BTreeMap<Ident, Reference> = value
+			.types
+			.iter()
+			.map(|(n, t)| {
+				let TypeKind::Reference(re) = &t else {
+					unreachable!();
+				};
+
+				(n.clone(), re.clone())
+			})
+			.collect();
+		for (_, r) in usage.iter() {
+			ensure!(r.args.is_empty(), "no args for generic");
+		}
+
+		if let Some(monoed) = self.monos.get(&(ty, usage.clone())) {
+			if value.ty != ReferenceKind::Resolved(monoed.id()) {
+				dbg!(&value.ty);
+				*self.found = true;
 			}
-			TypeKind::Reference(Reference { ty, args: _, types }) => {
-				if ty.is_generic() {
-					let generic = ty.generic().unwrap();
-					let r = &forty
-						.iter()
-						.find(|(n, _)| n == &generic)
-						.ok_or_else(|| {
-							anyhow!("generic not found: {generic:?}, in scope: {forty:?}")
-						})?
-						.1;
-					r.assert_reference();
-					assert!(types.is_empty(), "no HKT for now");
-					let TypeKind::Reference(Reference {
-						ty: nty,
-						args,
-						types,
-					}) = r else {
+			value.ty = ReferenceKind::Resolved(monoed.id());
+			value.types = BTreeMap::new();
+		} else if !usage.is_empty() {
+			let pending = self.id.next_pending();
+			value.ty = ReferenceKind::Resolved(pending.id());
+			value.types = BTreeMap::new();
+			self.monos.insert((ty, usage), pending);
+			*self.found = true;
+		}
+		Ok(())
+	}
+}
+
+struct ReplaceGenericReferencesWithSpecified<'t> {
+	types: &'t BTreeMap<Ident, Reference>,
+	still_unset: &'t BTreeMap<Ident, Option<TypeKind>>,
+}
+impl Visitor for ReplaceGenericReferencesWithSpecified<'_> {
+	fn visit_reference(&mut self, re: &mut Reference) -> Result<()> {
+		let ReferenceKind::Generic(gen) = &re.ty else {
+			return Ok(())
+		};
+		if self.still_unset.contains_key(gen) {
+			return Ok(());
+		}
+		let mut resolved = self
+			.types
+			.get(gen)
+			.ok_or_else(|| {
+				anyhow!(
+					"unknown generic argument: {gen:?} in {:?}, existing: {:?}",
+					re,
+					self.types
+				)
+			})?
+			.clone();
+		assert!(resolved.args.is_empty());
+
+		resolved.args = re.args.clone();
+		resolved.types = re.types.clone();
+
+		*re = resolved;
+		Ok(())
+	}
+}
+
+struct ImplementMonomorphized<'t> {
+	generic_types: &'t mut HashSet<TypeId>,
+	monos: &'t mut Monomorphizations,
+	created: &'t mut Vec<Type>,
+	created_new: &'t mut bool,
+}
+impl Visitor for ImplementMonomorphized<'_> {
+	fn visit_type(&mut self, ty: &mut Type) -> Result<()> {
+		for ((_, otypes), pending) in self.monos.drain_filter(|(m, _), _| &ty.id() == m) {
+			let mut kind = ty.kind.clone();
+			let mut types = BTreeMap::new();
+			let mut still_unset = BTreeMap::new();
+			for (n, default) in &ty.types {
+				if let Some(default) = default {
+					let TypeKind::Reference(default) = default else {
 						unreachable!()
 					};
-					assert!(args.is_empty() && types.is_empty());
-					*ty = nty.clone();
-				}
-
-				if collector.is_generic(ty.resolved().unwrap()) {
-					let types = mem::take(types);
-					let monoty = collector
-						.collect(ty.clone().resolved().expect("paths are resolved"), types);
-					*ty = ReferenceKind::Resolved(monoty);
+					types.insert(n.clone(), default.clone());
+				} else if let Some(provided) = otypes.get(n) {
+					types.insert(n.clone(), provided.clone());
 				} else {
-					assert!(types.is_empty());
+					still_unset.insert(n.clone(), None);
 				}
 			}
-			TypeKind::Native(value) => {
-				let crate::hir::NativeType {
-					virtual_fields: _,
-					specializer: _,
-					specialization,
-				} = value;
-				{
-					for (n, k) in specialization.iter_mut() {
-						collector.push(n.clone());
-						k.monomorphize(collector, forty)?;
-						collector.pop();
-					}
+			for (n, v) in otypes {
+				if types.insert(n.clone(), v).is_none() {
+					bail!("unknown generic: {n:?}");
 				}
 			}
-		}
-		Ok(())
-	}
-}
-impl Type {
-	fn monomorphize(&mut self, collector: &mut MonoCollector) -> Result<()> {
-		for mono in collector
-			.extracted
-			.drain_filter(|f| f.target == self.id())
-			.collect::<Vec<_>>()
-		{
-			let mut mono_kind = self.kind.clone();
-			let mut types = mono.types.clone();
-			for (n, t) in self.types.iter() {
-				if types.iter().any(|(cn, _)| cn == n) {
-					continue;
-				}
-				if t.is_some() {
-					types.push((n.clone(), t.clone().unwrap()));
-				} else {
-					bail!("missing generic parameter: {:?}, passed: {:?}", n, types)
-				}
+			kind.traverse(
+				&mut ReplaceGenericReferencesWithSpecified {
+					types: &types,
+					still_unset: &still_unset,
+				},
+				TraverseSkip::empty(),
+			)?;
+			if !still_unset.is_empty() {
+				self.generic_types.insert(pending.id());
 			}
-			mono_kind.monomorphize(collector, &types)?;
-			let new_type = Type::new(mono.mono_type, self.params.clone(), mono_kind);
-			collector.add(new_type);
-		}
-		if self.types.is_empty() {
-			self.kind.monomorphize(collector, &Vec::new())?;
+			self.created
+				.push(Type::new(pending, Vec::new(), kind, still_unset));
+			*self.created_new = true;
 		}
 		Ok(())
 	}
 }
 
-impl Namespace {
-	// Acquire set of types, references to whose should be monomorphised
-	fn get_generic_types(&self, out: &mut HashSet<TypeId>) -> bool {
-		let mut found = false;
-		for (_, item) in self.items.iter() {
-			match item {
-				NamespaceItem::Inner(ns) => found |= ns.get_generic_types(out),
-				NamespaceItem::Type(ty) => {
-					if !ty.types.is_empty() && out.insert(ty.id()) {
-						found = true
-					}
-				}
-			}
+struct FindGenericTypes<'t>(&'t mut HashSet<TypeId>);
+impl Visitor for FindGenericTypes<'_> {
+	fn visit_type(&mut self, ty: &mut Type) -> Result<()> {
+		if ty.types.is_empty() {
+			return Ok(());
 		}
-		found
+		self.0.insert(ty.id());
+		Ok(())
 	}
-	fn monomorphize(&mut self, collector: &mut MonoCollector) -> Result<()> {
-		for (name, item) in self.items.iter_mut() {
-			collector.push(name.clone());
-			collector.push("mono");
-			match item {
-				NamespaceItem::Inner(ns) => ns.monomorphize(collector)?,
-				NamespaceItem::Type(ty) => {
-					ty.monomorphize(collector)?;
-				}
-			}
-			collector.pop();
-			collector.pop();
-		}
+}
+
+struct EnsureNoReferencesTo<'t>(&'t HashSet<TypeId>);
+impl Visitor for EnsureNoReferencesTo<'_> {
+	fn visit_reference(&mut self, re: &mut Reference) -> Result<()> {
+		let Some(r) = re.ty.resolved() else {
+			return Ok(())
+		};
+		if self.0.contains(&r) {
+			bail!("failed to resolve generic type arguments, some missing");
+		};
 		Ok(())
 	}
 }
 
 pub fn monomorphize(id: IdGenerator, ir: &mut Namespace) -> Result<()> {
-	let mut collector = MonoCollector {
-		id,
-		generic: HashSet::new(),
-		path: Vec::new(),
-		extracted: Vec::new(),
-		added: Vec::new(),
-	};
-	loop {
-		ir.get_generic_types(&mut collector.generic);
-		ir.monomorphize(&mut collector)?;
-		let found = ir.get_generic_types(&mut collector.generic);
+	let mut generic_types = HashSet::new();
+	ir.traverse(
+		&mut FindGenericTypes(&mut generic_types),
+		TraverseSkip::empty(),
+	)?;
 
-		let left_unimplemented = collector
-			.extracted
-			.iter()
-			.filter(|e| !e.implemented)
-			.count();
-		if left_unimplemented == 0 && !found {
+	let mut monos = Monomorphizations::new();
+	loop {
+		let mut changed = false;
+		ir.traverse(
+			&mut FindGenericTypeReferences {
+				id: id.clone(),
+				generic_types: &generic_types,
+				monos: &mut monos,
+				found: &mut changed,
+			},
+			TraverseSkip::SKIP_GENERIC_TYPES | TraverseSkip::DFS,
+		)?;
+		ir.derive_types(|t| {
+			let mut out = Vec::new();
+			t.traverse(
+				&mut ImplementMonomorphized {
+					generic_types: &mut generic_types,
+					monos: &mut monos,
+					created: &mut out,
+					created_new: &mut changed,
+				},
+				TraverseSkip::empty(),
+			)?;
+			Ok(out)
+		})?;
+		if !changed {
 			break;
 		}
 	}
-	for (path, ty) in collector.added {
-		let mut name = path
-			.iter()
-			.map(|c| c.as_str())
-			.collect::<Vec<_>>()
-			.join("_");
-		while ir.items.contains_key(&Ident::new(&name)) {
-			name += "_yet_another";
-		}
-		ir.items
-			.insert((&name as &str).into(), NamespaceItem::Type(ty));
-	}
+
+	ir.traverse(
+		&mut EnsureNoReferencesTo(&generic_types),
+		TraverseSkip::SKIP_GENERIC_TYPES,
+	)?;
 	ir.retain_types(|t| t.types.is_empty());
+
 	Ok(())
-	// dbg!(collector.extracted);
 }
