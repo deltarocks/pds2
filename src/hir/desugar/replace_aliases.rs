@@ -48,11 +48,14 @@ impl Visitor for CollectAliasList<'_> {
 			let remap_arguments = args
 				.iter()
 				.map(|(name, value)| {
+					dbg!(value);
+					dbg!(name);
 					assert_eq!(value.up, 0);
 					let mut refer = value.path.clone();
 					let first_segment = refer.0.remove(0);
-					let FieldRefSegment::Arg(arg) = first_segment else {panic!()};
-					assert_eq!(&arg, name);
+					let FieldRefSegment::Arg(arg) = first_segment else {panic!("first segment should be arg, got {first_segment:?}")};
+					// assert_eq!(&arg, name);
+					// let mut value = value.clone();
 					(name.clone(), refer)
 				})
 				.collect();
@@ -103,7 +106,8 @@ impl Visitor for ReplaceAliasedReferences<'_> {
 						let remap = alias
 							.remap_arguments
 							.get(name)
-							.expect("TODO: unused argument?");
+							.ok_or_else(|| format!("TODO: unused argument? {name:?}"))
+							.unwrap();
 						value.path.0.extend_from_slice(&remap.0);
 						(name.clone(), value)
 					})

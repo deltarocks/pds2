@@ -20,6 +20,7 @@ impl TypeUsageCollector {
 			self.has_invalid = true;
 			return;
 		}
+		eprintln!("Resolving {name:?} to {ty:?}");
 		let args = self.data.entry(id).or_default();
 		let possible = args.entry(name.clone()).or_default();
 		if !possible.contains(&ty) {
@@ -218,7 +219,8 @@ impl Definition {
 
 	fn propogate_types(&mut self, i: TypeId, collector: &TypeUsageCollector) -> Result<()> {
 		for (name, param) in self.params.iter_mut() {
-			*param = collector.find_type(i, name)?;
+			dbg!(&name);
+			*param = dbg!(collector.find_type(i, name)?);
 		}
 		Ok(())
 	}
@@ -227,8 +229,8 @@ impl Definition {
 		for (n, par) in self.params.iter() {
 			ensure!(
 				par.is_valid(),
-				"parameter type was not resolved after all: {:?}",
-				n
+				"parameter type was not resolved after all: {n:?}, all params: {:?}",
+				self.params
 			);
 		}
 		Ok(())

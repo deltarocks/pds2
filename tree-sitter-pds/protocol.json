@@ -1757,9 +1757,9 @@
                                               ]
                                             ],
                                             "brigadier:string": "varint",
-                                            "minecraft:entity": "i8",
-                                            "minecraft:score_holder": "i8",
-                                            "minecraft:range": "bool"
+                                            "minecraft_entity": "i8",
+                                            "minecraft_score_holder": "i8",
+                                            "minecraft_range": "bool"
                                           },
                                           "default": "void"
                                         }
@@ -3916,7 +3916,7 @@
                             {
                               "compareTo": "type",
                               "fields": {
-                                "minecraft:crafting_shapeless": [
+                                "minecraft_crafting_shapeless": [
                                   "container",
                                   [
                                     {
@@ -3939,7 +3939,7 @@
                                     }
                                   ]
                                 ],
-                                "minecraft:crafting_shaped": [
+                                "minecraft_crafting_shaped": [
                                   "container",
                                   [
                                     {
@@ -3976,25 +3976,25 @@
                                     }
                                   ]
                                 ],
-                                "minecraft:crafting_special_armordye": "void",
-                                "minecraft:crafting_special_bookcloning": "void",
-                                "minecraft:crafting_special_mapcloning": "void",
-                                "minecraft:crafting_special_mapextending": "void",
-                                "minecraft:crafting_special_firework_rocket": "void",
-                                "minecraft:crafting_special_firework_star": "void",
-                                "minecraft:crafting_special_firework_star_fade": "void",
-                                "minecraft:crafting_special_repairitem": "void",
-                                "minecraft:crafting_special_tippedarrow": "void",
-                                "minecraft:crafting_special_bannerduplicate": "void",
-                                "minecraft:crafting_special_banneraddpattern": "void",
-                                "minecraft:crafting_special_shielddecoration": "void",
-                                "minecraft:crafting_special_shulkerboxcoloring": "void",
-                                "minecraft:crafting_special_suspiciousstew": "void",
-                                "minecraft:smelting": "minecraft_smelting_format",
-                                "minecraft:blasting": "minecraft_smelting_format",
-                                "minecraft:smoking": "minecraft_smelting_format",
-                                "minecraft:campfire_cooking": "minecraft_smelting_format",
-                                "minecraft:stonecutting": [
+                                "minecraft_crafting_special_armordye": "void",
+                                "minecraft_crafting_special_bookcloning": "void",
+                                "minecraft_crafting_special_mapcloning": "void",
+                                "minecraft_crafting_special_mapextending": "void",
+                                "minecraft_crafting_special_firework_rocket": "void",
+                                "minecraft_crafting_special_firework_star": "void",
+                                "minecraft_crafting_special_firework_star_fade": "void",
+                                "minecraft_crafting_special_repairitem": "void",
+                                "minecraft_crafting_special_tippedarrow": "void",
+                                "minecraft_crafting_special_bannerduplicate": "void",
+                                "minecraft_crafting_special_banneraddpattern": "void",
+                                "minecraft_crafting_special_shielddecoration": "void",
+                                "minecraft_crafting_special_shulkerboxcoloring": "void",
+                                "minecraft_crafting_special_suspiciousstew": "void",
+                                "minecraft_smelting": "minecraft_smelting_format",
+                                "minecraft_blasting": "minecraft_smelting_format",
+                                "minecraft_smoking": "minecraft_smelting_format",
+                                "minecraft_campfire_cooking": "minecraft_smelting_format",
+                                "minecraft_stonecutting": [
                                   "container",
                                   [
                                     {
@@ -4011,7 +4011,7 @@
                                     }
                                   ]
                                 ],
-                                "minecraft:smithing": [
+                                "minecraft_smithing": [
                                   "container",
                                   [
                                     {

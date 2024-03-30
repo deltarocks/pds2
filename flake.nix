@@ -1,30 +1,45 @@
 {
-  description = "Unique network node";
+  description = "Prodocol Description Something 2";
+  inputs.nixpkgs.url = "github:nixos/nixpkgs";
   inputs.flake-utils.url = "github:numtide/flake-utils";
-  inputs.rust-overlay = { url = "github:oxalica/rust-overlay"; flake = false; };
-  outputs = { self, nixpkgs, rust-overlay, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = import nixpkgs
-          {
-            inherit system; overlays = [ (import rust-overlay) ];
-          };
-      in
-      {
-        devShell = pkgs.mkShell {
-          nativeBuildInputs = with pkgs; [
-            nodePackages.node-gyp
-            tree-sitter
-            python3
-            binutils
-            cargo-edit
-            pkgconfig
-            openssl
-            lld
-            ((rustChannelOf { date = "2022-11-10"; channel = "nightly"; }).default.override {
-              extensions = [ "rust-src" "rust-analyzer" ];
-            })
-          ];
+  inputs.rust-overlay = {
+    url = "github:oxalica/rust-overlay";
+    inputs = {
+      nixpkgs.follows = "nixpkgs";
+      flake-utils.follows = "flake-utils";
+    };
+  };
+  inputs.crane = {
+    url = "github:ipetkov/crane";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+  outputs = {
+    self,
+    nixpkgs,
+    rust-overlay,
+    flake-utils,
+    crane,
+  }:
+    flake-utils.lib.eachDefaultSystem (system: let
+      pkgs =
+        import nixpkgs
+        {
+          inherit system;
+          overlays = [(import rust-overlay)];
         };
-      });
+      rust = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+      craneLib = (crane.mkLib pkgs).overrideToolchain rust;
+    in {
+      devShells.default = craneLib.devShell {
+        packages = with pkgs; [
+          nodePackages.node-gyp
+          tree-sitter
+          nodejs
+          binutils
+          cargo-edit
+          pkg-config
+          openssl
+        ];
+      };
+    });
 }
