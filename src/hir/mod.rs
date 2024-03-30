@@ -357,6 +357,7 @@ trait Visitor {
 }
 bitflags::bitflags! {
 	#[repr(transparent)]
+	#[derive(Clone, Copy)]
 	pub struct TraverseSkip: u32 {
 		const TOPLEVEL_TYPEKIND = 1;
 		const DFS = 2;

@@ -1,13 +1,17 @@
 use std::rc::Rc;
 
-use dprint_core::formatting::*;
+use dprint_core::formatting::{
+	condition_helpers, Condition, ConditionProperties, ConditionResolverContext, Info, LineNumber,
+	PrintItems, PrintOptions, Signal,
+};
 
 use super::{Block, Ident, Item, ItemArgs, Statement, Value};
 
 impl Block {
 	fn print(&self, out: &mut PrintItems) {
 		if !self.root {
-			out.push_str("{");
+			out.push_str_runtime_width_computed("{");
+
 			out.push_signal(Signal::NewLine);
 			out.push_signal(Signal::StartIndent);
 			out.push_signal(Signal::StartNewLineGroup);
@@ -19,7 +23,7 @@ impl Block {
 			}
 			out.push_signal(Signal::StartNewLineGroup);
 			stmt.print(out);
-			out.push_str(";");
+			out.push_str_runtime_width_computed(";");
 			out.push_signal(Signal::NewLine);
 			out.push_signal(Signal::FinishNewLineGroup);
 		}
@@ -27,7 +31,7 @@ impl Block {
 		if !self.root {
 			out.push_signal(Signal::FinishNewLineGroup);
 			out.push_signal(Signal::FinishIndent);
-			out.push_str("}");
+			out.push_str_runtime_width_computed("}");
 		}
 	}
 }
@@ -35,9 +39,9 @@ impl Block {
 impl Statement {
 	fn print(&self, out: &mut PrintItems) {
 		for (k, v) in self.attributes.iter().filter(|k| k.0 == &Ident::new("doc")) {
-			out.push_str("@");
+			out.push_str_runtime_width_computed("@");
 			out.push_string(k.0.to_string());
-			out.push_str(" ");
+			out.push_str_runtime_width_computed(" ");
 			for item in v.iter() {
 				item.print(out, None);
 			}
@@ -47,9 +51,9 @@ impl Statement {
 		let end = LineNumber::new("end");
 		out.push_info(start);
 		for (k, v) in self.attributes.iter().filter(|k| k.0 != &Ident::new("doc")) {
-			out.push_str("@");
+			out.push_str_runtime_width_computed("@");
 			out.push_string(k.0.to_string());
-			out.push_str(" ");
+			out.push_str_runtime_width_computed(" ");
 			for item in v.iter() {
 				item.print(out, None);
 			}
@@ -99,7 +103,7 @@ impl Statement {
 							},
 						},
 					));
-					out.push_str("=> ");
+					out.push_str_runtime_width_computed("=> ");
 				}
 				item.print(out, (last_idx == i).then(|| end_items.into()));
 			}
@@ -117,17 +121,17 @@ impl Value {
 					out.push_info(before_block);
 				}
 				if !is_block {
-					out.push_str("\"");
+					out.push_str_runtime_width_computed("\"");
 					out.push_string(string.to_string());
-					out.push_str("\"");
+					out.push_str_runtime_width_computed("\"");
 				} else {
-					out.push_str("\"\"\"");
+					out.push_str_runtime_width_computed("\"\"\"");
 					for line in string.lines() {
 						out.push_signal(Signal::NewLine);
 						out.push_string(line.trim().to_string());
 					}
 					out.push_signal(Signal::NewLine);
-					out.push_str("\"\"\"");
+					out.push_str_runtime_width_computed("\"\"\"");
 				}
 			}
 			Value::FieldRef(r) => {
@@ -149,13 +153,13 @@ impl Value {
 				if let Some(before_block) = before_block {
 					out.push_info(before_block);
 				}
-				out.push_str("<! ");
+				out.push_str_runtime_width_computed("<! ");
 				out.push_string(i.to_string());
-				out.push_str(" !>");
+				out.push_str_runtime_width_computed(" !>");
 			}
 			Value::Unset => unreachable!(),
 			Value::FunctionCall(n, args) => {
-				out.push_str("%");
+				out.push_str_runtime_width_computed("%");
 				out.push_string(n.as_str().to_string());
 				args.print(out)
 			}
@@ -168,7 +172,7 @@ impl ItemArgs {
 		if !self.is_empty() {
 			let start = LineNumber::new("args start");
 			let end = LineNumber::new("args end");
-			out.push_str("(");
+			out.push_str_runtime_width_computed("(");
 			out.push_signal(Signal::StartNewLineGroup);
 			out.push_info(start);
 			let condition = Rc::new(move |ctx: &mut ConditionResolverContext| {
@@ -207,18 +211,18 @@ impl ItemArgs {
 			let mut first = Some(());
 			for arg in self.unnamed.iter() {
 				if first.take().is_none() {
-					out.push_str(",");
+					out.push_str_runtime_width_computed(",");
 					out.push_condition(arg_nl_condition.clone());
 				}
 				arg.print(out, None);
 			}
 			for (k, v) in self.named.iter() {
 				if first.take().is_none() {
-					out.push_str(",");
+					out.push_str_runtime_width_computed(",");
 					out.push_condition(arg_nl_condition.clone());
 				}
 				out.push_string(k.0.to_string());
-				out.push_str(": ");
+				out.push_str_runtime_width_computed(": ");
 				v.print(out, None);
 			}
 			out.push_condition(Condition::new(
@@ -237,7 +241,7 @@ impl ItemArgs {
 
 			out.push_info(end);
 			out.push_signal(Signal::FinishNewLineGroup);
-			out.push_str(")");
+			out.push_str_runtime_width_computed(")");
 		}
 	}
 }
@@ -251,7 +255,7 @@ impl Item {
 		}
 
 		if !self.block.statements.is_empty() {
-			out.push_str(" ");
+			out.push_str_runtime_width_computed(" ");
 			(&self.block).print(out);
 		}
 	}
@@ -266,7 +270,7 @@ pub fn format(input: &Block) -> String {
 		},
 		PrintOptions {
 			max_width: 100,
-			indent_width: 4,
+			indent_width: 3,
 			use_tabs: true,
 			new_line_text: "\n",
 		},

@@ -1,78 +1,20 @@
+use genco::lang::rust::import;
+use genco::prelude::*;
+use genco::quote;
+use rust::{Tokens, Import};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::ast::{FieldRefSegment, Ident};
-use crate::format::SpecializerObj;
 use crate::hir::TypeId;
 use crate::mir::{self, Field, Type, TypeKind, TypeMap};
-use crate::pi;
 
 use super::GeneratorOutput;
-use anyhow::{anyhow, Result};
-use dprint_core::formatting::PrintItems;
-use jrsonnet_evaluator::function::{builtin, CallLocation, FuncVal};
-use jrsonnet_evaluator::gc::GcHashMap;
-use jrsonnet_evaluator::typed::{Any, Typed};
-use jrsonnet_evaluator::{tb, ContextBuilder, IStr, ObjValue, ObjValueBuilder, Val};
-use jrsonnet_gcmodule::{Cc, Trace};
+use super::SpecializerObj;
+use anyhow::Result;
 
-#[builtin(fields(
-	meta: RustMeta
-))]
-fn builtin_ty(this: &builtin_ty, id: TypeId) -> jrsonnet_evaluator::Result<String> {
-	let ty = this.meta.ty(id);
-	Ok(ty)
-}
-#[builtin(fields(
-	meta: RustMeta
-))]
-fn builtin_ty_size(this: &builtin_ty_size, id: TypeId) -> jrsonnet_evaluator::Result<String> {
-	let ty = this.meta.size_of(id);
-	Ok(ty)
-}
-#[builtin(fields(
-	meta: RustMeta
-))]
-fn builtin_ty_read(this: &builtin_ty_read, id: TypeId) -> jrsonnet_evaluator::Result<String> {
-	let ty = this.meta.deserialize(id);
-	Ok(ty)
-}
-#[builtin(fields(
-	meta: RustMeta
-))]
-fn builtin_ty_write(this: &builtin_ty_write, id: TypeId) -> jrsonnet_evaluator::Result<String> {
-	let ty = this.meta.serialize(id);
-	Ok(ty)
-}
-
-fn make_jr_pds(meta: &RustMeta) -> ObjValue {
-	let mut out = ObjValueBuilder::new();
-	out.member("tyTy".into())
-		.value(Val::Func(FuncVal::Builtin(Cc::new(tb!(builtin_ty {
-			meta: meta.clone()
-		})))))
-		.expect("no conflict");
-	out.member("tySize".into())
-		.value(Val::Func(FuncVal::Builtin(Cc::new(tb!(builtin_ty_size {
-			meta: meta.clone()
-		})))))
-		.expect("no conflict");
-	out.member("tyRead".into())
-		.value(Val::Func(FuncVal::Builtin(Cc::new(tb!(builtin_ty_read {
-			meta: meta.clone()
-		})))))
-		.expect("no conflict");
-	out.member("tyWrite".into())
-		.value(Val::Func(FuncVal::Builtin(Cc::new(tb!(
-			builtin_ty_write { meta: meta.clone() }
-		)))))
-		.expect("no conflict");
-	out.build()
-}
-
-#[derive(Clone, Trace)]
+#[derive(Clone)]
 struct RustMeta {
-	#[trace(skip)]
 	raw_names: Rc<BTreeMap<TypeId, String>>,
 }
 impl RustMeta {
@@ -85,27 +27,34 @@ impl RustMeta {
 			raw_names: Rc::new(raw_names),
 		}
 	}
-	fn name(&self, type_id: TypeId) -> String {
+	fn name_str(&self, type_id: TypeId) -> String {
 		assert!(type_id.is_valid());
 		format!("pds_{}", self.raw_names[&type_id])
 	}
-	fn ty(&self, type_id: TypeId) -> String {
-		format!("super::{}::Ty", self.name(type_id))
+	fn name(&self, type_id: TypeId) -> Tokens {
+		assert!(type_id.is_valid());
+		quote!(pds_$(&self.raw_names[&type_id]))
 	}
-	fn virt(&self, type_id: TypeId, field: Ident) -> String {
-		format!("super::{}::virtual_{:?}", self.name(type_id), field)
+	fn imported(&self, type_id: TypeId, ty: impl AsRef<str>) -> Import {
+		import(format!("super::{}", self.name_str(type_id)), ty.as_ref()).qualified()
 	}
-	fn args(&self, type_id: TypeId) -> String {
-		format!("super::{}::Args", self.name(type_id))
+	fn ty(&self, type_id: TypeId) -> Import {
+		self.imported(type_id, "Ty")
 	}
-	fn serialize(&self, type_id: TypeId) -> String {
-		format!("super::{}::serialize", self.name(type_id))
+	fn virt(&self, type_id: TypeId, field: Ident) -> Import {
+		self.imported(type_id, format!("virtual_{}", field.as_str()))
 	}
-	fn deserialize(&self, type_id: TypeId) -> String {
-		format!("super::{}::deserialize", self.name(type_id))
+	fn args(&self, type_id: TypeId) -> Import {
+		self.imported(type_id, "Args")
 	}
-	fn size_of(&self, type_id: TypeId) -> String {
-		format!("super::{}::size_of", self.name(type_id))
+	fn serialize(&self, type_id: TypeId) -> Import {
+		self.imported(type_id, "serialize")
+	}
+	fn deserialize(&self, type_id: TypeId) -> Import {
+		self.imported(type_id, "deserialize")
+	}
+	fn size_of(&self, type_id: TypeId) -> Import {
+		self.imported(type_id, "size_of")
 	}
 }
 
@@ -113,51 +62,48 @@ fn generate_read_reference(
 	types: &RustMeta,
 	from_locals: bool,
 	input: &Field,
-	target: Option<&str>,
-) -> PrintItems {
-	let mut pi = PrintItems::new();
-	pi!(pi => "&{" INDENT NL);
+	target: Option<&Tokens>,
+) -> Tokens {
+	let mut indexing = vec![];
 	for (i, field) in input.0.iter().enumerate() {
-		match &field.segment {
+		indexing.push(match &field.segment {
 			FieldRefSegment::Arg(name) => {
 				assert_eq!(i, 0);
-				pi!(pi =>
-					"let _0 = &args;" NL
-					"let _0: &" {=types.ty(field.to.get())} " = &_0." {?name} ";" NL
-				);
+				quote! {
+					let _0 = &args;
+					let _0: &$(types.ty(field.to.get())) = &_0.$name;
+				}
 			}
 			FieldRefSegment::Down { to, .. } => {
 				if i == 0 && from_locals {
-					pi!(pi => "let _0: &" {=types.ty(field.to.get())} " = &" {?to} ";" NL)
+					quote!(let _0: &$(types.ty(field.to.get())) = &$to;)
 				} else {
-					pi!(pi => "let _0: &" {=types.ty(field.to.get())} " = &_0." {?to} ";" NL)
+					quote!(let _0: &$(types.ty(field.to.get())) = &_0.$to;)
 				}
 			}
 			FieldRefSegment::Virtual(name) => {
-				pi!(pi => "let _0: &" {=types.ty(field.to.get())} " = &" {=types.virt(field.from.get(), name.clone())} "(&_0);" NL);
+				quote!(let _0: &$(types.ty(field.to.get())) = &$(types.virt(field.from.get(), name.clone()))(&_0);)
 			}
-		}
+		})
 	}
 	if let Some(target) = target {
-		pi!(pi => "Into::<" {=target} ">::into(")
+		indexing.push(quote!(Into::<$target>::into(*_0)));
+	} else {
+		indexing.push(quote!(*_0))
 	}
-	pi!(pi => "(*_0)");
-	if target.is_some() {
-		pi!(pi => ")")
-	}
-	pi!(pi => NL);
-	pi!(pi => DEDENT "}");
-	pi
+	quote!(&{$(for i in indexing => $i)})
 }
 
-fn generate_args_passing(types: &RustMeta, input: &Type) -> PrintItems {
-	let mut pi = PrintItems::new();
-	pi!(pi => {=types.args(input.target)} " {" INDENT NL);
+fn generate_args_passing(types: &RustMeta, input: &Type) -> Tokens {
+	let mut args = vec![];
 	for (name, field) in input.args.iter() {
-		pi!(pi => {?name} ": " {<generate_read_reference(types, true, field, None)} "," NL);
+		args.push(quote!($name: $(generate_read_reference(types, true, field, None))))
 	}
-	pi!(pi => DEDENT "}");
-	pi
+	quote! {
+		$(types.args(input.target)) {
+			$(for arg in args join(,) => $arg)
+		}
+	}
 }
 
 pub fn generator(
@@ -166,170 +112,165 @@ pub fn generator(
 	spec: &SpecializerObj,
 ) -> Result<()> {
 	let meta = RustMeta::new(input);
-	let pds = make_jr_pds(&meta);
 
-	let mut pi = PrintItems::new();
-	pi!(pi => "#![allow(non_camel_case_types, dead_code, unused_imports, unused_parens, clippy::needless_borrow, clippy::just_underscores_and_digits, clippy::identity_op)]" NL);
-	pi!(pi => "use crate::pds::{Input, Output, Result};" NL);
+	let mut out_module = vec![];
+
+	// pi!(pi => "#![allow(non_camel_case_types, dead_code, unused_imports, unused_parens, clippy::needless_borrow, clippy::just_underscores_and_digits, clippy::identity_op)]" NL);
+	// pi!(pi => "use crate::pds::{Input, Output, Result};" NL);
 	for (id, ty) in &input.0 {
+		let pinput = &import("crate::pds", "Input");
+		let poutput = &import("crate::pds", "Output");
+		let presult = &import("crate::pds", "Result");
+		let try_into = &import("std::convert", "TryInto");
+		let stdvec = &import("std::vec", "Vec");
 		let name = ty.name.readable_name();
-		if !ty.kind.is_native() {
-			pi!(pi => "/// " {?ty.name} NL);
-			pi!(pi => "pub mod " {=meta.name(*id)} " {" INDENT NL);
-			pi!(pi => "use std::convert::TryInto;" NL);
-			pi!(pi => "use super::{Input, Output, Result};" NL);
-
+		let def = if !ty.kind.is_native() {
 			let has_args = !ty.params.is_empty();
-			if has_args {
-				pi!(pi => "pub struct Args<'a> {" INDENT NL);
-				for (name, par) in ty.params.iter() {
-					pi!(pi => "pub " {?name} ": &'a " {=meta.ty(*par)} "," NL);
-				}
-				pi!(pi => DEDENT "}" NL);
-			}
-			match &ty.kind {
+			let mod_contents = match &ty.kind {
 				TypeKind::Container { fields, .. } => {
-					pi!(pi =>
-						"pub struct Ty {" INDENT NL
-							{forin field in fields.iter() =>
-								{ifelse field.load_from.is_none() =>
-									{"pub " {?field.name} ": " {=meta.ty(field.ty.target)} "," NL}
-									{"// " {?field.name} " - virtual field" NL}
-								}
-							}
-						DEDENT "}" NL
-
-						"pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {" INDENT NL
-							{forin field in fields.iter() =>
-								{ifelse field.load_from.is_none() =>
-									{{=meta.serialize(field.ty.target)}"(&_0." {?field.name} ", output)?;" NL}
-									{{=meta.serialize(field.ty.target)}"(" INDENT NL
-										{<generate_read_reference(&meta, false, field.load_from.as_ref().unwrap(), None)} "," NL
-										"output," NL
-									DEDENT ")?;" NL}
-								}
-							}
-							"Ok(())" NL
-						DEDENT "}" NL
-
-						"pub fn deserialize(input: &mut Input"
-						{if has_args => " , args: Args<'_>"}
-						") -> Result<Ty> {" INDENT NL
-							{forin field in fields.iter() =>
-								"let " {?field.name} " = " {=meta.deserialize(field.ty.target)} "(input"
-								{if !input[field.ty.target].params.is_empty() => ", " {<generate_args_passing(&meta, &field.ty)}}
-								")?;" NL
-							}
-
-							"Ok(Ty {" INDENT NL
-								{forin field in fields.iter().filter(|f| f.load_from.is_none()) =>
-									{?field.name} "," NL
-								}
-							DEDENT "})" NL
-						DEDENT "}" NL
-
-						"pub fn size_of(_0: &Ty) -> usize {" INDENT NL
-							"0"
-							{forin i in fields.iter().enumerate() =>
-								" + "
-								{=meta.size_of(i.1.ty.target)} "("
-								{ifelse i.1.load_from.is_none() =>
-									{"&_0." {?i.1.name}}
-									{{<generate_read_reference(&meta, false, i.1.load_from.as_ref().unwrap(), None)}}
-								}
-								")"
-							}
-							NL
-						DEDENT "}" NL
-					);
+					quote! {
+						$(if has_args => pub struct Args<'a> {
+							$(for (name, par) in ty.params.iter() join(,) => pub $name: &'a $(meta.ty(*par)))
+						})
+						pub struct Ty {
+							$(for field in fields.iter() join($['\r']) =>
+								$(if field.load_from.is_none() {
+									pub $(&field.name): $(meta.ty(field.ty.target)),
+								} else {
+									$("// ") $(&field.name) $("- virtual field")
+								})
+							)
+						}
+						pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+							$(for field in fields.iter() join($['\r']) =>
+								$(meta.serialize(field.ty.target))(
+									$(if field.load_from.is_none() {
+										&_0.$(&field.name)
+									} else {
+										$(generate_read_reference(&meta, false, field.load_from.as_ref().unwrap(), None))
+									}),
+									output,
+								)?;
+							)
+							Ok(())
+						}
+						pub fn deserialize(input: &mut $pinput, $(if has_args => args: Args<'_>>)) -> $presult<Ty> {
+							$(for field in fields.iter() join($['\r']) =>
+								let $(&field.name) = $(meta.deserialize(field.ty.target))(
+									input,
+									$(if !input[field.ty.target].params.is_empty() => $(generate_args_passing(&meta, &field.ty)),)
+								);
+							)
+							Ok(Ty {
+								$(for field in fields.iter().filter(|f| f.load_from.is_none()) join(,) =>
+									$(&field.name)
+								)
+							})
+						}
+						pub fn size_of(_0: &Ty) -> usize {
+							0
+							$(for field in fields.iter() join($['\r']) =>
+								+ $(meta.size_of(field.ty.target))(
+									$(if field.load_from.is_none() {
+										&_0.$(&field.name)
+									} else {
+										{$(generate_read_reference(&meta, false, dbg!(field.load_from.as_ref()).unwrap(), None))}
+									})
+								)
+							)
+						}
+					}
 				}
 				TypeKind::DynamicArray { size_ref, t } => {
-					pi!(pi =>
-						"pub type Ty = Vec<" {=meta.ty(t.target)} ">;" NL
+					quote! {
+						pub type Ty = $stdvec<$(meta.ty(t.target))>;
 
-						"pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {" INDENT NL
-							"for item in _0 {" INDENT NL
-								{=meta.serialize(t.target)} "(&item, output)?;" NL
-							DEDENT "}" NL
-							"Ok(())" NL
-						DEDENT "}" NL
-
-						"pub fn deserialize(input: &mut Input"
-						{if has_args => " , args: Args<'_>"}
-						") -> Result<Ty> {" INDENT NL
-							"let mut out = Vec::with_capacity(*" {<generate_read_reference(&meta, false, size_ref, Some("usize"))} ");" NL
-							"for _ in 0..(*" {<generate_read_reference(&meta, false, size_ref, Some("usize"))} ") {" INDENT NL
-								"out.push(" {=meta.deserialize(t.target)} "(input)?);" NL
-							DEDENT "}" NL
-							"Ok(out)" NL
-						DEDENT "}" NL
-
-						"pub fn size_of(_0: &Ty) -> usize {" INDENT NL
-							"_0" NL INDENT
-								".iter()" NL
-								".map(|v| " {=meta.size_of(t.target)} "(&v))" NL
-								".sum()" NL DEDENT
-						DEDENT "}" NL
-
-						"pub fn virtual_size(_0: &Ty) -> super::pds_usize::Ty {" INDENT NL
-							"_0.len() as super::pds_usize::Ty" NL
-						DEDENT "}" NL
-					);
+						pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+							for item in _0 {
+								$(meta.serialize(t.target))(&item, output)?;
+							}
+							Ok(())
+						}
+						pub fn deserialize(input: &mut $pinput, $(if has_args => args: Args<'_>)) -> $presult<Ty> {
+							let mut out = Vec::with_capacity(*$(generate_read_reference(&meta, false, size_ref, Some(&quote!(usize)))));
+							for _ in 0..(*$(generate_read_reference(&meta, false, size_ref, Some(&quote!(usize))))) {
+								out.push($(meta.deserialize(t.target))(input)?);
+							}
+							Ok(out)
+						}
+						pub fn size_of(_0: &Ty) -> usize {
+							_0
+								.iter()
+								.map(|v| $(meta.size_of(t.target))(&v))
+								.sum()
+						}
+						pub fn virtual_size(_0: &Ty) -> super::pds_usize::Ty {
+							_0.len() as super::pds_usize::Ty
+						}
+					}
 				}
 				TypeKind::Union {
 					tag: _,
 					matches,
 					default,
 				} => {
-					pi!(pi =>
-						"pub enum Ty {" INDENT NL
-							{forin m in matches =>
-								{?m.1} "(" {=meta.ty(m.2.target)} ")," NL
+					quote! {
+						pub enum Ty {
+							$(for (_, variant, value) in matches =>
+								$variant($(meta.ty(value.target))),
+							)
+							$(if default.is_some() =>
+								$(&default.as_ref().unwrap().0)($(meta.ty(default.as_ref().unwrap().1.target)))
+							)
+						}
+						pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+							todo!()
+						}
+						pub fn deserialize(input: &mut $pinput, $(if has_args => args: Args<'_>)) -> $presult<Ty> {
+							todo!()
+						}
+						pub fn size_of(_0: &Ty) -> usize {
+							match &_0 {
+								$(for (_, variant, value) in matches =>
+									Self::$variant(_0) => $(meta.size_of(value.target))(_0),
+								)
+								$(if default.is_some() =>
+									Self::$(&default.as_ref().unwrap().0)(_0) => $(meta.size_of(default.as_ref().unwrap().1.target))(_0),
+								)
 							}
-							{if default.is_some() =>
-								{?default.as_ref().unwrap().0} "(" {=meta.ty(default.as_ref().unwrap().1.target)} ")," NL
+						}
+						pub fn virtual_tag(_0: &Ty) -> super::pds_usize::Ty {
+							match &_0 {
+								$(for (tag, variant, _) in matches =>
+									Self::$variant(_0) => tag,
+								)
+								$(if default.is_some() =>
+									Self::$(&default.as_ref().unwrap().0)(_0) => todo!(),
+								)
 							}
-						DEDENT "}" NL
-						"pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {" INDENT NL
-							"todo!()" NL
-						DEDENT "}" NL
-						"pub fn deserialize(input: &mut Input"
-						{if has_args => " , args: Args<'_>"}
-						") -> Result<Ty> {" INDENT NL
-							"todo!()" NL
-						DEDENT "}" NL
-
-						"pub fn size_of(_0: &Ty) -> usize {" INDENT NL
-							"match &_0 {" INDENT NL
-								{forin m in matches =>
-									"Self::" {?m.1} "(_0) => " {=meta.size_of(m.2.target)} "(_0)," NL
-								}
-								{if default.is_some() =>
-									"Self::" {?default.as_ref().unwrap().0} "(_0) => " {=meta.size_of(default.as_ref().unwrap().1.target)} "(_0)," NL
-								}
-							DEDENT "}" NL
-						DEDENT "}" NL
-						"pub fn virtual_tag(_0: &Ty) -> super::pds_usize::Ty {" INDENT NL
-							"match &_0 {" INDENT NL
-								{forin m in matches =>
-									"Self::" {?m.1} "(_0) => " {?m.0} "," NL
-								}
-								{if default.is_some() =>
-									"Self::" {?default.as_ref().unwrap().0} "(_0) => " {=meta.size_of(default.as_ref().unwrap().1.target)} "(_0)," NL
-								}
-							DEDENT "}" NL
-						DEDENT "}" NL
-					);
+						}
+					}
 				}
 				TypeKind::FixedSizeArray { size, t } => {
-					pi!(pi =>
-						"type " {=name} " = ["{=input[t.target].name.readable_name()}"; "{=size}"];"
-
-					);
+					quote! {
+						$("// TODO: fixed size")
+					}
+					// pi!(pi =>
+					// 	"type " {=name} " = ["{=input[t.target].name.readable_name()}"; "{=size}"];"
+					//
+					// );
 				}
 				TypeKind::Native(_) | TypeKind::Void => unreachable!(),
+				// pi!(pi => "/// " {?ty.name} NL);
+				// pi!(pi => "pub mod " {=meta.name(*id)} " {" INDENT NL);
+				// pi!(pi => "use std::convert::TryInto;" NL);
+				// pi!(pi => "use super::{Input, Output, Result};" NL);
+			};
+			quote! {
+				pub mod $(meta.name(*id)) {
+					$mod_contents
+				}
 			}
-			pi!(pi => DEDENT "}" NL);
 		} else {
 			let TypeKind::Native(native) = &ty.kind else {
 				unreachable!();
@@ -340,68 +281,88 @@ pub fn generator(
 					specialization,
 					virtual_fields: _,
 				} => {
-					let specializer = spec
-						.specializer
-						.get(specializer.as_str().into())
-						.map_err(|e| anyhow!("{e}"))?
-						.ok_or_else(|| anyhow!("missing specializer for {specializer:?}"))?;
-					let func = specializer
-						.as_func()
-						.ok_or_else(|| anyhow!("specializer should be function"))?;
+					// let specializer = spec
+					// 	.specializer
+					// 	.get(specializer.as_str().into())
+					// 	.map_err(|e| anyhow!("{e}"))?
+					// 	.ok_or_else(|| anyhow!("missing specializer for {specializer:?}"))?;
+					// let func = specializer
+					// 	.as_func()
+					// 	.ok_or_else(|| anyhow!("specializer should be function"))?;
 
-					let mut args: GcHashMap<IStr, Any> = GcHashMap::new();
-					args.insert("pds".into(), Any(Val::Obj(pds.clone())));
-					for (name, ty) in specialization {
-						args.insert(
-							name.as_str().into(),
-							Any(TypeId::into_untyped(ty.target)
-								.expect("into conversion always succeeds")),
-						);
+					// let mut args: GcHashMap<IStr, Any> = GcHashMap::new();
+					// args.insert("pds".into(), Any(Val::Obj(pds.clone())));
+					// for (name, ty) in specialization {
+					// 	args.insert(
+					// 		name.as_str().into(),
+					// 		Any(TypeId::into_untyped(ty.target)
+					// 			.expect("into conversion always succeeds")),
+					// 	);
+					// }
+					// let out = func
+					// 	.evaluate(
+					// 		ContextBuilder::dangerous_empty_state().build(),
+					// 		CallLocation::native(),
+					// 		&args,
+					// 		true,
+					// 	)
+					// 	.map_err(|e| anyhow!("{e}"))?;
+
+					// #[derive(Typed)]
+					// struct SpecializerOutput {
+					// 	ty: Any,
+					// 	read: Any,
+					// 	write: Any,
+					// 	size: Any,
+					// }
+					//
+					// let out = SpecializerOutput::from_untyped(out).map_err(|e| anyhow!("{e}"))?;
+					// let tyf =
+					// 	crate::format::convert_format(&out.ty.0).map_err(|e| anyhow!("{e}"))?;
+					// let readf =
+					// 	crate::format::convert_format(&out.read.0).map_err(|e| anyhow!("{e}"))?;
+					// let writef =
+					// 	crate::format::convert_format(&out.write.0).map_err(|e| anyhow!("{e}"))?;
+					// let sizef =
+					// 	crate::format::convert_format(&out.size.0).map_err(|e| anyhow!("{e}"))?;
+					// todo!();
+
+					// pi!(pi => "pub mod pds_" {=ty.name.readable_name()} " {" INDENT NL);
+					// pi!(pi => "use std::convert::TryInto;" NL);
+					// pi!(pi => "use super::{Input, Output, Result};" NL);
+					// pi!(pi => "pub type Ty = " {<tyf} ";" NL);
+					// pi!(pi => "pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {" INDENT NL {<writef} DEDENT NL "}" NL);
+					// pi!(pi => "pub fn deserialize(input: &mut Input) -> Result<Ty> {" INDENT NL {<readf} DEDENT NL "}" NL);
+					// pi!(pi => "pub fn size_of(_0: &Ty) -> usize {" INDENT NL {<sizef} DEDENT NL "}" NL);
+					// pi!(pi => DEDENT "}" NL)
+					quote! {
+						pub mod pds_$(ty.name.readable_name()) {
+
+						}
 					}
-					let out = func
-						.evaluate(
-							ContextBuilder::dangerous_empty_state().build(),
-							CallLocation::native(),
-							&args,
-							true,
-						)
-						.map_err(|e| anyhow!("{e}"))?;
-
-					#[derive(Typed)]
-					struct SpecializerOutput {
-						ty: Any,
-						read: Any,
-						write: Any,
-						size: Any,
-					}
-
-					let out = SpecializerOutput::from_untyped(out).map_err(|e| anyhow!("{e}"))?;
-					let tyf =
-						crate::format::convert_format(&out.ty.0).map_err(|e| anyhow!("{e}"))?;
-					let readf =
-						crate::format::convert_format(&out.read.0).map_err(|e| anyhow!("{e}"))?;
-					let writef =
-						crate::format::convert_format(&out.write.0).map_err(|e| anyhow!("{e}"))?;
-					let sizef =
-						crate::format::convert_format(&out.size.0).map_err(|e| anyhow!("{e}"))?;
-
-					pi!(pi => "pub mod pds_" {=ty.name.readable_name()} " {" INDENT NL);
-					pi!(pi => "use std::convert::TryInto;" NL);
-					pi!(pi => "use super::{Input, Output, Result};" NL);
-					pi!(pi => "pub type Ty = " {<tyf} ";" NL);
-					pi!(pi => "pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {" INDENT NL {<writef} DEDENT NL "}" NL);
-					pi!(pi => "pub fn deserialize(input: &mut Input) -> Result<Ty> {" INDENT NL {<readf} DEDENT NL "}" NL);
-					pi!(pi => "pub fn size_of(_0: &Ty) -> usize {" INDENT NL {<sizef} DEDENT NL "}" NL);
-					pi!(pi => DEDENT "}" NL)
 				}
 				_ => {
-					pi!(pi =>
-						"use crate::pds::pds_" {=ty.name.readable_name()}  ";" NL
-					);
+					let import = import("crate::pds_native", format!("pds_{}", ty.name.readable_name()));
+					quote!(pub use $import::*;)
 				}
 			}
-		}
+		};
+		output.insert(
+			format!("{}.rs", meta.name_str(*id)).into(),
+			def.to_file_string().expect("formatting should succeed"),
+		);
+		out_module.push(quote! {
+			mod $(meta.name(*id));
+		})
 	}
-	output.insert("mod.rs".into(), pi);
+
+	output.insert(
+		"mod.rs".into(),
+		quote! {
+			$(for m in out_module join($['\r']) => $m)
+		}
+		.to_file_string()
+		.expect("formatting should succeed"),
+	);
 	Ok(())
 }

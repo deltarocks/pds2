@@ -1,7 +1,5 @@
 use std::{cell::Cell, fmt, rc::Rc};
 
-use jrsonnet_evaluator::typed::{ComplexValType, Typed};
-
 #[derive(Clone)]
 pub struct NameIdGenerator {
 	id: Rc<Cell<u64>>,
@@ -44,27 +42,6 @@ impl IdGenerator {
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TypeId(u64);
-
-impl Typed for TypeId {
-	const TYPE: &'static ComplexValType = JrTypeId::TYPE;
-
-	fn into_untyped(typed: Self) -> jrsonnet_evaluator::Result<jrsonnet_evaluator::Val> {
-		let jr = JrTypeId {
-			type_id: typed.0.to_string(),
-		};
-		JrTypeId::into_untyped(jr)
-	}
-
-	fn from_untyped(untyped: jrsonnet_evaluator::Val) -> jrsonnet_evaluator::Result<Self> {
-		let jr: JrTypeId = JrTypeId::from_untyped(untyped)?;
-		Ok(Self(jr.type_id.parse().expect("bad type id received")))
-	}
-}
-
-#[derive(Typed)]
-struct JrTypeId {
-	type_id: String,
-}
 
 /// Type id, which has not yet assigned to a type
 #[derive(Debug)]

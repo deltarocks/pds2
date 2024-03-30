@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::ast::{FieldRefSegment, Ident};
-use crate::format::SpecializerObj;
 use crate::hir::TypeId;
 use crate::mir::{self, Field, Type, TypeKind, TypeMap};
 use crate::pi;
@@ -12,67 +11,8 @@ use anyhow::{anyhow, Result};
 use dprint_core::formatting::PrintItems;
 use genco::lang::js::Tokens;
 use genco::quote;
-use jrsonnet_evaluator::function::{builtin, CallLocation, FuncVal};
-use jrsonnet_evaluator::gc::GcHashMap;
-use jrsonnet_evaluator::typed::{Any, Typed};
-use jrsonnet_evaluator::{tb, ContextBuilder, IStr, ObjValue, ObjValueBuilder, Val};
-use jrsonnet_gcmodule::{Cc, Trace};
 
-#[builtin(fields(
-	meta: RustMeta
-))]
-fn builtin_ty(this: &builtin_ty, id: TypeId) -> jrsonnet_evaluator::Result<String> {
-	let ty = this.meta.ty(id);
-	Ok(ty)
-}
-#[builtin(fields(
-	meta: RustMeta
-))]
-fn builtin_ty_size(this: &builtin_ty_size, id: TypeId) -> jrsonnet_evaluator::Result<String> {
-	let ty = this.meta.size_of(id);
-	Ok(ty)
-}
-#[builtin(fields(
-	meta: RustMeta
-))]
-fn builtin_ty_read(this: &builtin_ty_read, id: TypeId) -> jrsonnet_evaluator::Result<String> {
-	let ty = this.meta.deserialize(id);
-	Ok(ty)
-}
-#[builtin(fields(
-	meta: RustMeta
-))]
-fn builtin_ty_write(this: &builtin_ty_write, id: TypeId) -> jrsonnet_evaluator::Result<String> {
-	let ty = this.meta.serialize(id);
-	Ok(ty)
-}
-
-fn make_jr_pds(meta: &RustMeta) -> ObjValue {
-	let mut out = ObjValueBuilder::new();
-	out.member("tyTy".into())
-		.value(Val::Func(FuncVal::Builtin(Cc::new(tb!(builtin_ty {
-			meta: meta.clone()
-		})))))
-		.expect("no conflict");
-	out.member("tySize".into())
-		.value(Val::Func(FuncVal::Builtin(Cc::new(tb!(builtin_ty_size {
-			meta: meta.clone()
-		})))))
-		.expect("no conflict");
-	out.member("tyRead".into())
-		.value(Val::Func(FuncVal::Builtin(Cc::new(tb!(builtin_ty_read {
-			meta: meta.clone()
-		})))))
-		.expect("no conflict");
-	out.member("tyWrite".into())
-		.value(Val::Func(FuncVal::Builtin(Cc::new(tb!(
-			builtin_ty_write { meta: meta.clone() }
-		)))))
-		.expect("no conflict");
-	out.build()
-}
-
-#[derive(Clone, Trace)]
+#[derive(Clone)]
 struct RustMeta {
 	#[trace(skip)]
 	raw_names: Rc<BTreeMap<TypeId, String>>,
@@ -168,7 +108,6 @@ pub fn generator(
 	spec: &SpecializerObj,
 ) -> Result<()> {
 	let meta = RustMeta::new(input);
-	let pds = make_jr_pds(&meta);
 
 	let mut out = Tokens::new();
 	for (id, ty) in &input.0 {

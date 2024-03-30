@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, ensure, Context, Result};
+use genco::{lang::Rust, prelude::*, tokens::FormatInto};
 use std::{
 	cell::RefCell,
 	collections::{BTreeMap, BTreeSet, HashMap},
@@ -28,6 +29,16 @@ impl Ident {
 			.next()
 			.map(|c| c.is_uppercase())
 			.unwrap_or(false)
+	}
+}
+impl FormatInto<Rust> for Ident {
+	fn format_into(self, tokens: &mut rust::Tokens) {
+		quote_in!(*tokens => $(self.0.as_ref()))
+	}
+}
+impl FormatInto<Rust> for &Ident {
+	fn format_into(self, tokens: &mut rust::Tokens) {
+		quote_in!(*tokens => $(self.0.as_ref()))
 	}
 }
 impl Debug for Ident {
