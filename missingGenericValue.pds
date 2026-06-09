@@ -1,0 +1,12 @@
+def(a) {
+	type(Generic);
+} => container{
+	field(b) => Generic;
+};
+
+namespace(protocol) {
+	def_native(u8);
+};
+def(used) => container {
+	field(used) => a;
+};

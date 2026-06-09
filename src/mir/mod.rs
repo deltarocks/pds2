@@ -51,15 +51,6 @@ pub enum TypeKind {
 		matches: Vec<(Value, Ident, Type)>,
 		default: Option<(Ident, Type)>,
 	},
-	FixedSizeArray {
-		size: u32,
-		t: Type,
-	},
-	DynamicArray {
-		size_ref: Field,
-		// size_ref_type?
-		t: Type,
-	},
 	Native(NativeType),
 	Void,
 }

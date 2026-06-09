@@ -1,0 +1,4 @@
+def(parent) => container {
+    field(value) => skip;
+};
+def_native(skip);

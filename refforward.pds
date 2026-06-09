@@ -1,0 +1,11 @@
+def_native(parray) {argument(size);virtual_field(size) => usize;};
+def_native(usize);
+
+def(a) => container {
+    field(a) => container {
+        field(b) => container {
+            virtual_field(c, value: ../../array/@size) => usize;
+        };
+    };
+    field(array) => parray(size: ../a/b/c);
+};

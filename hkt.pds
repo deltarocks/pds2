@@ -1,0 +1,16 @@
+def_native(u8);
+
+def(a) {
+    type(Value);
+} => container {
+    field(a) => Value;
+};
+def(b) {
+    type(Wrapped);
+    type(Value);
+} => container {
+    field(b) => Wrapped => Value;
+};
+def(out) => container {
+    field(bu8) => b(Wrapped: a) => u8;
+};

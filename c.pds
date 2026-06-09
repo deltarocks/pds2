@@ -1,0 +1,20 @@
+def_native(u8);
+def(myType) => container {
+	field(a) => container {
+		field(b) => container {
+			field(c) => container {
+				virtual_field(d, value: ../../../p) => u8;
+			};
+		};
+	};
+
+	field(p) => u8;
+
+	field(e) => container {
+		field(f) => container {
+			field(g) => container {
+				virtual_field(v, value: ../../../p) => u8;
+			};
+		};
+	};
+};

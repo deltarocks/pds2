@@ -1,0 +1,6 @@
+
+
+
+def(packet) => container {
+    @!bitfield
+};

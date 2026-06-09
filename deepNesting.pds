@@ -1,0 +1,13 @@
+def_native(u8);
+
+def(a) => container {
+    field(b) => container {
+        field(c) => container {
+            field(d) => container {
+                field(e) => container {
+                    field(f) => u8;
+                };
+            };
+        };
+    };
+};

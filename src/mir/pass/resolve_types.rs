@@ -66,73 +66,79 @@ impl Definition {
 		match &self.kind {
 			mir::TypeKind::Container { fields, .. } => {
 				for field in fields.iter() {
-					let r = &field.ty;
-					for (name, ty) in &r.args {
-						let Some(ty) = ty.as_field() else {
-							continue;
-						};
-						out.used(r.target, name, Self::resolve_ref(self_id, types, ty)?);
-					}
+					Self::resolve_type_use(self_id, &field.ty, types, out)?;
 					if let Some(from) = &field.load_from {
 						Self::resolve_ref(self_id, types, from)
 							.with_context(|| format!("failed to resolve {:?}", from))?;
 					}
 				}
 			}
-			mir::TypeKind::FixedSizeArray { t, .. } => {
-				for (name, ty) in &t.args {
-					let Some(ty) = ty.as_field() else {
-						continue;
-					};
-					out.used(t.target, name, Self::resolve_ref(self_id, types, ty)?);
-				}
-			}
-			mir::TypeKind::DynamicArray { size_ref, t, .. } => {
-				Self::resolve_ref(self_id, types, size_ref)?;
-				for (name, ty) in &t.args {
-					let Some(ty) = ty.as_field() else {
-						continue;
-					};
-					out.used(t.target, name, Self::resolve_ref(self_id, types, ty)?);
-				}
-			}
 			mir::TypeKind::Union {
 				tag,
-				tag_type,
+				tag_type: _,
 				matches,
 				default,
 			} => {
-				out.used_internal(
-					*tag_type,
-					"tag_type",
-					Self::resolve_ref(self_id, types, tag)?,
-				);
+				out.used_internal(self_id, "tag_type", Self::resolve_ref(self_id, types, tag)?);
 				for (_, _, ty) in matches {
-					for (name, r) in &ty.args {
-						let Some(r) = r.as_field() else {
-							continue;
-						};
-						out.used(ty.target, name, Self::resolve_ref(self_id, types, r)?)
-					}
+					Self::resolve_type_use(self_id, ty, types, out)?;
 				}
 				if let Some(default) = default {
-					for (name, ty) in &default.1.args {
-						let Some(ty) = ty.as_field() else {
-							continue;
-						};
-						out.used(
-							default.1.target,
-							name,
-							Self::resolve_ref(self_id, types, ty)?,
-						)
-					}
+					Self::resolve_type_use(self_id, &default.1, types, out)?;
 				}
 			}
 			mir::TypeKind::Native(_native) => {
-				// TODO: walk non-native part of native types
+				// Handled at use level, see `resolve_type_use`
 			}
 			mir::TypeKind::Void => {}
 		};
+		Ok(())
+	}
+
+	/// Resolve the argument references of a single type-use (`target` plus the
+	/// `args` bound to its params) in `scope`.
+	///
+	/// Native types are transparent at their use site: they are monomorphized per
+	/// use and their specialization carries the bindings for the contained
+	/// types' params (e.g. `array`'s `Value`), with references scoped to the
+	/// enclosing container. So when the target is native we recurse into its
+	/// specialization/fields, keeping the same `scope`, instead of relying on the
+	/// native def being visited on its own (where the scope would be wrong).
+	fn resolve_type_use(
+		scope: TypeId,
+		ty: &mir::Type,
+		types: &TypeMap,
+		out: &mut TypeUsageCollector,
+	) -> Result<()> {
+		Self::resolve_type_use_inner(scope, ty, types, out, &mut HashSet::new())
+	}
+
+	fn resolve_type_use_inner(
+		scope: TypeId,
+		ty: &mir::Type,
+		types: &TypeMap,
+		out: &mut TypeUsageCollector,
+		visited: &mut HashSet<TypeId>,
+	) -> Result<()> {
+		for (name, arg) in &ty.args {
+			let Some(arg) = arg.as_field() else {
+				continue;
+			};
+			out.used(ty.target, name, Self::resolve_ref(scope, types, arg)?);
+		}
+		if !visited.insert(ty.target) {
+			return Ok(());
+		}
+		if let mir::TypeKind::Native(native) = &types[ty.target].kind {
+			for (_, sub) in native
+				.specialization
+				.iter()
+				.chain(native.virtual_fields.iter())
+				.chain(native.fields.iter())
+			{
+				Self::resolve_type_use_inner(scope, sub, types, out, visited)?;
+			}
+		}
 		Ok(())
 	}
 
@@ -219,17 +225,6 @@ impl Definition {
 			{
 				*tag_type
 			}
-			(FieldRefSegment::Virtual(name), mir::TypeKind::DynamicArray { .. })
-				if name.as_str() == "size" =>
-			{
-				let ty = types
-					.0
-					.iter()
-					.find(|t| t.1.name.item == Ident::new("usize"));
-				ensure!(ty.is_some(), "expected to find defined usize");
-
-				*ty.unwrap().0
-			}
 			(
 				FieldRefSegment::Virtual(name),
 				mir::TypeKind::Native(NativeType {
@@ -285,8 +280,6 @@ impl Definition {
 				matches: _,
 				default: _,
 			} => *tag_type = collector.find_internal_type(i, "tag_type")?,
-			mir::TypeKind::FixedSizeArray { size: _, t: _ } => {}
-			mir::TypeKind::DynamicArray { size_ref: _, t: _ } => {}
 			mir::TypeKind::Native(_native_type) => {}
 			mir::TypeKind::Void => {}
 		}
@@ -316,8 +309,24 @@ pub fn resolve_types(types: &mut TypeMap) -> Result<()> {
 				.with_context(|| format!("in {:?}", d.name))?;
 		}
 		if collector.has_invalid && !collector.has_valid {
-			// TODO: print unresolved
-			bail!("type resolution stuck");
+			let mut unresolved = Vec::new();
+			for (i, d) in types.0.iter() {
+				for (name, _) in d.params.iter() {
+					if !collector.find_type(*i, name)?.is_valid() {
+						unresolved.push(format!("{:?} argument {name:?}", d.name));
+					}
+				}
+				if matches!(d.kind, mir::TypeKind::Union { .. })
+					&& !collector.find_internal_type(*i, "tag_type")?.is_valid()
+				{
+					unresolved.push(format!("{:?} tag type", d.name));
+				}
+			}
+			bail!(
+				"type resolution stuck; could not infer a type for the following \
+				 (most likely generic definitions that are never instantiated): {}",
+				unresolved.join(", ")
+			);
 		} else if !collector.has_invalid && !collector.has_valid {
 			break;
 		}

@@ -1,0 +1,13 @@
+def(radiationGuard) {
+	type(Value);
+} => container {
+	field(k) => Value;
+	field(b) => container {
+		field(c) => Value;
+	};
+};
+def_native(u8);
+def(test) => container {
+	field(test) => radiationGuard => u8;
+};
+

@@ -194,34 +194,6 @@ pub fn generator(
 						}
 					}
 				}
-				TypeKind::DynamicArray { size_ref, t } => {
-					quote! {
-						pub type Ty = $stdvec<$(meta.ty(t.target))>;
-
-						pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
-							for item in _0 {
-								$(meta.serialize(t.target))(&item, output)?;
-							}
-							Ok(())
-						}
-						pub fn deserialize(input: &mut $pinput, $(if has_args => args: Args<'_>)) -> $presult<Ty> {
-							let mut out = Vec::with_capacity(*$(generate_read_reference(&meta, false, size_ref, Some(&quote!(usize)))));
-							for _ in 0..(*$(generate_read_reference(&meta, false, size_ref, Some(&quote!(usize))))) {
-								out.push($(meta.deserialize(t.target))(input)?);
-							}
-							Ok(out)
-						}
-						pub fn size_of(_0: &Ty) -> usize {
-							_0
-								.iter()
-								.map(|v| $(meta.size_of(t.target))(&v))
-								.sum()
-						}
-						pub fn virtual_size(_0: &Ty) -> super::pds_usize::Ty {
-							_0.len() as super::pds_usize::Ty
-						}
-					}
-				}
 				TypeKind::Union {
 					tag: _,
 					tag_type,
@@ -265,16 +237,9 @@ pub fn generator(
 						}
 					}
 				}
-				TypeKind::FixedSizeArray { size, t } => {
-					quote! {
-						$("// TODO: fixed size")
-					}
-					// pi!(pi =>
-					// 	"type " {=name} " = ["{=input[t.target].name.readable_name()}"; "{=size}"];"
-					//
-					// );
+				TypeKind::Native(_) | TypeKind::Void => {
+					quote! {$("// TODO: Native")}
 				}
-				TypeKind::Native(_) | TypeKind::Void => unreachable!(),
 				// pi!(pi => "/// " {?ty.name} NL);
 				// pi!(pi => "pub mod " {=meta.name(*id)} " {" INDENT NL);
 				// pi!(pi => "use std::convert::TryInto;" NL);
