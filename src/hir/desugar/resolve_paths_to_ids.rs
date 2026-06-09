@@ -43,6 +43,11 @@ impl TypeKind {
 					}
 				}
 			}
+			TypeKind::Union(u) => {
+				for (_, _, ele) in u.values.iter_mut() {
+					ele.resolve_paths_to_ids(paths)?
+				}
+			}
 			TypeKind::Native(NativeType {
 				virtual_fields,
 				specializer: _,

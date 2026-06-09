@@ -49,7 +49,7 @@ pub fn parse_reference(r: &str, extra_ups: usize) -> Result<ast::FieldRef> {
 pub fn upgrade_value(value: Value) -> Result<ast::Value> {
 	match value {
 		Value::Number(n) => Ok(ast::Value::Int(
-			n.as_i64().ok_or_else(|| anyhow!("bad integer"))?,
+			n.as_i64().ok_or_else(|| anyhow!("bad integer"))? as i128,
 		)),
 		_ => bail!("unknown value type"),
 	}

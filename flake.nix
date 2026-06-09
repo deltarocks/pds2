@@ -1,6 +1,6 @@
 {
   description = "Prodocol Description Something 2";
-  inputs.nixpkgs.url = "github:nixos/nixpkgs";
+  inputs.nixpkgs.url = "github:nixos/nixpkgs/release-24.11";
   inputs.flake-utils.url = "github:numtide/flake-utils";
   inputs.rust-overlay = {
     url = "github:oxalica/rust-overlay";

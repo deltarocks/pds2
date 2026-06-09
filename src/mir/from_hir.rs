@@ -1,13 +1,13 @@
 use crate::{
 	ast::{self, FieldRef, Ident, Path},
-	hir::{self, Reference, ReferenceKind, TypeId},
+	hir::{self, FieldRefOrConst, Reference, ReferenceKind, TypeId},
 	mir::{self, FieldItem},
 	should_be_desugared,
 };
 use anyhow::{bail, Result};
 use std::collections::HashMap;
 
-use super::{Definition, Field, NativeType, Type, TypeKind, TypeMap, Value};
+use super::{Definition, Field, FieldOrConst, NativeType, Type, TypeKind, TypeMap, Value};
 
 impl Type {
 	fn from_hir(kind: &hir::TypeKind) -> Self {
@@ -22,7 +22,7 @@ impl Type {
 					target: *target,
 					args: args
 						.iter()
-						.map(|(n, r)| (n.clone(), Field::from_hir(r)))
+						.map(|(n, r)| (n.clone(), FieldOrConst::from_hir(r)))
 						.collect(),
 				}
 			}
@@ -35,12 +35,12 @@ impl Type {
 }
 
 impl Value {
-	fn from_hir(hir: &ast::Value) -> Result<Self> {
-		Ok(match hir {
-			ast::Value::String { string, .. } => Self::String(string.clone()),
-			ast::Value::Int(i) => Self::Signed(*i as i128),
-			_ => bail!("unexpected value type"),
-		})
+	fn from_hir(hir: &hir::Value) -> Self {
+		match hir {
+			hir::Value::Number(n) => Self::Signed(*n),
+			hir::Value::String(_) => todo!(),
+			hir::Value::UnionDescriminator(ident) => todo!(),
+		}
 	}
 }
 
@@ -70,6 +70,31 @@ impl TypeKind {
 					.collect::<Result<_>>()?,
 				delegate_all: c.delegate_all.clone(),
 			},
+			hir::TypeKind::Union(u) => {
+				Self::Union {
+					tag: Field::from_hir(&u.tag),
+					tag_type: TypeId::default(),
+					matches: u
+						.values
+						.iter()
+						.map(|(value, map, ty)| {
+							(
+								match value {
+									hir::Value::Number(n) => Value::Signed(*n),
+									hir::Value::String(n) => Value::String(n.clone()),
+									hir::Value::UnionDescriminator(id) => {
+										Value::UnionDescriminator(id.clone())
+									}
+								},
+								map.clone(),
+								Type::from_hir(ty),
+							)
+						})
+						.collect(),
+					// TODO
+					default: None,
+				}
+			}
 			hir::TypeKind::Reference(Reference { .. }) => todo!("type alias: {hir:?}"),
 			hir::TypeKind::Native(hir::NativeType {
 				virtual_fields,
@@ -123,6 +148,15 @@ impl Field {
 				})
 				.collect(),
 		)
+	}
+}
+
+impl FieldOrConst {
+	fn from_hir(hir: &FieldRefOrConst) -> Self {
+		match hir {
+			FieldRefOrConst::FieldRef(field_ref) => FieldOrConst::Field(Field::from_hir(field_ref)),
+			FieldRefOrConst::Const(value) => FieldOrConst::Const(Value::from_hir(value)),
+		}
 	}
 }
 

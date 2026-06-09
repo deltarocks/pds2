@@ -1,8 +1,13 @@
 use std::collections::BTreeMap;
 
 use crate::{
-	ast::{Block, Ident, Item, ParseValue, Statement, Value},
-	hir::{Container, ContainerFieldType, NamespaceItem, NativeType, Reference, ReferenceKind},
+	ast::{
+		BaseFieldRef, Block, FieldRef, FieldRefSegment, Ident, Item, ParseValue, Statement, Value,
+	},
+	hir::{
+		Container, ContainerFieldType, FieldRefOrConst, NamespaceItem, NativeType, Reference,
+		ReferenceKind, Union, Value as HirValue,
+	},
 };
 
 use super::{IdGenerator, Namespace, Type, TypeKind};
@@ -65,6 +70,103 @@ impl Type {
 			params,
 			kind: TypeKind::from_ast(value, items)?,
 		})
+	}
+}
+
+impl Union {
+	fn from_ast(item: Item) -> Result<TypeKind> {
+		let tag = item
+			.args
+			.either::<Item, FieldRef>("tagType", "tag")
+			.context("union tag")?;
+		item.args.verify_unused()?;
+
+		let mut fields = Vec::new();
+
+		for stmt in item.block.statements {
+			let (_attrs, item, mut items) = stmt.pop_item()?;
+			match item.name.expect_simple_name()?.as_str() {
+				"variant" => {
+					let name: Ident = item.args.arg(0, "field name")?;
+					let value: Value = item.args.named("match")?;
+					item.args.verify_unused()?;
+					let value = match i128::parse(value.clone()) {
+						Ok(n) => HirValue::Number(n),
+						Err(_) => match value {
+							Value::String { string, is_block: _ } => {
+								HirValue::UnionDescriminator(Ident::new(&string))
+							},
+							_ => bail!("union match value should be either number on union descriminator string")
+						},
+					};
+					if items.is_empty() {
+						fields.push((value, name, TypeKind::Void));
+					} else {
+						let type_item = items
+							.remove(0)
+							.into_item()
+							.ok_or_else(|| anyhow!("field item should be item"))?;
+						fields.push((
+							value,
+							name,
+							TypeKind::from_ast(type_item, items).context("union item type")?,
+						));
+					}
+				}
+				v => bail!("unknown container field type: {}", v),
+			}
+		}
+
+		match tag {
+			Ok(t) => Ok(TypeKind::Container(Container {
+				virt: true,
+				fields: vec![
+					(
+						Ident::new("_tag"),
+						ContainerFieldType::Normal(
+							TypeKind::from_ast(t, vec![]).context("union tag")?,
+						),
+					),
+					(
+						Ident::new("_value"),
+						ContainerFieldType::Normal(TypeKind::Union(Self {
+							tag: FieldRef {
+								up: 0,
+								path: BaseFieldRef(vec![FieldRefSegment::Down {
+									to: Ident::new("_tag"),
+									ignore_delegation: true,
+								}]),
+							},
+							values: fields,
+						})),
+					),
+				],
+				delegate_all: Some(Ident::new("_value")),
+			})),
+			Err(tag) => Ok(TypeKind::Union(Self {
+				tag,
+				values: fields,
+			})),
+		}
+		// Ok(Self{
+		// 	tag:
+		// })
+
+		// match
+		// {
+		// 	Ok(tag_ty) => {
+		// 		todo!()
+		// 	}
+		// 	Err(v) => {
+		// 		for ele in item.block.statements {
+		//
+		// 		}
+		// 		Ok(Self{
+		// 		tag: v,
+		// 		values:
+		// 	})
+		// 	}
+		// }
 	}
 }
 
@@ -132,9 +234,17 @@ impl TypeKind {
 					ensure!(items.is_empty(), "container has no items");
 					TypeKind::Container(Container::from_ast(value).context("parsing container")?)
 				}
+				"union" => {
+					ensure!(items.is_empty(), "union has no items");
+					Union::from_ast(value).context("parsing union")?
+				}
 				_ => {
 					// ensure!(items.is_empty(), "unexpected values");
-					ensure!(value.block.is_empty(), "unexpected block");
+					ensure!(
+						value.block.is_empty(),
+						"unexpected block for {}",
+						simple.as_str()
+					);
 
 					let mut args = Vec::new();
 					let mut types = BTreeMap::new();
@@ -147,7 +257,18 @@ impl TypeKind {
 								bail!("generic set twice: {name:?}")
 							}
 						} else {
-							args.push((name.clone(), value.args.named(name.clone())?));
+							let value: Value = value
+								.args
+								.named(name.clone())
+								.context("parsing value argument")?;
+							args.push((
+								name.clone(),
+								match value {
+									Value::FieldRef(field_ref) => FieldRefOrConst::FieldRef(field_ref),
+									Value::Int(i) => FieldRefOrConst::Const(HirValue::Number(i)),
+									_ => bail!("reference argument should be either field reference or constant"),
+								},
+							));
 						}
 					}
 					value.args.verify_unused()?;

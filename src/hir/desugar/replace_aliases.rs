@@ -14,16 +14,17 @@
 
 use std::collections::BTreeMap;
 
-use crate::ast::{BaseFieldRef, FieldRefSegment, Ident};
+use crate::ast::{FieldRefSegment, Ident};
 use crate::hir::{
-	Namespace, Reference, ReferenceKind, Traverse, TraverseSkip, Type, TypeId, TypeKind, Visitor,
+	BaseFieldRefOrConst, FieldRefOrConst, Namespace, Reference, ReferenceKind, Traverse,
+	TraverseSkip, Type, TypeId, TypeKind, Visitor,
 };
 use anyhow::Result;
 
 #[derive(Debug)]
 struct Alias {
 	target: TypeId,
-	remap_arguments: BTreeMap<Ident, BaseFieldRef>,
+	remap_arguments: BTreeMap<Ident, BaseFieldRefOrConst>,
 }
 
 struct CollectAliasList<'t> {
@@ -50,13 +51,24 @@ impl Visitor for CollectAliasList<'_> {
 				.map(|(name, value)| {
 					dbg!(value);
 					dbg!(name);
-					assert_eq!(value.up, 0);
-					let mut refer = value.path.clone();
-					let first_segment = refer.0.remove(0);
-					let FieldRefSegment::Arg(arg) = first_segment else {panic!("first segment should be arg, got {first_segment:?}")};
-					// assert_eq!(&arg, name);
-					// let mut value = value.clone();
-					(name.clone(), refer)
+
+					(
+						name.clone(),
+						match value {
+							FieldRefOrConst::FieldRef(value) => {
+								assert_eq!(value.up, 0);
+								let mut refer = value.path.clone();
+								let first_segment = refer.0.remove(0);
+								let FieldRefSegment::Arg(arg) = first_segment else {
+									panic!("first segment should be arg, got {first_segment:?}")
+								};
+								// assert_eq!(&arg, name);
+								// let mut value = value.clone();
+								BaseFieldRefOrConst::BaseFieldRef(refer)
+							}
+							FieldRefOrConst::Const(c) => BaseFieldRefOrConst::Const(c.clone()),
+						},
+					)
 				})
 				.collect();
 			if self
@@ -108,7 +120,16 @@ impl Visitor for ReplaceAliasedReferences<'_> {
 							.get(name)
 							.ok_or_else(|| format!("TODO: unused argument? {name:?}"))
 							.unwrap();
-						value.path.0.extend_from_slice(&remap.0);
+						match (remap, &mut value) {
+							(
+								BaseFieldRefOrConst::BaseFieldRef(remap),
+								FieldRefOrConst::FieldRef(value),
+							) => {
+								value.path.0.extend_from_slice(&remap.0);
+							}
+							(BaseFieldRefOrConst::Const(_), FieldRefOrConst::Const(_)) => {}
+							_ => unreachable!(),
+						}
 						(name.clone(), value)
 					})
 					.collect(),

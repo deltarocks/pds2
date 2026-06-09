@@ -45,8 +45,8 @@ use anyhow::Result;
 use crate::{
 	ast::{BaseFieldRef, FieldRef, FieldRefSegment, Ident},
 	hir::{
-		IdGenerator, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip, Type, TypeKind,
-		Visitor,
+		FieldRefOrConst, IdGenerator, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip,
+		Type, TypeKind, Visitor,
 	},
 };
 
@@ -70,7 +70,11 @@ impl Visitor for TypeReceiver {
 		});
 		*ty = TypeKind::Reference(Reference {
 			ty: ReferenceKind::Resolved(id),
-			args: collector.args,
+			args: collector
+				.args
+				.into_iter()
+				.map(|(i, f)| (i, FieldRefOrConst::FieldRef(f)))
+				.collect(),
 			types: BTreeMap::new(),
 		});
 		Ok(())

@@ -15,6 +15,10 @@ struct TypeUsageCollector {
 	has_valid: bool,
 }
 impl TypeUsageCollector {
+	fn used_internal(&mut self, id: TypeId, name: &'static str, ty: TypeId) {
+		let name = format!("internal<{name}>");
+		self.used(id, &Ident::new(&name), ty);
+	}
 	fn used(&mut self, id: TypeId, name: &Ident, ty: TypeId) {
 		if !ty.is_valid() {
 			self.has_invalid = true;
@@ -31,6 +35,10 @@ impl TypeUsageCollector {
 	fn reset_validity(&mut self) {
 		self.has_invalid = false;
 		self.has_valid = false;
+	}
+	fn find_internal_type(&self, id: TypeId, name: &'static str) -> Result<TypeId> {
+		let name = format!("internal<{name}>");
+		self.find_type(id, &Ident::new(&name))
 	}
 	fn find_type(&self, id: TypeId, name: &Ident) -> Result<TypeId> {
 		let possible = self.data.get(&id).and_then(|args| args.get(name));
@@ -60,6 +68,9 @@ impl Definition {
 				for field in fields.iter() {
 					let r = &field.ty;
 					for (name, ty) in &r.args {
+						let Some(ty) = ty.as_field() else {
+							continue;
+						};
 						out.used(r.target, name, Self::resolve_ref(self_id, types, ty)?);
 					}
 					if let Some(from) = &field.load_from {
@@ -70,28 +81,45 @@ impl Definition {
 			}
 			mir::TypeKind::FixedSizeArray { t, .. } => {
 				for (name, ty) in &t.args {
+					let Some(ty) = ty.as_field() else {
+						continue;
+					};
 					out.used(t.target, name, Self::resolve_ref(self_id, types, ty)?);
 				}
 			}
 			mir::TypeKind::DynamicArray { size_ref, t, .. } => {
 				Self::resolve_ref(self_id, types, size_ref)?;
 				for (name, ty) in &t.args {
+					let Some(ty) = ty.as_field() else {
+						continue;
+					};
 					out.used(t.target, name, Self::resolve_ref(self_id, types, ty)?);
 				}
 			}
 			mir::TypeKind::Union {
 				tag,
+				tag_type,
 				matches,
 				default,
 			} => {
-				Self::resolve_ref(self_id, types, tag)?;
+				out.used_internal(
+					*tag_type,
+					"tag_type",
+					Self::resolve_ref(self_id, types, tag)?,
+				);
 				for (_, _, ty) in matches {
 					for (name, r) in &ty.args {
+						let Some(r) = r.as_field() else {
+							continue;
+						};
 						out.used(ty.target, name, Self::resolve_ref(self_id, types, r)?)
 					}
 				}
 				if let Some(default) = default {
 					for (name, ty) in &default.1.args {
+						let Some(ty) = ty.as_field() else {
+							continue;
+						};
 						out.used(
 							default.1.target,
 							name,
@@ -221,6 +249,23 @@ impl Definition {
 		for (name, param) in self.params.iter_mut() {
 			dbg!(&name);
 			*param = dbg!(collector.find_type(i, name)?);
+		}
+		match &mut self.kind {
+			mir::TypeKind::Container {
+				virt: _,
+				fields: _,
+				delegate_all: _,
+			} => {}
+			mir::TypeKind::Union {
+				tag: _,
+				tag_type,
+				matches: _,
+				default: _,
+			} => *tag_type = collector.find_internal_type(i, "tag_type")?,
+			mir::TypeKind::FixedSizeArray { size: _, t: _ } => {}
+			mir::TypeKind::DynamicArray { size_ref: _, t: _ } => {}
+			mir::TypeKind::Native(_native_type) => {}
+			mir::TypeKind::Void => {}
 		}
 		Ok(())
 	}

@@ -87,7 +87,7 @@ struct ReplaceGenericReferencesWithSpecified<'t> {
 impl Visitor for ReplaceGenericReferencesWithSpecified<'_> {
 	fn visit_reference(&mut self, re: &mut Reference) -> Result<()> {
 		let ReferenceKind::Generic(gen) = &re.ty else {
-			return Ok(())
+			return Ok(());
 		};
 		if self.still_unset.contains_key(gen) {
 			return Ok(());
@@ -175,7 +175,7 @@ struct EnsureNoReferencesTo<'t>(&'t HashSet<TypeId>);
 impl Visitor for EnsureNoReferencesTo<'_> {
 	fn visit_reference(&mut self, re: &mut Reference) -> Result<()> {
 		let Some(r) = re.ty.resolved() else {
-			return Ok(())
+			return Ok(());
 		};
 		if self.0.contains(&r) {
 			bail!("failed to resolve generic type arguments, some missing");

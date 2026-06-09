@@ -44,6 +44,7 @@ rule valueChain() -> Vec<Value>
 rule value() -> Value
 	= s:string_block() { Value::String { is_block: true, string: s } }
 	/ s:string_singleline() { Value::String { is_block: false, string: s } }
+	/ "0x" i:$(['0'..='9' | 'a'..='f']+) { Value::Int(i128::from_str_radix(i, 16).unwrap()) }
 	/ i:$(['0'..='9']+) { Value::Int(i.parse().unwrap()) }
 	/ i:item() { Value::Item(i) }
 	/ r:reference() { Value::FieldRef(r) }

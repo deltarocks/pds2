@@ -1,4 +1,4 @@
-use crate::ast::{FieldRef, Ident, Path};
+use crate::ast::{self, BaseFieldRef, FieldRef, Ident, ParseValue, Path};
 use std::{cell::Cell, collections::BTreeMap};
 mod from_ast;
 use anyhow::{Context, Result};
@@ -96,8 +96,11 @@ impl Traverse for Namespace {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ContainerFieldType {
+	// Normal field = typed name
 	Normal(TypeKind),
+	// Virtual field = can't read, during write field reference is written instead.
 	Virtual(FieldRef, TypeKind),
+	//
 	Delegate(Ident),
 }
 impl Traverse for ContainerFieldType {
@@ -116,6 +119,7 @@ impl Traverse for ContainerFieldType {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Container {
+	/// Virtual containers
 	pub virt: bool,
 	pub fields: Vec<(Ident, ContainerFieldType)>,
 	pub delegate_all: Option<Ident>,
@@ -131,6 +135,36 @@ impl Traverse for Container {
 				}
 				ContainerFieldType::Delegate(_) => todo!(),
 			}
+		}
+		Ok(())
+	}
+}
+
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
+pub enum Value {
+	Number(i128),
+	String(String),
+	UnionDescriminator(Ident),
+}
+impl Traverse for Value {
+	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+		Ok(())
+	}
+}
+
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
+pub struct Union {
+	// TODO: Should it be `tag or tagType`, and not just `tag` in HIR?
+	pub tag: FieldRef,
+	// TODO: Conditional value? To make Union a replacement for match statement of some sort.
+	pub values: Vec<(Value, Ident, TypeKind)>,
+}
+impl Traverse for Union {
+	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+		for (v, a, ele) in self.values.iter_mut() {
+			v.traverse(visitor, skip).context("union key")?;
+			ele.traverse(visitor, skip)
+				.with_context(|| format!("union value {a:?}"))?;
 		}
 		Ok(())
 	}
@@ -205,9 +239,28 @@ impl ReferenceKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FieldRefOrConst {
+	FieldRef(FieldRef),
+	Const(Value),
+}
+impl Traverse for FieldRefOrConst {
+	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+		match self {
+			FieldRefOrConst::FieldRef(field_ref) => visitor.visit_field_ref(field_ref),
+			FieldRefOrConst::Const(value) => value.traverse(visitor, skip),
+		}
+	}
+}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum BaseFieldRefOrConst {
+	BaseFieldRef(BaseFieldRef),
+	Const(Value),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Reference {
 	pub ty: ReferenceKind,
-	pub args: Vec<(Ident, FieldRef)>,
+	pub args: Vec<(Ident, FieldRefOrConst)>,
 	pub types: BTreeMap<Ident, TypeKind>,
 }
 impl Traverse for Reference {
@@ -217,7 +270,7 @@ impl Traverse for Reference {
 		}
 
 		for (_, f) in self.args.iter_mut() {
-			visitor.visit_field_ref(f)?;
+			f.traverse(visitor, skip).context("reference argument")?;
 		}
 		for (t, v) in self.types.iter_mut() {
 			v.traverse(visitor, skip)
@@ -235,6 +288,7 @@ impl Traverse for Reference {
 pub enum TypeKind {
 	Void,
 	Container(Container),
+	Union(Union),
 	Reference(Reference),
 	Native(NativeType),
 }
@@ -259,6 +313,7 @@ impl Traverse for TypeKind {
 				TypeKind::Container(c) => c.traverse(visitor, skip)?,
 				TypeKind::Reference(r) => r.traverse(visitor, skip)?,
 				TypeKind::Native(n) => n.traverse(visitor, skip)?,
+				TypeKind::Union(c) => c.traverse(visitor, skip)?,
 			}
 		}
 

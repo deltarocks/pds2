@@ -11,7 +11,7 @@ use crate::{
 #[derive(Debug)]
 pub struct Type {
 	pub target: TypeId,
-	pub args: Vec<(Ident, Field)>,
+	pub args: Vec<(Ident, FieldOrConst)>,
 }
 
 #[derive(Debug)]
@@ -46,6 +46,7 @@ pub enum TypeKind {
 	},
 	Union {
 		tag: Field,
+		tag_type: TypeId,
 		matches: Vec<(Value, Ident, Type)>,
 		default: Option<(Ident, Type)>,
 	},
@@ -55,6 +56,7 @@ pub enum TypeKind {
 	},
 	DynamicArray {
 		size_ref: Field,
+		// size_ref_type?
 		t: Type,
 	},
 	Native(NativeType),
@@ -67,11 +69,12 @@ impl TypeKind {
 	}
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Value {
 	Unsigned(u128),
 	Signed(i128),
 	String(String),
+	UnionDescriminator(Ident),
 }
 
 #[derive(Debug)]
@@ -122,5 +125,19 @@ impl std::fmt::Debug for Field {
 			write!(f, "/{:?}", item)?;
 		}
 		Ok(())
+	}
+}
+
+#[derive(Clone, Debug)]
+pub enum FieldOrConst {
+	Field(Field),
+	Const(Value),
+}
+impl FieldOrConst {
+	fn as_field(&self) -> Option<&Field> {
+		match self {
+			FieldOrConst::Field(field) => Some(field),
+			FieldOrConst::Const(_) => None,
+		}
 	}
 }

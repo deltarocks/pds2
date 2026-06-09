@@ -1,12 +1,13 @@
 use genco::lang::rust::import;
 use genco::prelude::*;
 use genco::quote;
-use rust::{Tokens, Import};
+use rust::{Import, Tokens};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::ast::{FieldRefSegment, Ident};
 use crate::hir::TypeId;
+use crate::mir::FieldOrConst;
 use crate::mir::{self, Field, Type, TypeKind, TypeMap};
 
 use super::GeneratorOutput;
@@ -58,6 +59,18 @@ impl RustMeta {
 	}
 }
 
+fn generate_read_or_const_reference(
+	types: &RustMeta,
+	from_locals: bool,
+	input: &FieldOrConst,
+	target: Option<&Tokens>,
+) -> Tokens {
+	let input = match input {
+		FieldOrConst::Field(field) => field,
+		FieldOrConst::Const(_) => return quote!(Into::<$target>::into(todo!("const"))),
+	};
+	generate_read_reference(types, from_locals, input, target)
+}
 fn generate_read_reference(
 	types: &RustMeta,
 	from_locals: bool,
@@ -97,7 +110,7 @@ fn generate_read_reference(
 fn generate_args_passing(types: &RustMeta, input: &Type) -> Tokens {
 	let mut args = vec![];
 	for (name, field) in input.args.iter() {
-		args.push(quote!($name: $(generate_read_reference(types, true, field, None))))
+		args.push(quote!($name: $(generate_read_or_const_reference(types, true, field, None))))
 	}
 	quote! {
 		$(types.args(input.target)) {
@@ -211,6 +224,7 @@ pub fn generator(
 				}
 				TypeKind::Union {
 					tag: _,
+					tag_type,
 					matches,
 					default,
 				} => {
@@ -342,7 +356,10 @@ pub fn generator(
 					}
 				}
 				_ => {
-					let import = import("crate::pds_native", format!("pds_{}", ty.name.readable_name()));
+					let import = import(
+						"crate::pds_native",
+						format!("pds_{}", ty.name.readable_name()),
+					);
 					quote!(pub use $import::*;)
 				}
 			}

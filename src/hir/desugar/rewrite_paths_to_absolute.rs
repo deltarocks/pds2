@@ -34,14 +34,20 @@ use crate::{
 	ast::Ident,
 	hir::{
 		Container, ContainerFieldType, Namespace, NamespaceItem, NativeType, Reference,
-		ReferenceKind, Type, TypeKind,
+		ReferenceKind, Type, TypeKind, Union,
 	},
 };
 
 impl TypeKind {
-	fn rewrite_paths_to_absolute(&mut self, current_ns: &[Ident], generics: &HashSet<Ident>) {
+	fn rewrite_paths_to_absolute(
+		&mut self,
+		current_ns: &[Ident],
+		generics: &HashSet<Ident>,
+		paths: &HashSet<Vec<Ident>>,
+	) {
 		match self {
-			TypeKind::Container(c) => c.rewrite_paths_to_absolute(current_ns, generics),
+			TypeKind::Container(c) => c.rewrite_paths_to_absolute(current_ns, generics, paths),
+			TypeKind::Union(u) => u.rewrite_paths_to_absolute(current_ns, generics, paths),
 			TypeKind::Reference(Reference {
 				ty: ty @ ReferenceKind::Path(_),
 				types,
@@ -58,10 +64,10 @@ impl TypeKind {
 				}
 				// Try to resolve absolute path
 				if let Some(p) = ty.path_mut() {
-					p.rewrite_to_absolute(current_ns);
+					p.rewrite_to_absolute(current_ns, paths);
 				}
 				for (_, ty) in types.iter_mut() {
-					ty.rewrite_paths_to_absolute(current_ns, generics)
+					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
 			}
 			TypeKind::Reference(Reference {
@@ -70,7 +76,7 @@ impl TypeKind {
 				..
 			}) => {
 				for (_, ty) in types.iter_mut() {
-					ty.rewrite_paths_to_absolute(current_ns, generics)
+					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
 			}
 			TypeKind::Void => {}
@@ -80,10 +86,10 @@ impl TypeKind {
 				specialization,
 			}) => {
 				for (_, ty) in specialization.iter_mut() {
-					ty.rewrite_paths_to_absolute(current_ns, generics)
+					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
 				for (_, ty) in virtual_fields.iter_mut() {
-					ty.rewrite_paths_to_absolute(current_ns, generics)
+					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
 			}
 		}
@@ -91,7 +97,7 @@ impl TypeKind {
 }
 
 impl Type {
-	fn rewrite_paths_to_absolute(&mut self, current_ns: &[Ident]) {
+	fn rewrite_paths_to_absolute(&mut self, current_ns: &[Ident], paths: &HashSet<Vec<Ident>>) {
 		let generics = self
 			.types
 			.iter()
@@ -99,10 +105,11 @@ impl Type {
 			.collect::<HashSet<_>>();
 		for (_, t) in self.types.iter_mut() {
 			if let Some(t) = t {
-				t.rewrite_paths_to_absolute(current_ns, &generics);
+				t.rewrite_paths_to_absolute(current_ns, &generics, paths);
 			}
 		}
-		self.kind.rewrite_paths_to_absolute(current_ns, &generics);
+		self.kind
+			.rewrite_paths_to_absolute(current_ns, &generics, paths);
 	}
 }
 
@@ -111,34 +118,71 @@ impl Container {
 		&mut self,
 		current_ns: &[Ident],
 		generics: &HashSet<Ident>,
+		paths: &HashSet<Vec<Ident>>,
 	) {
 		for (_, v) in self.fields.iter_mut() {
 			match v {
-				ContainerFieldType::Normal(n) => n.rewrite_paths_to_absolute(current_ns, generics),
+				ContainerFieldType::Normal(n) => {
+					n.rewrite_paths_to_absolute(current_ns, generics, paths)
+				}
 				ContainerFieldType::Virtual(_, n) => {
-					n.rewrite_paths_to_absolute(current_ns, generics)
+					n.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
 				ContainerFieldType::Delegate(_) => {}
 			}
 		}
 	}
 }
+impl Union {
+	pub(crate) fn rewrite_paths_to_absolute(
+		&mut self,
+		current_ns: &[Ident],
+		generics: &HashSet<Ident>,
+		paths: &HashSet<Vec<Ident>>,
+	) {
+		for (_, _, v) in self.values.iter_mut() {
+			v.rewrite_paths_to_absolute(current_ns, generics, paths);
+		}
+	}
+}
 
 impl Namespace {
-	fn rewrite_paths_to_absolute(&mut self, current_ns: &mut Vec<Ident>) {
+	fn discover_paths(&mut self, current_ns: &mut Vec<Ident>, paths: &mut HashSet<Vec<Ident>>) {
 		for (name, item) in self.items.iter_mut() {
 			match item {
 				NamespaceItem::Inner(ns) => {
 					current_ns.push(name.clone());
-					ns.rewrite_paths_to_absolute(current_ns);
+					ns.discover_paths(current_ns, paths);
 					current_ns.pop().unwrap();
 				}
-				NamespaceItem::Type(t) => t.rewrite_paths_to_absolute(current_ns),
+				NamespaceItem::Type(_) => {
+					let mut path = current_ns.clone();
+					path.push(name.clone());
+					paths.insert(path);
+				}
+			}
+		}
+	}
+	fn rewrite_paths_to_absolute(
+		&mut self,
+		current_ns: &mut Vec<Ident>,
+		paths: &HashSet<Vec<Ident>>,
+	) {
+		for (name, item) in self.items.iter_mut() {
+			match item {
+				NamespaceItem::Inner(ns) => {
+					current_ns.push(name.clone());
+					ns.rewrite_paths_to_absolute(current_ns, paths);
+					current_ns.pop().unwrap();
+				}
+				NamespaceItem::Type(t) => t.rewrite_paths_to_absolute(current_ns, paths),
 			}
 		}
 	}
 }
 
 pub fn rewrite_paths_to_absolute(ns: &mut Namespace) {
-	ns.rewrite_paths_to_absolute(&mut Vec::new())
+	let mut paths = HashSet::new();
+	ns.discover_paths(&mut Vec::new(), &mut paths);
+	ns.rewrite_paths_to_absolute(&mut Vec::new(), &paths)
 }
