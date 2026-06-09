@@ -131,7 +131,7 @@ impl Union {
 						Ident::new("_value"),
 						ContainerFieldType::Normal(TypeKind::Union(Self {
 							tag: FieldRef {
-								up: 0,
+								up: 1,
 								path: BaseFieldRef(vec![FieldRefSegment::Down {
 									to: Ident::new("_tag"),
 									ignore_delegation: true,
@@ -333,6 +333,7 @@ impl Namespace {
 					enum NativeStmt {
 						Param(Ident),
 						VirtualField(Ident, TypeKind),
+						Field(Ident, TypeKind),
 						Type(Ident, Option<TypeKind>),
 					}
 					impl NativeStmt {
@@ -351,6 +352,17 @@ impl Namespace {
 										.ok_or_else(|| anyhow!("missing virtual field type"))?;
 									// let block = item.block;
 									Self::VirtualField(
+										item.args.arg(0, "field name")?,
+										TypeKind::from_ast(type_item, items)?,
+									)
+								}
+								"field" => {
+									let type_item = items
+										.remove(0)
+										.into_item()
+										.ok_or_else(|| anyhow!("missing field type"))?;
+									// let block = item.block;
+									Self::Field(
 										item.args.arg(0, "field name")?,
 										TypeKind::from_ast(type_item, items)?,
 									)
@@ -376,12 +388,14 @@ impl Namespace {
 
 					let mut params = Vec::new();
 					let mut virtual_fields = Vec::new();
+					let mut fields = Vec::new();
 					let mut types = BTreeMap::new();
 					for statement in item.block.statements {
 						let stmt = NativeStmt::from_ast(statement)?;
 						match stmt {
 							NativeStmt::Param(name) => params.push(name),
 							NativeStmt::VirtualField(name, ty) => virtual_fields.push((name, ty)),
+							NativeStmt::Field(name, ty) => fields.push((name, ty)),
 							NativeStmt::Type(ty, default) => ensure!(
 								types.insert(ty.clone(), default).is_none(),
 								"generic set twice: {ty:?}"
@@ -402,6 +416,7 @@ impl Namespace {
 							kind: TypeKind::Native(NativeType {
 								specializer,
 								virtual_fields,
+								fields,
 								specialization: types
 									.iter()
 									.map(|(n, t)| {

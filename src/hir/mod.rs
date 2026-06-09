@@ -161,6 +161,7 @@ pub struct Union {
 }
 impl Traverse for Union {
 	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+		visitor.visit_field_ref(&mut self.tag).context("union tag")?;
 		for (v, a, ele) in self.values.iter_mut() {
 			v.traverse(visitor, skip).context("union key")?;
 			ele.traverse(visitor, skip)
@@ -173,6 +174,7 @@ impl Traverse for Union {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NativeType {
 	pub virtual_fields: Vec<(Ident, TypeKind)>,
+	pub fields: Vec<(Ident, TypeKind)>,
 	pub specializer: Option<Ident>,
 	pub specialization: Vec<(Ident, TypeKind)>,
 }
@@ -266,7 +268,7 @@ pub struct Reference {
 impl Traverse for Reference {
 	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
 		if !skip.contains(TraverseSkip::DFS) {
-			visitor.visit_reference(self).context("<ref>")?;
+			visitor.visit_reference(self).with_context(|| format!("<ref> {self:?}"))?;
 		}
 
 		for (_, f) in self.args.iter_mut() {
@@ -278,7 +280,7 @@ impl Traverse for Reference {
 		}
 
 		if skip.contains(TraverseSkip::DFS) {
-			visitor.visit_reference(self).context("<ref>")?;
+			visitor.visit_reference(self).with_context(|| format!("<ref> {self:?}"))?;
 		}
 		Ok(())
 	}

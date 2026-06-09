@@ -35,6 +35,7 @@ pub struct NativeType {
 	// Which monomorphized generics this opaque type has
 	pub specialization: Vec<(Ident, Type)>,
 	pub virtual_fields: Vec<(Ident, Type)>,
+	pub fields: Vec<(Ident, Type)>,
 }
 
 #[derive(Debug)]

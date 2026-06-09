@@ -98,10 +98,15 @@ impl TypeKind {
 			hir::TypeKind::Reference(Reference { .. }) => todo!("type alias: {hir:?}"),
 			hir::TypeKind::Native(hir::NativeType {
 				virtual_fields,
+				fields,
 				specializer,
 				specialization,
 			}) => Self::Native(NativeType {
 				virtual_fields: virtual_fields
+					.iter()
+					.map(|(name, ty)| (name.clone(), Type::from_hir(ty)))
+					.collect(),
+				fields: fields
 					.iter()
 					.map(|(name, ty)| (name.clone(), Type::from_hir(ty)))
 					.collect(),
@@ -134,7 +139,7 @@ impl Definition {
 
 impl Field {
 	fn from_hir(hir: &FieldRef) -> Self {
-		assert!(hir.up == 0);
+		assert!(hir.up == 0, "fields should be absolute, got {hir:?}");
 
 		Self(
 			hir.path

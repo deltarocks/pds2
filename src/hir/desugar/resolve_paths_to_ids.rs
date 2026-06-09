@@ -50,6 +50,7 @@ impl TypeKind {
 			}
 			TypeKind::Native(NativeType {
 				virtual_fields,
+				fields,
 				specializer: _,
 				specialization,
 			}) => {
@@ -57,6 +58,9 @@ impl TypeKind {
 					v.resolve_paths_to_ids(paths)?;
 				}
 				for (_, v) in virtual_fields.iter_mut() {
+					v.resolve_paths_to_ids(paths)?;
+				}
+				for (_, v) in fields.iter_mut() {
 					v.resolve_paths_to_ids(paths)?;
 				}
 			}

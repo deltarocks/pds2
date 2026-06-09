@@ -1,5 +1,7 @@
 use std::{cell::Cell, fmt, rc::Rc};
 
+use crate::ast::Ident;
+
 #[derive(Clone)]
 pub struct NameIdGenerator {
 	id: Rc<Cell<u64>>,

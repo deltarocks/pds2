@@ -82,6 +82,7 @@ impl TypeKind {
 			TypeKind::Void => {}
 			TypeKind::Native(NativeType {
 				virtual_fields,
+				fields,
 				specializer: _,
 				specialization,
 			}) => {
@@ -89,6 +90,9 @@ impl TypeKind {
 					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
 				for (_, ty) in virtual_fields.iter_mut() {
+					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
+				}
+				for (_, ty) in fields.iter_mut() {
 					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
 			}

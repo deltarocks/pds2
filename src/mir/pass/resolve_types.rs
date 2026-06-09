@@ -210,9 +210,14 @@ impl Definition {
 				fields
 					.iter()
 					.find(|f| f.name == to)
-					.ok_or_else(|| anyhow!("field not found: {:?}", to))?
+					.ok_or_else(|| anyhow!("field not found: {:?} in container {:?}", to, fields))?
 					.ty
 					.target
+			}
+			(FieldRefSegment::Virtual(name), mir::TypeKind::Union { tag_type, .. })
+				if name.as_str() == "tag" =>
+			{
+				*tag_type
 			}
 			(FieldRefSegment::Virtual(name), mir::TypeKind::DynamicArray { .. })
 				if name.as_str() == "size" =>
@@ -229,6 +234,7 @@ impl Definition {
 				FieldRefSegment::Virtual(name),
 				mir::TypeKind::Native(NativeType {
 					virtual_fields,
+					fields: _,
 					specializer: _,
 					specialization: _,
 				}),
@@ -238,6 +244,23 @@ impl Definition {
 					.find(|(cname, _)| cname == &name)
 					.ok_or_else(|| {
 						anyhow!("field not found: {name:?}, existing fields: {virtual_fields:?}")
+					})?;
+				ty.target
+			}
+			(
+				FieldRefSegment::Down { to, .. },
+				mir::TypeKind::Native(NativeType {
+					virtual_fields: _,
+					fields,
+					specializer: _,
+					specialization: _,
+				}),
+			) => {
+				let (_, ty) = fields
+					.iter()
+					.find(|(cname, _)| cname == &to)
+					.ok_or_else(|| {
+						anyhow!("field not found: {to:?}, existing fields: {fields:?}")
 					})?;
 				ty.target
 			}
@@ -289,7 +312,8 @@ pub fn resolve_types(types: &mut TypeMap) -> Result<()> {
 		println!("resolving types");
 		collector.reset_validity();
 		for (i, d) in types.0.iter() {
-			d.resolve_types(*i, types, &mut collector)?;
+			d.resolve_types(*i, types, &mut collector)
+				.with_context(|| format!("in {:?}", d.name))?;
 		}
 		if collector.has_invalid && !collector.has_valid {
 			// TODO: print unresolved

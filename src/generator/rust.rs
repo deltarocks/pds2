@@ -294,6 +294,7 @@ pub fn generator(
 					specializer: Some(specializer),
 					specialization,
 					virtual_fields: _,
+					fields: _,
 				} => {
 					// let specializer = spec
 					// 	.specializer
