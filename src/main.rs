@@ -5,11 +5,13 @@ use generator::GeneratorTypes;
 use std::path::PathBuf;
 
 use self::generator::SpecializerObj;
+use self::specializer::{register_protodef_types, Registry};
 pub mod ast;
 pub mod format;
 pub mod generator;
 pub mod hir;
 pub mod mir;
+pub mod specializer;
 pub mod upgrade;
 
 #[macro_export]
@@ -149,21 +151,17 @@ enum Opts {
 		/// Where to write generated files to
 		#[clap(long)]
 		to: Option<PathBuf>,
-		/// Definition of where to look for specializers
-		#[clap(long)]
-		specializer: Option<PathBuf>,
 	},
 	/// Convert protodef .json definition to code
 	Upgrade {
 		/// .json source code
 		from: PathBuf,
+		/// Where to write the generated .pds (defaults to `<from>.pds`)
+		#[clap(long)]
+		to: Option<PathBuf>,
 	},
 	/// Reformat .pds definition code
 	Format { from: PathBuf },
-}
-
-trait Desugar<Pass> {
-	fn desugar(&mut self, pass: &mut Pass);
 }
 
 #[macro_export]
@@ -226,6 +224,10 @@ fn main() {
 
 fn try_main() -> anyhow::Result<()> {
 	let opts = Opts::parse();
+
+	let mut reg = Registry::default();
+	register_protodef_types(&mut reg);
+
 	match opts {
 		Opts::Compile {
 			from,
@@ -235,7 +237,6 @@ fn try_main() -> anyhow::Result<()> {
 			print_mir,
 
 			to,
-			specializer,
 		} => {
 			let data = std::fs::read_to_string(from)?;
 			let parsed = ast::parse(&data)?;
@@ -244,7 +245,7 @@ fn try_main() -> anyhow::Result<()> {
 				dbg!(&parsed);
 			}
 
-			let hir = hir::parse_ast(parsed)?;
+			let hir = hir::parse_ast(parsed, &reg)?;
 
 			if print_hir {
 				dbg!(&hir);
@@ -260,7 +261,7 @@ fn try_main() -> anyhow::Result<()> {
 			generator.generator()(&mir, &mut out, &SpecializerObj {})?;
 
 			if let Some(to) = &to {
-				std::fs::create_dir_all(&to)?;
+				std::fs::create_dir_all(to)?;
 			}
 			for (_file, value) in out {
 				let mut file = to.clone();
@@ -292,12 +293,15 @@ fn try_main() -> anyhow::Result<()> {
 			let out = ast::format(&parsed);
 			println!("{}", out);
 		}
-		Opts::Upgrade { from } => {
-			let data = std::fs::read_to_string(from)?;
+		Opts::Upgrade { from, to } => {
+			let data = std::fs::read_to_string(&from)?;
 			let parsed = serde_json::from_str(&data)?;
-			let upgraded = upgrade::upgrade(parsed)?;
+			let upgraded = upgrade::upgrade(parsed, &reg)?;
 			let out = ast::format(&upgraded);
-			println!("{}", out);
+
+			let to = to.unwrap_or_else(|| from.with_extension("pds"));
+			std::fs::write(&to, out)?;
+			eprintln!("wrote {}", to.display());
 		}
 	}
 	Ok(())

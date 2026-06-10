@@ -183,6 +183,12 @@ pub struct Statement {
 }
 
 impl Statement {
+	pub fn simple(items: Vec<Value>) -> Self {
+		Self {
+			attributes: Default::default(),
+			items,
+		}
+	}
 	pub fn pop_item(self) -> Result<(Attributes, Item, Vec<Value>)> {
 		let (attrs, value, values) = self.pop_value();
 		let item = value.into_item().ok_or_else(|| anyhow!("expected item"))?;

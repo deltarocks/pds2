@@ -10,11 +10,12 @@ use crate::{
 		id_generator::PendingTypeId, IdGenerator, Namespace, Reference, ReferenceKind, Traverse,
 		TraverseSkip, Type, TypeId, TypeKind, Visitor,
 	},
+	specializer::Registry,
 };
 
 struct HasGenericReferences<'t>(&'t mut bool);
 impl Visitor for HasGenericReferences<'_> {
-	fn visit_reference(&mut self, value: &mut Reference) -> Result<()> {
+	fn visit_reference(&mut self, value: &mut Reference, _reg: &Registry) -> Result<()> {
 		*self.0 |= value.ty.is_generic(); // || !value.types.is_empty();
 		Ok(())
 	}
@@ -29,7 +30,7 @@ struct FindGenericTypeReferences<'t> {
 	found: &'t mut bool,
 }
 impl Visitor for FindGenericTypeReferences<'_> {
-	fn visit_reference(&mut self, value: &mut Reference) -> Result<()> {
+	fn visit_reference(&mut self, value: &mut Reference, reg: &Registry) -> Result<()> {
 		let Some(ty) = value.ty.resolved() else {
 			unreachable!()
 		};
@@ -42,6 +43,7 @@ impl Visitor for FindGenericTypeReferences<'_> {
 		value.traverse(
 			&mut HasGenericReferences(&mut not_resolved_yet),
 			TraverseSkip::empty(),
+			reg,
 		)?;
 		if not_resolved_yet {
 			return Ok(());
@@ -78,7 +80,7 @@ struct ReplaceGenericReferencesWithSpecified<'t> {
 	still_unset: &'t BTreeMap<Ident, Option<TypeKind>>,
 }
 impl Visitor for ReplaceGenericReferencesWithSpecified<'_> {
-	fn visit_type_kind(&mut self, tk: &mut TypeKind) -> Result<()> {
+	fn visit_type_kind(&mut self, tk: &mut TypeKind, _reg: &Registry) -> Result<()> {
 		let TypeKind::Reference(re) = tk else {
 			return Ok(());
 		};
@@ -124,7 +126,7 @@ struct ImplementMonomorphized<'t> {
 	created_new: &'t mut bool,
 }
 impl Visitor for ImplementMonomorphized<'_> {
-	fn visit_type(&mut self, ty: &mut Type) -> Result<()> {
+	fn visit_type(&mut self, ty: &mut Type, reg: &Registry) -> Result<()> {
 		for ((_, otypes), (pending, pending_name)) in
 			self.monos.extract_if(|(m, _), _| &ty.id() == m)
 		{
@@ -151,9 +153,11 @@ impl Visitor for ImplementMonomorphized<'_> {
 					still_unset: &still_unset,
 				},
 				TraverseSkip::empty(),
+				reg,
 			)?;
 			if !still_unset.is_empty() {
-				self.generic_types.insert(pending.id(), format!("{pending_name} {types:?}"));
+				self.generic_types
+					.insert(pending.id(), format!("{pending_name} {types:?}"));
 			}
 			self.created
 				.push(Type::new(pending, Vec::new(), kind, still_unset));
@@ -165,7 +169,7 @@ impl Visitor for ImplementMonomorphized<'_> {
 
 struct FindGenericTypes<'t>(&'t mut HashMap<TypeId, String>);
 impl Visitor for FindGenericTypes<'_> {
-	fn visit_type(&mut self, ty: &mut Type) -> Result<()> {
+	fn visit_type(&mut self, ty: &mut Type, _reg: &Registry) -> Result<()> {
 		if ty.types.is_empty() {
 			return Ok(());
 		}
@@ -176,7 +180,7 @@ impl Visitor for FindGenericTypes<'_> {
 
 struct EnsureNoReferencesTo<'t>(&'t HashMap<TypeId, String>);
 impl Visitor for EnsureNoReferencesTo<'_> {
-	fn visit_reference(&mut self, re: &mut Reference) -> Result<()> {
+	fn visit_reference(&mut self, re: &mut Reference, _reg: &Registry) -> Result<()> {
 		let Some(r) = re.ty.resolved() else {
 			return Ok(());
 		};
@@ -187,11 +191,12 @@ impl Visitor for EnsureNoReferencesTo<'_> {
 	}
 }
 
-pub fn monomorphize(id: IdGenerator, ir: &mut Namespace) -> Result<()> {
+pub fn monomorphize(id: IdGenerator, ir: &mut Namespace, reg: &Registry) -> Result<()> {
 	let mut generic_types = HashMap::new();
 	ir.traverse(
 		&mut FindGenericTypes(&mut generic_types),
 		TraverseSkip::empty(),
+		reg,
 	)?;
 
 	let mut monos = Monomorphizations::new();
@@ -205,6 +210,7 @@ pub fn monomorphize(id: IdGenerator, ir: &mut Namespace) -> Result<()> {
 				found: &mut changed,
 			},
 			TraverseSkip::SKIP_GENERIC_TYPES | TraverseSkip::DFS,
+			reg,
 		)?;
 		ir.derive_types(|t| {
 			let mut out = Vec::new();
@@ -216,6 +222,7 @@ pub fn monomorphize(id: IdGenerator, ir: &mut Namespace) -> Result<()> {
 					created_new: &mut changed,
 				},
 				TraverseSkip::empty(),
+				reg,
 			)?;
 			Ok(out)
 		})?;
@@ -227,6 +234,7 @@ pub fn monomorphize(id: IdGenerator, ir: &mut Namespace) -> Result<()> {
 	ir.traverse(
 		&mut EnsureNoReferencesTo(&generic_types),
 		TraverseSkip::SKIP_GENERIC_TYPES,
+		reg,
 	)?;
 	ir.retain_types(|t| t.types.is_empty());
 

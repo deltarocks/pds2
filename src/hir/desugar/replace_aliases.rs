@@ -19,6 +19,7 @@ use crate::hir::{
 	BaseFieldRefOrConst, FieldRefOrConst, Namespace, Reference, ReferenceKind, Traverse,
 	TraverseSkip, Type, TypeId, TypeKind, Visitor,
 };
+use crate::specializer::Registry;
 use anyhow::Result;
 
 #[derive(Debug)]
@@ -41,8 +42,11 @@ impl<'t> CollectAliasList<'t> {
 	}
 }
 impl Visitor for CollectAliasList<'_> {
-	fn visit_type(&mut self, typ: &mut Type) -> Result<()> {
-		if let TypeKind::Reference(Reference { ty, args, types }) = &mut typ.kind {
+	fn visit_type(&mut self, typ: &mut Type, _reg: &Registry) -> Result<()> {
+		if let TypeKind::Reference(Reference {
+			ty, args, types, ..
+		}) = &mut typ.kind
+		{
 			assert!(types.is_empty(), "{:?}", typ);
 			assert!(ty.is_resolved());
 			let resolved = ty.resolved().unwrap();
@@ -59,7 +63,7 @@ impl Visitor for CollectAliasList<'_> {
 								assert_eq!(value.up, 0);
 								let mut refer = value.path.clone();
 								let first_segment = refer.0.remove(0);
-								let FieldRefSegment::Arg(arg) = first_segment else {
+								let FieldRefSegment::Arg(_arg) = first_segment else {
 									panic!("first segment should be arg, got {first_segment:?}")
 								};
 								// assert_eq!(&arg, name);
@@ -103,7 +107,7 @@ impl<'t> ReplaceAliasedReferences<'t> {
 	}
 }
 impl Visitor for ReplaceAliasedReferences<'_> {
-	fn visit_reference(&mut self, value: &mut Reference) -> Result<()> {
+	fn visit_reference(&mut self, value: &mut Reference, _reg: &Registry) -> Result<()> {
 		assert!(value.types.is_empty());
 
 		let resolved = value.ty.resolved().unwrap();
@@ -134,6 +138,7 @@ impl Visitor for ReplaceAliasedReferences<'_> {
 					})
 					.collect(),
 				types: BTreeMap::new(),
+				body: vec![],
 			};
 			self.replaced = true;
 		}
@@ -141,18 +146,18 @@ impl Visitor for ReplaceAliasedReferences<'_> {
 	}
 }
 
-pub fn replace_aliases(ir: &mut Namespace) -> Result<()> {
+pub fn replace_aliases(ir: &mut Namespace, reg: &Registry) -> Result<()> {
 	let mut aliases = BTreeMap::new();
 	loop {
 		let mut had_changed = false;
 		{
 			let mut visitor = CollectAliasList::new(&mut aliases);
-			ir.traverse(&mut visitor, TraverseSkip::empty())?;
+			ir.traverse(&mut visitor, TraverseSkip::empty(), reg)?;
 			had_changed |= visitor.found_new;
 		}
 		{
 			let mut visitor = ReplaceAliasedReferences::new(&mut aliases);
-			ir.traverse(&mut visitor, TraverseSkip::empty())?;
+			ir.traverse(&mut visitor, TraverseSkip::empty(), reg)?;
 			had_changed |= visitor.replaced;
 		}
 		if !had_changed {

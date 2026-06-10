@@ -1,7 +1,8 @@
-use crate::ast::{self, BaseFieldRef, FieldRef, Ident, ParseValue, Path};
+use crate::ast::{BaseFieldRef, FieldRef, Ident, Path};
+use crate::specializer::Registry;
 use std::{cell::Cell, collections::BTreeMap};
 mod from_ast;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 pub use from_ast::parse_ast;
 mod desugar;
 pub use to_ast::to_ast;
@@ -17,10 +18,15 @@ pub enum NamespaceItem {
 	Type(Type),
 }
 impl Traverse for NamespaceItem {
-	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()> {
 		match self {
-			NamespaceItem::Inner(ns) => ns.traverse(visitor, skip)?,
-			NamespaceItem::Type(t) => t.traverse(visitor, skip)?,
+			NamespaceItem::Inner(ns) => ns.traverse(visitor, skip, reg)?,
+			NamespaceItem::Type(t) => t.traverse(visitor, skip, reg)?,
 		}
 		Ok(())
 	}
@@ -77,14 +83,19 @@ impl Namespace {
 				}
 			}
 		}
-		self.add_types(new_types.into_iter());
+		self.add_types(new_types);
 		Ok(())
 	}
 }
 impl Traverse for Namespace {
-	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()> {
 		for (n, v) in self.items.iter_mut() {
-			let res = v.traverse(visitor, skip);
+			let res = v.traverse(visitor, skip, reg);
 			match v {
 				NamespaceItem::Inner(_) => res.with_context(|| format!("namespace({n:?})"))?,
 				NamespaceItem::Type(_) => res.with_context(|| format!("def({n:?})"))?,
@@ -104,12 +115,17 @@ pub enum ContainerFieldType {
 	Delegate(Ident),
 }
 impl Traverse for ContainerFieldType {
-	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()> {
 		match self {
-			ContainerFieldType::Normal(t) => t.traverse(visitor, skip)?,
+			ContainerFieldType::Normal(t) => t.traverse(visitor, skip, reg)?,
 			ContainerFieldType::Virtual(f, t) => {
 				visitor.visit_field_ref(f)?;
-				t.traverse(visitor, skip)?
+				t.traverse(visitor, skip, reg)?
 			}
 			ContainerFieldType::Delegate(_) => {}
 		}
@@ -125,9 +141,14 @@ pub struct Container {
 	pub delegate_all: Option<Ident>,
 }
 impl Traverse for Container {
-	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()> {
 		for (n, f) in self.fields.iter_mut() {
-			let res = f.traverse(visitor, skip);
+			let res = f.traverse(visitor, skip, reg);
 			match f {
 				ContainerFieldType::Normal(_) => res.with_context(|| format!("field({n:?})"))?,
 				ContainerFieldType::Virtual(_, _) => {
@@ -147,7 +168,12 @@ pub enum Value {
 	UnionDescriminator(Ident),
 }
 impl Traverse for Value {
-	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+	fn traverse(
+		&mut self,
+		_visitor: &mut impl Visitor,
+		_skip: TraverseSkip,
+		_reg: &Registry,
+	) -> Result<()> {
 		Ok(())
 	}
 }
@@ -158,14 +184,26 @@ pub struct Union {
 	pub tag: FieldRef,
 	// TODO: Conditional value? To make Union a replacement for match statement of some sort.
 	pub values: Vec<(Value, Ident, TypeKind)>,
+	pub default: Option<Box<TypeKind>>,
 }
 impl Traverse for Union {
-	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
-		visitor.visit_field_ref(&mut self.tag).context("union tag")?;
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()> {
+		visitor
+			.visit_field_ref(&mut self.tag)
+			.context("union tag")?;
 		for (v, a, ele) in self.values.iter_mut() {
-			v.traverse(visitor, skip).context("union key")?;
-			ele.traverse(visitor, skip)
+			v.traverse(visitor, skip, reg).context("union key")?;
+			ele.traverse(visitor, skip, reg)
 				.with_context(|| format!("union value {a:?}"))?;
+		}
+		if let Some(ele) = &mut self.default {
+			ele.traverse(visitor, skip, reg)
+				.with_context(|| format!("union default value"))?;
 		}
 		Ok(())
 	}
@@ -173,19 +211,56 @@ impl Traverse for Union {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NativeType {
-	pub virtual_fields: Vec<(Ident, TypeKind)>,
-	pub fields: Vec<(Ident, TypeKind)>,
 	pub specializer: Option<Ident>,
-	pub specialization: Vec<(Ident, TypeKind)>,
+	pub variants: BTreeMap<Ident, NativeTypeVariant>,
 }
 impl Traverse for NativeType {
-	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()> {
+		for (_, ele) in &mut self.variants {
+			ele.traverse(visitor, skip, reg)?;
+		}
+		Ok(())
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NativeTypeVariant {
+	pub virtual_fields: Vec<(Ident, TypeKind)>,
+	pub fields: Vec<(Ident, TypeKind)>,
+	/// whether use-sites may carry a `{ ... }` body for the specializer to process
+	pub accepts_body: bool,
+	pub specialization: Vec<(Ident, TypeKind)>,
+
+	pub params: Vec<Ident>,
+	pub types: BTreeMap<Ident, Option<TypeKind>>,
+}
+impl NativeTypeVariant {
+	fn extend(&mut self, from: &Self) {
+		self.virtual_fields.extend(from.virtual_fields.clone());
+		self.fields.extend(from.fields.clone());
+		self.accepts_body |= from.accepts_body;
+		self.specialization.extend(from.specialization.clone());
+	}
+}
+
+impl Traverse for NativeTypeVariant {
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()> {
 		for (n, t) in self.virtual_fields.iter_mut() {
-			t.traverse(visitor, skip)
+			t.traverse(visitor, skip, reg)
 				.with_context(|| format!("virtual_field({n:?})"))?;
 		}
 		for (n, t) in self.specialization.iter_mut() {
-			t.traverse(visitor, skip)
+			t.traverse(visitor, skip, reg)
 				.with_context(|| format!("type({n:?})"))?;
 		}
 		Ok(())
@@ -246,10 +321,15 @@ pub enum FieldRefOrConst {
 	Const(Value),
 }
 impl Traverse for FieldRefOrConst {
-	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()> {
 		match self {
 			FieldRefOrConst::FieldRef(field_ref) => visitor.visit_field_ref(field_ref),
-			FieldRefOrConst::Const(value) => value.traverse(visitor, skip),
+			FieldRefOrConst::Const(value) => value.traverse(visitor, skip, reg),
 		}
 	}
 }
@@ -259,28 +339,65 @@ enum BaseFieldRefOrConst {
 	Const(Value),
 }
 
+/// A single statement of a specializer body (`field(x, size: 26)`, `flag(add_player)`),
+/// captured verbatim at the use-site of a body-accepting native type.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BodyArg {
+	Int(i128),
+	Bool(bool),
+	Str(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BodyField {
+	/// the statement head (`field`, `flag`, ...), interpreted by the specializer
+	pub kind: Ident,
+	pub name: Ident,
+	pub args: BTreeMap<Ident, BodyArg>,
+	/// chained element type, if the body item carries one (`field(x) => u8`)
+	pub ty: Option<TypeKind>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Reference {
 	pub ty: ReferenceKind,
 	pub args: Vec<(Ident, FieldRefOrConst)>,
 	pub types: BTreeMap<Ident, TypeKind>,
+	/// body of a use-site reference to a body-accepting native, consumed by its specializer
+	pub body: Vec<BodyField>,
 }
 impl Traverse for Reference {
-	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()> {
 		if !skip.contains(TraverseSkip::DFS) {
-			visitor.visit_reference(self).with_context(|| format!("<ref> {self:?}"))?;
+			visitor
+				.visit_reference(self, reg)
+				.with_context(|| format!("<BFS ref> {self:?}"))?;
 		}
 
 		for (_, f) in self.args.iter_mut() {
-			f.traverse(visitor, skip).context("reference argument")?;
+			f.traverse(visitor, skip, reg)
+				.context("reference argument")?;
 		}
 		for (t, v) in self.types.iter_mut() {
-			v.traverse(visitor, skip)
+			v.traverse(visitor, skip, reg)
 				.with_context(|| format!("<ref> {{{t:?}: <here>}}"))?
+		}
+		for f in self.body.iter_mut() {
+			if let Some(ty) = &mut f.ty {
+				ty.traverse(visitor, skip, reg)
+					.context("reference body field")?;
+			}
 		}
 
 		if skip.contains(TraverseSkip::DFS) {
-			visitor.visit_reference(self).with_context(|| format!("<ref> {self:?}"))?;
+			visitor
+				.visit_reference(self, reg)
+				.with_context(|| format!("<DFS ref> {self:?}"))?;
 		}
 		Ok(())
 	}
@@ -294,33 +411,30 @@ pub enum TypeKind {
 	Reference(Reference),
 	Native(NativeType),
 }
-impl TypeKind {
-	fn assert_reference(&self) {
-		match self {
-			TypeKind::Reference(Reference { .. }) => {}
-			n => unreachable!("should not have nested: {:?}", n),
-		}
-	}
-}
 impl Traverse for TypeKind {
-	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()> {
 		if !skip.contains(TraverseSkip::DFS) && !skip.contains(TraverseSkip::TOPLEVEL_TYPEKIND) {
-			visitor.visit_type_kind(self)?;
+			visitor.visit_type_kind(self, reg)?;
 		}
 
 		{
 			let skip = skip - TraverseSkip::TOPLEVEL_TYPEKIND;
 			match self {
 				TypeKind::Void => {}
-				TypeKind::Container(c) => c.traverse(visitor, skip)?,
-				TypeKind::Reference(r) => r.traverse(visitor, skip)?,
-				TypeKind::Native(n) => n.traverse(visitor, skip)?,
-				TypeKind::Union(c) => c.traverse(visitor, skip)?,
+				TypeKind::Container(c) => c.traverse(visitor, skip, reg)?,
+				TypeKind::Reference(r) => r.traverse(visitor, skip, reg)?,
+				TypeKind::Native(n) => n.traverse(visitor, skip, reg)?,
+				TypeKind::Union(c) => c.traverse(visitor, skip, reg)?,
 			}
 		}
 
 		if skip.contains(TraverseSkip::DFS) && !skip.contains(TraverseSkip::TOPLEVEL_TYPEKIND) {
-			visitor.visit_type_kind(self)?;
+			visitor.visit_type_kind(self, reg)?;
 		}
 		Ok(())
 	}
@@ -333,24 +447,33 @@ pub struct Type {
 	pub kind: TypeKind,
 }
 impl Traverse for Type {
-	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()> {
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()> {
 		if !self.types.is_empty() && skip.contains(TraverseSkip::SKIP_GENERIC_TYPES) {
 			return Ok(());
 		}
 
 		if !skip.contains(TraverseSkip::DFS) {
-			visitor.visit_type(self)?;
+			visitor
+				.visit_type(self, reg)
+				.with_context(|| format!("<BFS type> {self:?}"))?;
 		}
 
 		for (_, t) in self.types.iter_mut() {
 			if let Some(t) = t {
-				visitor.visit_type_kind(t)?;
+				visitor.visit_type_kind(t, reg)?;
 			}
 		}
-		self.kind.traverse(visitor, skip)?;
+		self.kind.traverse(visitor, skip, reg)?;
 
 		if skip.contains(TraverseSkip::DFS) {
-			visitor.visit_type(self)?;
+			visitor
+				.visit_type(self, reg)
+				.with_context(|| format!("<DFS type> {self:?}"))?;
 		}
 		Ok(())
 	}
@@ -395,6 +518,31 @@ impl Type {
 	}
 }
 
+/// Everything a specializer needs to project a reference body into fields.
+pub struct HirSpecializerCtx<'a> {
+	/// the use-site body statements
+	pub body: &'a [BodyField],
+	/// generic bindings of the reference (e.g. `Value` -> the wrapped integer type)
+	pub types: &'a BTreeMap<Ident, TypeKind>,
+	/// value arguments of the reference
+	pub args: &'a [(Ident, FieldRefOrConst)],
+	/// resolve a top-level native type by name to its id
+	pub resolve: &'a dyn Fn(&str) -> Option<TypeId>,
+}
+
+impl HirSpecializerCtx<'_> {
+	/// A resolved reference to a top-level native type, by name.
+	pub fn native(&self, name: &str) -> Result<TypeKind> {
+		let id = (self.resolve)(name).ok_or_else(|| anyhow!("native type {name:?} not found"))?;
+		Ok(TypeKind::Reference(Reference {
+			ty: ReferenceKind::Resolved(id),
+			args: vec![],
+			types: BTreeMap::new(),
+			body: vec![],
+		}))
+	}
+}
+
 trait Visitor {
 	fn enter_ns(&mut self, _ns: Ident) {}
 	fn leave_ns(&mut self) {}
@@ -402,13 +550,13 @@ trait Visitor {
 	fn visit_field_ref(&mut self, _field: &mut FieldRef) -> Result<()> {
 		Ok(())
 	}
-	fn visit_type_kind(&mut self, _value: &mut TypeKind) -> Result<()> {
+	fn visit_type_kind(&mut self, _value: &mut TypeKind, _reg: &Registry) -> Result<()> {
 		Ok(())
 	}
-	fn visit_type(&mut self, _value: &mut Type) -> Result<()> {
+	fn visit_type(&mut self, _value: &mut Type, _reg: &Registry) -> Result<()> {
 		Ok(())
 	}
-	fn visit_reference(&mut self, _value: &mut Reference) -> Result<()> {
+	fn visit_reference(&mut self, _value: &mut Reference, _reg: &Registry) -> Result<()> {
 		Ok(())
 	}
 }
@@ -422,5 +570,10 @@ bitflags::bitflags! {
 	}
 }
 trait Traverse {
-	fn traverse(&mut self, visitor: &mut impl Visitor, skip: TraverseSkip) -> Result<()>;
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()>;
 }

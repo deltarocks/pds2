@@ -7,15 +7,16 @@
 use anyhow::Result;
 
 use crate::hir::{IdGenerator, Namespace, Traverse, TraverseSkip, Type, Visitor};
+use crate::specializer::Registry;
 
 struct AssignIds(IdGenerator);
 impl Visitor for AssignIds {
-	fn visit_type(&mut self, ty: &mut Type) -> Result<()> {
+	fn visit_type(&mut self, ty: &mut Type, _reg: &Registry) -> Result<()> {
 		ty.assign_id(&self.0);
 		Ok(())
 	}
 }
 
-pub fn give_all_types_ids(id: IdGenerator, ns: &mut Namespace) -> Result<()> {
-	ns.traverse(&mut AssignIds(id), TraverseSkip::empty())
+pub fn give_all_types_ids(id: IdGenerator, ns: &mut Namespace, reg: &Registry) -> Result<()> {
+	ns.traverse(&mut AssignIds(id), TraverseSkip::empty(), reg)
 }

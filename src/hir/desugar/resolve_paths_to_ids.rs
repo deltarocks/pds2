@@ -10,26 +10,28 @@ use std::collections::HashMap;
 
 use crate::{
 	ast::{Ident, Path},
-	hir::{id_generator::TypeId, Namespace, NativeType, Reference, ReferenceKind, Type, TypeKind},
+	hir::{id_generator::TypeId, Namespace, NativeType, ReferenceKind, Type, TypeKind},
 };
 
 impl TypeKind {
 	fn resolve_paths_to_ids(&mut self, paths: &HashMap<Path, TypeId>) -> Result<()> {
 		match self {
-			TypeKind::Reference(Reference {
-				ty: ty @ ReferenceKind::Path(_),
-				types,
-				..
-			}) => {
-				let path = ty.path().unwrap();
-				*ty = ReferenceKind::Resolved(*paths.get(path).ok_or_else(|| {
-					anyhow!("path not found: {:?}, possible paths: {:?}", path, paths)
-				})?);
-				for (_, ty) in types.iter_mut() {
+			TypeKind::Reference(r) => {
+				if let ReferenceKind::Path(path) = &r.ty {
+					let id = *paths.get(path).ok_or_else(|| {
+						anyhow!("path not found: {:?}, possible paths: {:?}", path, paths)
+					})?;
+					r.ty = ReferenceKind::Resolved(id);
+				}
+				for (_, ty) in r.types.iter_mut() {
 					ty.resolve_paths_to_ids(paths)?;
 				}
+				for f in r.body.iter_mut() {
+					if let Some(ty) = &mut f.ty {
+						ty.resolve_paths_to_ids(paths)?;
+					}
+				}
 			}
-			TypeKind::Reference(Reference { .. }) => {}
 			TypeKind::Container(c) => {
 				for (_, v) in c.fields.iter_mut() {
 					match v {
@@ -53,6 +55,7 @@ impl TypeKind {
 				fields,
 				specializer: _,
 				specialization,
+				..
 			}) => {
 				for (_, v) in specialization.iter_mut() {
 					v.resolve_paths_to_ids(paths)?;

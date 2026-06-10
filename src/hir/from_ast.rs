@@ -5,26 +5,76 @@ use crate::{
 		BaseFieldRef, Block, FieldRef, FieldRefSegment, Ident, Item, ParseValue, Statement, Value,
 	},
 	hir::{
-		Container, ContainerFieldType, FieldRefOrConst, NamespaceItem, NativeType, Reference,
-		ReferenceKind, Union, Value as HirValue,
+		BodyArg, BodyField, Container, ContainerFieldType, FieldRefOrConst, NamespaceItem,
+		NativeType, NativeTypeVariant, Reference, ReferenceKind, Union, Value as HirValue,
 	},
+	specializer::Registry,
 };
 
 use super::{IdGenerator, Namespace, Type, TypeKind};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 
-pub fn parse_ast(ast: Block) -> Result<Namespace> {
+/// Parse a use-site native body (`{ field(x, size: 26); flag(a); ... }`) into [`BodyField`]s.
+/// Empty for the common case of a plain reference with no block.
+fn parse_specializer_body(block: &Block) -> Result<Vec<BodyField>> {
+	let mut out = Vec::new();
+	for stmt in &block.statements {
+		let (_attrs, item, mut items) = stmt.clone().pop_item()?;
+		let kind = item.name.expect_simple_name()?;
+		let name: Ident = item.args.arg(0, "body field name")?;
+		let mut args = BTreeMap::new();
+		for n in item.args.named_names().cloned().collect::<Vec<_>>() {
+			let value: Value = item.args.named(n.clone())?;
+			args.insert(n, body_arg(value)?);
+		}
+		item.args.verify_unused()?;
+		let ty = if items.is_empty() {
+			None
+		} else {
+			let type_item = items
+				.remove(0)
+				.into_item()
+				.ok_or_else(|| anyhow!("body field type should be item"))?;
+			Some(TypeKind::from_ast(type_item, items)?)
+		};
+		out.push(BodyField {
+			kind,
+			name,
+			args,
+			ty,
+		});
+	}
+	Ok(out)
+}
+
+fn body_arg(value: Value) -> Result<BodyArg> {
+	Ok(match value {
+		Value::Int(i) => BodyArg::Int(i),
+		Value::String { string, .. } => BodyArg::Str(string),
+		Value::Item(item) => match item.simple_name().map(|i| i.as_str().to_owned()).as_deref() {
+			Some("true") => BodyArg::Bool(true),
+			Some("false") => BodyArg::Bool(false),
+			Some(other) => BodyArg::Str(other.to_owned()),
+			None => bail!("unsupported body argument: {item:?}"),
+		},
+		other => bail!("unsupported body argument: {other:?}"),
+	})
+}
+
+pub fn parse_ast(ast: Block, reg: &Registry) -> Result<Namespace> {
 	let mut ns = Namespace::from_ast(ast).context("parsing AST to IR")?;
 	let id = IdGenerator::new();
-	super::desugar::give_all_types_ids(id.clone(), &mut ns)?;
+	super::desugar::give_all_types_ids(id.clone(), &mut ns, reg)?;
 
 	super::desugar::rewrite_paths_to_absolute(&mut ns);
 	super::desugar::resolve_paths_to_ids(&mut ns).context("resolving paths")?;
 
-	super::desugar::monomorphize(id.clone(), &mut ns)?;
+	super::desugar::apply_specializers(&mut ns, reg).context("applying specializers")?;
 
-	super::desugar::extract_nested_types(id, &mut ns)?;
-	super::desugar::replace_aliases(&mut ns)?;
+	super::desugar::monomorphize(id.clone(), &mut ns, reg)?;
+
+	super::desugar::extract_nested_types(id, &mut ns, reg)?;
+	super::desugar::replace_aliases(&mut ns, reg)?;
 	Ok(ns)
 }
 
@@ -82,6 +132,7 @@ impl Union {
 		item.args.verify_unused()?;
 
 		let mut fields = Vec::new();
+		let mut default = None::<TypeKind>;
 
 		for stmt in item.block.statements {
 			let (_attrs, item, mut items) = stmt.pop_item()?;
@@ -113,7 +164,23 @@ impl Union {
 						));
 					}
 				}
-				v => bail!("unknown container field type: {}", v),
+				"default" => {
+					let v = if items.is_empty() {
+						TypeKind::Void
+					} else {
+						let type_item = items
+							.remove(0)
+							.into_item()
+							.ok_or_else(|| anyhow!("field item should be item"))?;
+
+						TypeKind::from_ast(type_item, items).context("union item type")?
+					};
+					if default.is_some() {
+						bail!("union default value was set twice");
+					}
+					default = Some(v);
+				}
+				v => bail!("unknown union field type: {}", v),
 			}
 		}
 
@@ -138,6 +205,7 @@ impl Union {
 								}]),
 							},
 							values: fields,
+							default: default.map(Box::new),
 						})),
 					),
 				],
@@ -146,6 +214,7 @@ impl Union {
 			Err(tag) => Ok(TypeKind::Union(Self {
 				tag,
 				values: fields,
+				default: default.map(Box::new),
 			})),
 		}
 		// Ok(Self{
@@ -195,7 +264,7 @@ impl Container {
 						name.clone(),
 						ContainerFieldType::Normal(
 							TypeKind::from_ast(type_item, items)
-								.with_context(|| format!("container field {:?}", name))?,
+								.with_context(|| format!("container field <{name:?}>"))?,
 						),
 					)
 				}
@@ -240,11 +309,7 @@ impl TypeKind {
 				}
 				_ => {
 					// ensure!(items.is_empty(), "unexpected values");
-					ensure!(
-						value.block.is_empty(),
-						"unexpected block for {}",
-						simple.as_str()
-					);
+					let body = parse_specializer_body(&value.block)?;
 
 					let mut args = Vec::new();
 					let mut types = BTreeMap::new();
@@ -266,7 +331,8 @@ impl TypeKind {
 								match value {
 									Value::FieldRef(field_ref) => FieldRefOrConst::FieldRef(field_ref),
 									Value::Int(i) => FieldRefOrConst::Const(HirValue::Number(i)),
-									_ => bail!("reference argument should be either field reference or constant"),
+									Value::String{string, is_block: _} => FieldRefOrConst::Const(HirValue::String(string)),
+									_ => bail!("reference argument should be either field reference or constant, got {value:?}"),
 								},
 							));
 						}
@@ -288,6 +354,7 @@ impl TypeKind {
 						ty: ReferenceKind::Path(value.name),
 						args,
 						types,
+						body,
 					}));
 				}
 			};
@@ -297,6 +364,7 @@ impl TypeKind {
 				ty: ReferenceKind::Path(value.name),
 				args: vec![],
 				types: BTreeMap::new(),
+				body: vec![],
 			}))
 		}
 	}
@@ -335,15 +403,40 @@ impl Namespace {
 						VirtualField(Ident, TypeKind),
 						Field(Ident, TypeKind),
 						Type(Ident, Option<TypeKind>),
+						Body,
+
+						Variant(Ident, Vec<NativeStmt>),
 					}
 					impl NativeStmt {
 						fn from_ast(value: Statement) -> Result<Self> {
 							let (_attrs, item, mut items) = value.pop_item()?;
 
 							Ok(match item.name.expect_simple_name()?.as_str() {
+								"variant" => {
+									ensure!(items.is_empty(), "argument has no items");
+									let id = item.args.arg(0, "variant name")?;
+									item.args.verify_unused()?;
+
+									let mut stmts = vec![];
+									for ele in item.block.statements {
+										let native = NativeStmt::from_ast(ele)?;
+										ensure!(
+											!matches!(native, NativeStmt::Variant(..)),
+											"variants can't be nested"
+										);
+										stmts.push(native);
+									}
+
+									Self::Variant(id, stmts)
+								}
 								"argument" => {
 									ensure!(items.is_empty(), "argument has no items");
 									Self::Param(item.args.arg(0, "argument name")?)
+								}
+								"body" => {
+									ensure!(items.is_empty(), "body has no items");
+									item.args.verify_unused()?;
+									Self::Body
 								}
 								"virtual_field" => {
 									let type_item = items
@@ -386,55 +479,105 @@ impl Namespace {
 						}
 					}
 
-					let mut params = Vec::new();
-					let mut virtual_fields = Vec::new();
-					let mut fields = Vec::new();
-					let mut types = BTreeMap::new();
+					fn native_type_statements(
+						stmts: Vec<NativeStmt>,
+					) -> Result<(NativeTypeVariant, BTreeMap<Ident, NativeTypeVariant>)> {
+						let mut params = Vec::new();
+						let mut virtual_fields = Vec::new();
+						let mut fields = Vec::new();
+						let mut types = BTreeMap::new();
+						let mut accepts_body = false;
+						let mut variants = BTreeMap::new();
+						for statement in stmts {
+							match statement {
+								NativeStmt::Param(name) => params.push(name),
+								NativeStmt::VirtualField(name, ty) => {
+									virtual_fields.push((name, ty))
+								}
+								NativeStmt::Field(name, ty) => fields.push((name, ty)),
+								NativeStmt::Type(ty, default) => ensure!(
+									types.insert(ty.clone(), default).is_none(),
+									"generic set twice: {ty:?}"
+								),
+								NativeStmt::Body => accepts_body = true,
+								NativeStmt::Variant(name, v) => {
+									let (var, vars) = native_type_statements(v)?;
+									assert!(vars.is_empty(), "checked in stmt parsing");
+									variants.insert(name.clone(), var);
+								}
+							}
+						}
+						let specialization = types
+							.iter()
+							.map(|(n, t)| {
+								(
+									n.clone(),
+									t.clone().unwrap_or_else(|| {
+										TypeKind::Reference(Reference {
+											ty: ReferenceKind::Generic(n.clone()),
+											args: vec![],
+											types: BTreeMap::new(),
+											body: vec![],
+										})
+									}),
+								)
+							})
+							.collect();
+						Ok((
+							NativeTypeVariant {
+								virtual_fields,
+								fields,
+								accepts_body,
+								specialization,
+								params,
+								types,
+							},
+							variants,
+						))
+					}
+
+					let mut native_stmt = Vec::new();
 					for statement in item.block.statements {
 						let stmt = NativeStmt::from_ast(statement)?;
-						match stmt {
-							NativeStmt::Param(name) => params.push(name),
-							NativeStmt::VirtualField(name, ty) => virtual_fields.push((name, ty)),
-							NativeStmt::Field(name, ty) => fields.push((name, ty)),
-							NativeStmt::Type(ty, default) => ensure!(
-								types.insert(ty.clone(), default).is_none(),
-								"generic set twice: {ty:?}"
-							),
+						native_stmt.push(stmt);
+					}
+					let (default, mut variants) = native_type_statements(native_stmt)?;
+					if variants.is_empty() {
+						variants.insert(Ident::new("default"), default);
+					} else {
+						ensure!(
+							!variants.contains_key(&Ident::new("default")),
+							"default variant name is reserved"
+						);
+						for (_, var) in variants.iter_mut() {
+							var.extend(&default);
 						}
 					}
 
-					ensure!(
-						types.is_empty() == specializer.is_none(),
-						"specializer should be set when setting native types"
-					);
+					let has_types = variants.values().any(|v| !v.types.is_empty());
+					let accepts_body = variants.values().any(|v| v.accepts_body);
 
 					let name = item.args.arg(0, "native name")?;
+					ensure!(
+						(!has_types && !accepts_body) == specializer.is_none(),
+						"specializer should be set when the native has generics or a body in <{name:?}>"
+					);
+
 					(
 						name,
 						NamespaceItem::Type(Type {
 							_id: Default::default(),
 							kind: TypeKind::Native(NativeType {
 								specializer,
-								virtual_fields,
-								fields,
-								specialization: types
-									.iter()
-									.map(|(n, t)| {
-										(
-											n.clone(),
-											t.clone().unwrap_or_else(|| {
-												TypeKind::Reference(Reference {
-													ty: ReferenceKind::Generic(n.clone()),
-													args: vec![],
-													types: BTreeMap::new(),
-												})
-											}),
-										)
-									})
-									.collect(),
+								variants,
 							}),
-							types,
-							params,
+							// Native type is not generic per-se and won't be monomorphised as normal types do
+							// However, it might make sense to have optional @monomorphise on generic type so the
+							// actual native type is monomorphised?..
+							types: BTreeMap::new(),
+							params: Vec::new(),
+							// types,
+							// params,
 						}),
 					)
 				}
@@ -450,7 +593,7 @@ impl Namespace {
 						name.clone(),
 						NamespaceItem::Type(
 							Type::from_ast(type_item, items, block)
-								.with_context(|| format!("def {:?}", name))?,
+								.with_context(|| format!("def <{:?}>", name))?,
 						),
 					)
 				}

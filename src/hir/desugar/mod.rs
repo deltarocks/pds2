@@ -1,9 +1,11 @@
+mod apply_specializers;
 mod extract_nested_types;
 mod give_all_types_ids;
 mod monomorphize;
 mod resolve_paths_to_ids;
 mod rewrite_paths_to_absolute;
 mod replace_aliases;
+pub use apply_specializers::apply_specializers;
 pub use extract_nested_types::extract_nested_types;
 pub use give_all_types_ids::give_all_types_ids;
 pub use monomorphize::monomorphize;

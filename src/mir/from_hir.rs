@@ -16,6 +16,7 @@ impl Type {
 				ty: ReferenceKind::Resolved(target),
 				args,
 				types,
+				..
 			}) => {
 				assert!(types.is_empty(), "monomorphization should be done");
 				Self {
@@ -101,6 +102,7 @@ impl TypeKind {
 				fields,
 				specializer,
 				specialization,
+				..
 			}) => Self::Native(NativeType {
 				virtual_fields: virtual_fields
 					.iter()

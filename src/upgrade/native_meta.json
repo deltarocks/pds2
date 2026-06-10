@@ -1,0 +1,45 @@
+{
+	"_doc": "Native type signatures for the `upgrade` command. Discovered usage from the protodef json is merged on top of these entries, so this file only needs to declare what cannot be inferred from a use site (e.g. a native used without all of its arguments in a given protocol, or purely-semantic params). `args` are value (lowercase) parameters, `generics` are type (uppercase) parameters, `value_generic` declares the chained `=> T` element type.",
+	"natives": {
+		"pstring": {
+			"generics": [
+				"Count"
+			]
+		},
+		"buffer": {
+			"args": [
+				"count"
+			],
+			"generics": [
+				"Count"
+			]
+		},
+		"array": {
+			"args": [
+				"count"
+			],
+			"generics": [
+				"Count"
+			],
+			"value_generic": true
+		},
+		"option": {
+			"value_generic": true
+		},
+		"entityMetadataLoop": {
+			"args": [
+				"endVal"
+			],
+			"value_generic": true
+		},
+		"topBitSetTerminatedArray": {
+			"value_generic": true
+		},
+		"registryEntryHolder": {
+			"args": [
+				"baseName"
+			]
+		},
+		"registryEntryHolderSet": {}
+	}
+}

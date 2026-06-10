@@ -85,6 +85,7 @@ impl TypeKind {
 				fields,
 				specializer: _,
 				specialization,
+				..
 			}) => {
 				for (_, ty) in specialization.iter_mut() {
 					ty.rewrite_paths_to_absolute(current_ns, generics, paths)

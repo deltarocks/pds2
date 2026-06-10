@@ -48,6 +48,7 @@ use crate::{
 		FieldRefOrConst, IdGenerator, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip,
 		Type, TypeKind, Visitor,
 	},
+	specializer::Registry,
 };
 
 struct TypeReceiver {
@@ -56,9 +57,9 @@ struct TypeReceiver {
 }
 
 impl Visitor for TypeReceiver {
-	fn visit_type_kind(&mut self, ty: &mut TypeKind) -> Result<()> {
+	fn visit_type_kind(&mut self, ty: &mut TypeKind, reg: &Registry) -> Result<()> {
 		let mut collector = ReferenceCollector::default();
-		ty.traverse(&mut collector, TraverseSkip::empty())?;
+		ty.traverse(&mut collector, TraverseSkip::empty(), reg)?;
 
 		let vty = mem::replace(ty, TypeKind::Void);
 		let id = self.id.next();
@@ -76,6 +77,7 @@ impl Visitor for TypeReceiver {
 				.map(|(i, f)| (i, FieldRefOrConst::FieldRef(f)))
 				.collect(),
 			types: BTreeMap::new(),
+			body: vec![],
 		});
 		Ok(())
 	}
@@ -106,7 +108,7 @@ impl Visitor for ReferenceCollector {
 	}
 }
 
-pub fn extract_nested_types(id: IdGenerator, ir: &mut Namespace) -> Result<()> {
+pub fn extract_nested_types(id: IdGenerator, ir: &mut Namespace, reg: &Registry) -> Result<()> {
 	ir.derive_types(|t| {
 		let mut receiver = TypeReceiver {
 			id: id.clone(),
@@ -115,6 +117,7 @@ pub fn extract_nested_types(id: IdGenerator, ir: &mut Namespace) -> Result<()> {
 		t.traverse(
 			&mut receiver,
 			TraverseSkip::TOPLEVEL_TYPEKIND | TraverseSkip::DFS,
+			reg,
 		)?;
 		Ok(receiver.extracted)
 	})?;

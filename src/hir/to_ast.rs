@@ -74,6 +74,7 @@ impl TypeKind {
 				ty: ReferenceKind::Resolved(r),
 				args,
 				types,
+				..
 			}) => {
 				vec![Value::Internal(format!(
 					"type reference {:?} (args: {:?}, types: {:?})",

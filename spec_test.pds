@@ -1,0 +1,32 @@
+def_native(u8);
+def_native(u16);
+def_native(u32);
+def_native(u64);
+def_native(i8);
+def_native(i16);
+def_native(i32);
+def_native(i64);
+def_native(bool);
+
+@specializer bitfield
+def_native(bitfield) {
+	body;
+};
+
+@specializer bitflags
+def_native(bitflags) {
+	type(Value);
+	body;
+};
+
+def(position) => bitfield {
+	field(x, size: 26, signed: true);
+	field(z, size: 26, signed: true);
+	field(y, size: 12, signed: true);
+};
+
+def(playerActions) => bitflags {
+	flag(add_player);
+	flag(initialize_chat);
+	flag(update_listed);
+} => u8;

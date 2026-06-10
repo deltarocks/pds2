@@ -1,4 +1,9 @@
+
+
 def_native(u8);
+
+@specializer container
+def_native(container);
 
 def(a) {
     type(Value);
@@ -14,3 +19,5 @@ def(b) {
 def(out) => container {
     field(bu8) => b(Wrapped: a) => u8;
 };
+
+
