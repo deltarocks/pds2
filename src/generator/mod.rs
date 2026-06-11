@@ -3,15 +3,14 @@ use clap::ValueEnum;
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
 use crate::mir;
+use crate::specializer::Registry;
 
 mod rust;
 // mod typescript;
 
-pub struct SpecializerObj {}
-
 pub type GeneratorOutput = HashMap<PathBuf, String>;
 pub type Generator =
-	fn(input: &mir::TypeMap, output: &mut GeneratorOutput, spec: &SpecializerObj) -> Result<()>;
+	fn(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Registry) -> Result<()>;
 
 #[derive(Debug, ValueEnum, Clone)]
 pub enum GeneratorTypes {

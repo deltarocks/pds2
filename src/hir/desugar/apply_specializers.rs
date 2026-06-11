@@ -1,20 +1,26 @@
 //! Apply specializers desugaring pass
 //!
-//! Runs after path resolution. For every use-site reference to a body-accepting
-//! native type (one carrying a `@specializer`), it invokes the registered
-//! [`Specializer`](crate::hir::Specializer) to project the reference body into a
-//! concrete list of fields, replacing the reference with an inline `Native` whose
-//! `fields` are those projected fields. The specializer still owns serialization.
+//! Runs after path resolution, before monomorphization. Every use-site reference to
+//! a *body-accepting* specializer native (`body;` in the `def_native`) invokes the
+//! registered [`AstHir`](crate::specializer::AstHir) implementation to project the
+//! use-site body into a concrete list of fields, replacing the reference with an
+//! inline `Native` whose `fields` are those projected fields. The specializer still
+//! owns serialization; the overload variant is recorded on the inline native so
+//! generators can dispatch per-overload.
+//!
+//! Specializer natives *without* a body (e.g. `array`) are not touched here: they
+//! are ordinary generic types, monomorphized like any other, with use-site value
+//! arguments staying on the reference.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 
 use crate::{
 	ast::{Ident, Path},
 	hir::{
-		HirSpecializerCtx, NamespaceItem, NativeType, NativeTypeVariant, Traverse, TraverseSkip,
-		TypeId, TypeKind, Visitor,
+		HirSpecializerCtx, NamespaceItem, NativeType, Traverse, TraverseSkip, TypeId, TypeKind,
+		Visitor,
 	},
 	specializer::Registry,
 };
@@ -22,12 +28,12 @@ use crate::{
 use super::super::Namespace;
 
 /// Collect, for the whole tree: every type's absolute path -> id, and which ids are
-/// native types with a specializer (id -> specializer name).
+/// body-accepting specializer natives (id -> (specializer name, overload variant)).
 fn collect(
 	ns: &Namespace,
 	path: &mut Vec<Ident>,
 	by_path: &mut HashMap<Path, TypeId>,
-	spec: &mut HashMap<TypeId, Ident>,
+	spec: &mut HashMap<TypeId, (Ident, Ident)>,
 ) {
 	for (name, item) in &ns.items {
 		match item {
@@ -47,10 +53,12 @@ fn collect(
 				);
 				if let TypeKind::Native(NativeType {
 					specializer: Some(s),
+					variant,
+					accepts_body: true,
 					..
 				}) = &t.kind
 				{
-					spec.insert(t.id(), s.clone());
+					spec.insert(t.id(), (s.clone(), variant.clone()));
 				}
 			}
 		}
@@ -59,7 +67,7 @@ fn collect(
 
 struct Apply<'a> {
 	by_path: &'a HashMap<Path, TypeId>,
-	spec: &'a HashMap<TypeId, Ident>,
+	spec: &'a HashMap<TypeId, (Ident, Ident)>,
 }
 
 impl Visitor for Apply<'_> {
@@ -67,16 +75,23 @@ impl Visitor for Apply<'_> {
 		let TypeKind::Reference(r) = ty else {
 			return Ok(());
 		};
-		let (Some(id), false) = (r.ty.resolved(), r.body.is_empty()) else {
+		let Some(id) = r.ty.resolved() else {
 			return Ok(());
 		};
-		let Some(name) = self.spec.get(&id) else {
+		let Some((name, variant)) = self.spec.get(&id) else {
 			return Ok(());
 		};
 		let specializer = reg
 			.asthir
 			.get(name.as_str())
 			.ok_or_else(|| anyhow!("no specializer implementation for {name:?}"))?;
+		// The inline result has nowhere to keep value arguments; none of the
+		// body-accepting natives take them so far.
+		ensure!(
+			r.args.is_empty(),
+			"body-accepting native does not take value arguments: {:?}",
+			r.args
+		);
 
 		let resolve = |n: &str| {
 			self.by_path
@@ -89,6 +104,7 @@ impl Visitor for Apply<'_> {
 		};
 		let fields = specializer
 			.fields(&HirSpecializerCtx {
+				variant,
 				body: &r.body,
 				types: &r.types,
 				args: &r.args,
@@ -101,19 +117,16 @@ impl Visitor for Apply<'_> {
 			.iter()
 			.map(|(k, v)| (k.clone(), v.clone()))
 			.collect();
+		// keep the consumed body around: codegen needs its metadata (sizes, flags)
+		let body = std::mem::take(&mut r.body);
 		*ty = TypeKind::Native(NativeType {
 			specializer: Some(name.clone()),
-			variants: BTreeMap::from_iter([(
-				Ident::new("default"),
-				NativeTypeVariant {
-					virtual_fields: vec![],
-					fields,
-					accepts_body: false,
-					specialization,
-					params,
-					types,
-				},
-			)]),
+			variant: variant.clone(),
+			virtual_fields: vec![],
+			fields,
+			accepts_body: false,
+			specialization,
+			body,
 		});
 		Ok(())
 	}

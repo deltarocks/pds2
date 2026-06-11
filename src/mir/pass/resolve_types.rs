@@ -90,6 +90,9 @@ impl Definition {
 			mir::TypeKind::Native(_native) => {
 				// Handled at use level, see `resolve_type_use`
 			}
+			mir::TypeKind::Alias(ty) => {
+				Self::resolve_type_use(self_id, ty, types, out)?;
+			}
 			mir::TypeKind::Void => {}
 		};
 		Ok(())
@@ -228,10 +231,7 @@ impl Definition {
 			(
 				FieldRefSegment::Virtual(name),
 				mir::TypeKind::Native(NativeType {
-					virtual_fields,
-					fields: _,
-					specializer: _,
-					specialization: _,
+					virtual_fields, ..
 				}),
 			) => {
 				let (_, ty) = virtual_fields
@@ -244,12 +244,7 @@ impl Definition {
 			}
 			(
 				FieldRefSegment::Down { to, .. },
-				mir::TypeKind::Native(NativeType {
-					virtual_fields: _,
-					fields,
-					specializer: _,
-					specialization: _,
-				}),
+				mir::TypeKind::Native(NativeType { fields, .. }),
 			) => {
 				let (_, ty) = fields
 					.iter()
@@ -281,6 +276,7 @@ impl Definition {
 				default: _,
 			} => *tag_type = collector.find_internal_type(i, "tag_type")?,
 			mir::TypeKind::Native(_native_type) => {}
+			mir::TypeKind::Alias(_) => {}
 			mir::TypeKind::Void => {}
 		}
 		Ok(())

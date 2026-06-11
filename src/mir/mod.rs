@@ -30,12 +30,17 @@ pub struct ContainerField {
 
 #[derive(Debug)]
 pub struct NativeType {
-	// Which user defined function should be called to generate parser for this type
-	pub specializer: Option<Ident>,
-	// Which monomorphized generics this opaque type has
+	// Which user defined function should be called to generate parser for this type,
+	// and which def_native overload variant it should dispatch on ("default" unless
+	// overloads are declared)
+	pub specializer: Option<(Ident, Ident)>,
+	// Which monomorphized generics this opaque type has; unbound generics are absent.
+	// Wire-time value inputs arrive as reference args binding the def's params.
 	pub specialization: Vec<(Ident, Type)>,
 	pub virtual_fields: Vec<(Ident, Type)>,
 	pub fields: Vec<(Ident, Type)>,
+	// The consumed use-site body (codegen metadata: bitfield sizes, flag order, ...)
+	pub body: Vec<crate::hir::BodyField>,
 }
 
 #[derive(Debug)]
@@ -52,6 +57,10 @@ pub enum TypeKind {
 		default: Option<(Ident, Type)>,
 	},
 	Native(NativeType),
+	/// An exported named alias to another type, possibly binding its arguments
+	/// (`def(root_const_field) { export; } => array(size: 3) => varint`). Generators
+	/// emit a forwarding type.
+	Alias(Type),
 	Void,
 }
 

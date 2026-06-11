@@ -4,7 +4,6 @@ use clap::Parser;
 use generator::GeneratorTypes;
 use std::path::PathBuf;
 
-use self::generator::SpecializerObj;
 use self::specializer::{register_protodef_types, Registry};
 pub mod ast;
 pub mod format;
@@ -258,7 +257,7 @@ fn try_main() -> anyhow::Result<()> {
 			}
 
 			let mut out = Default::default();
-			generator.generator()(&mir, &mut out, &SpecializerObj {})?;
+			generator.generator()(&mir, &mut out, &reg)?;
 
 			if let Some(to) = &to {
 				std::fs::create_dir_all(to)?;

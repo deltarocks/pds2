@@ -32,6 +32,11 @@ impl Ident {
 			.unwrap_or(false)
 	}
 }
+impl std::fmt::Display for Ident {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(&self.0)
+	}
+}
 impl FormatInto<Rust> for Ident {
 	fn format_into(self, tokens: &mut rust::Tokens) {
 		quote_in!(*tokens => $(self.0.as_ref()))

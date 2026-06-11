@@ -33,8 +33,8 @@ use std::collections::HashSet;
 use crate::{
 	ast::Ident,
 	hir::{
-		Container, ContainerFieldType, Namespace, NamespaceItem, NativeType, Reference,
-		ReferenceKind, Type, TypeKind, Union,
+		Container, ContainerFieldType, Namespace, NamespaceItem, Reference, ReferenceKind, Type,
+		TypeKind, Union,
 	},
 };
 
@@ -80,20 +80,15 @@ impl TypeKind {
 				}
 			}
 			TypeKind::Void => {}
-			TypeKind::Native(NativeType {
-				virtual_fields,
-				fields,
-				specializer: _,
-				specialization,
-				..
-			}) => {
-				for (_, ty) in specialization.iter_mut() {
+			TypeKind::Native(native) => {
+				// the native's generics live on the surrounding Type, already in scope
+				for (_, ty) in native.specialization.iter_mut() {
 					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
-				for (_, ty) in virtual_fields.iter_mut() {
+				for (_, ty) in native.virtual_fields.iter_mut() {
 					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
-				for (_, ty) in fields.iter_mut() {
+				for (_, ty) in native.fields.iter_mut() {
 					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
 			}
@@ -156,6 +151,14 @@ impl Namespace {
 		for (name, item) in self.items.iter_mut() {
 			match item {
 				NamespaceItem::Inner(ns) => {
+					// A native overload set is referenced by its bare name (the variant
+					// is selected during path resolution), so the namespace itself must
+					// be a path candidate.
+					if ns.overload_set().is_some() {
+						let mut path = current_ns.clone();
+						path.push(name.clone());
+						paths.insert(path);
+					}
 					current_ns.push(name.clone());
 					ns.discover_paths(current_ns, paths);
 					current_ns.pop().unwrap();

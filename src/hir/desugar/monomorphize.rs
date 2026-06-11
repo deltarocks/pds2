@@ -1,6 +1,6 @@
 //! Generate static version of every generic struct usage
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{anyhow, bail, ensure, Result};
 
@@ -26,6 +26,9 @@ type Monomorphizations = BTreeMap<(TypeId, BTreeMap<Ident, TypeKind>), (PendingT
 struct FindGenericTypeReferences<'t> {
 	id: IdGenerator,
 	generic_types: &'t HashMap<TypeId, String>,
+	/// generic types that are natives: unbound generics are allowed there, so even a
+	/// reference binding nothing still monomorphizes (to a concrete native instance)
+	natives: &'t HashSet<TypeId>,
 	monos: &'t mut Monomorphizations,
 	found: &'t mut bool,
 }
@@ -63,7 +66,7 @@ impl Visitor for FindGenericTypeReferences<'_> {
 			}
 			value.ty = ReferenceKind::Resolved(monoed.id());
 			value.types = BTreeMap::new();
-		} else if !usage.is_empty() {
+		} else if !usage.is_empty() || self.natives.contains(&ty) {
 			let pending = self.id.next_pending();
 			value.ty = ReferenceKind::Resolved(pending.id());
 			value.types = BTreeMap::new();
@@ -155,25 +158,40 @@ impl Visitor for ImplementMonomorphized<'_> {
 				TraverseSkip::empty(),
 				reg,
 			)?;
-			if !still_unset.is_empty() {
-				self.generic_types
-					.insert(pending.id(), format!("{pending_name} {types:?}"));
+			if let TypeKind::Native(native) = &mut kind {
+				// Natives may leave generics unbound (opaque to the compiler, the
+				// generator decides): prune them, absent entry = unbound. The mono is
+				// fully concrete, so it keeps the native's declared params and no
+				// generic set.
+				native.specialization.retain(
+					|(_, v)| !matches!(v, TypeKind::Reference(r) if r.ty.is_generic()),
+				);
+				self.created
+					.push(Type::new(pending, ty.params.clone(), kind, BTreeMap::new()));
+			} else {
+				if !still_unset.is_empty() {
+					self.generic_types
+						.insert(pending.id(), format!("{pending_name} {types:?}"));
+				}
+				self.created
+					.push(Type::new(pending, Vec::new(), kind, still_unset));
 			}
-			self.created
-				.push(Type::new(pending, Vec::new(), kind, still_unset));
 			*self.created_new = true;
 		}
 		Ok(())
 	}
 }
 
-struct FindGenericTypes<'t>(&'t mut HashMap<TypeId, String>);
+struct FindGenericTypes<'t>(&'t mut HashMap<TypeId, String>, &'t mut HashSet<TypeId>);
 impl Visitor for FindGenericTypes<'_> {
 	fn visit_type(&mut self, ty: &mut Type, _reg: &Registry) -> Result<()> {
 		if ty.types.is_empty() {
 			return Ok(());
 		}
 		self.0.insert(ty.id(), "unknown".to_owned());
+		if matches!(ty.kind, TypeKind::Native(_)) {
+			self.1.insert(ty.id());
+		}
 		Ok(())
 	}
 }
@@ -193,8 +211,9 @@ impl Visitor for EnsureNoReferencesTo<'_> {
 
 pub fn monomorphize(id: IdGenerator, ir: &mut Namespace, reg: &Registry) -> Result<()> {
 	let mut generic_types = HashMap::new();
+	let mut natives = HashSet::new();
 	ir.traverse(
-		&mut FindGenericTypes(&mut generic_types),
+		&mut FindGenericTypes(&mut generic_types, &mut natives),
 		TraverseSkip::empty(),
 		reg,
 	)?;
@@ -206,6 +225,7 @@ pub fn monomorphize(id: IdGenerator, ir: &mut Namespace, reg: &Registry) -> Resu
 			&mut FindGenericTypeReferences {
 				id: id.clone(),
 				generic_types: &generic_types,
+				natives: &natives,
 				monos: &mut monos,
 				found: &mut changed,
 			},

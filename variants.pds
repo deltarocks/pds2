@@ -1,0 +1,25 @@
+@specializer array
+def_native(array) {
+	variant(inline) {
+		type(Size);
+		virtual_field(size) => Size;
+	};
+	variant(sized) {
+		argument(size);
+		virtual_field(size) => varint;
+	};
+
+	type(Value);
+};
+
+def_native(varint);
+def(root_prefix) {
+	export;
+} => array(Size: varint) => varint;
+def(root_sized_field) => container {
+	virtual_field(len, value: ./v/@size) => varint;
+	field(v) => array(size: ../len) => varint;
+};
+def(root_const_field) {
+	export;
+} => array(size: 3) => varint;

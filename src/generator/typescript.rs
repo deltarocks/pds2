@@ -157,9 +157,9 @@ pub fn generator(
 			};
 			match native {
 				mir::NativeType {
-					specializer: Some(specializer),
+					specializer: Some((specializer, _variant)),
 					specialization,
-					virtual_fields: _,
+					..
 				} => {
 					let tyf: Tokens = quote! {Type};
 					let readf: Tokens = quote! {throw new Error("not implemented");};

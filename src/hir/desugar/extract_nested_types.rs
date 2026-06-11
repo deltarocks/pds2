@@ -68,6 +68,7 @@ impl Visitor for TypeReceiver {
 			types: BTreeMap::new(),
 			params: collector.params,
 			kind: vty,
+			export: false,
 		});
 		*ty = TypeKind::Reference(Reference {
 			ty: ReferenceKind::Resolved(id),
@@ -116,7 +117,9 @@ pub fn extract_nested_types(id: IdGenerator, ir: &mut Namespace, reg: &Registry)
 		};
 		t.traverse(
 			&mut receiver,
-			TraverseSkip::TOPLEVEL_TYPEKIND | TraverseSkip::DFS,
+			// SKIP_GENERIC_TYPES also skips template `def_native`s, whose specializer
+			// placeholders are not real nested types to extract.
+			TraverseSkip::TOPLEVEL_TYPEKIND | TraverseSkip::DFS | TraverseSkip::SKIP_GENERIC_TYPES,
 			reg,
 		)?;
 		Ok(receiver.extracted)

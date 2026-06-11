@@ -4,7 +4,7 @@ use crate::{
 	mir::{self, FieldItem},
 	should_be_desugared,
 };
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 
 use super::{Definition, Field, FieldOrConst, NativeType, Type, TypeKind, TypeMap, Value};
@@ -96,24 +96,31 @@ impl TypeKind {
 					default: None,
 				}
 			}
-			hir::TypeKind::Reference(Reference { .. }) => todo!("type alias: {hir:?}"),
-			hir::TypeKind::Native(hir::NativeType {
-				virtual_fields,
-				fields,
-				specializer,
-				specialization,
+			// An exported alias def surviving replace_aliases: keep it as a named
+			// forwarding type.
+			hir::TypeKind::Reference(Reference {
+				ty: ReferenceKind::Resolved(_),
 				..
-			}) => Self::Native(NativeType {
-				virtual_fields: virtual_fields
+			}) => Self::Alias(Type::from_hir(hir)),
+			hir::TypeKind::Reference(r) => unreachable!("unresolved reference in MIR: {r:?}"),
+			hir::TypeKind::Native(native) => Self::Native(NativeType {
+				virtual_fields: native
+					.virtual_fields
 					.iter()
 					.map(|(name, ty)| (name.clone(), Type::from_hir(ty)))
 					.collect(),
-				fields: fields
+				fields: native
+					.fields
 					.iter()
 					.map(|(name, ty)| (name.clone(), Type::from_hir(ty)))
 					.collect(),
-				specializer: specializer.clone(),
-				specialization: specialization
+				specializer: native
+					.specializer
+					.clone()
+					.map(|s| (s, native.variant.clone())),
+				body: native.body.clone(),
+				specialization: native
+					.specialization
 					.iter()
 					.map(|(n, v)| (n.clone(), Type::from_hir(v)))
 					.collect(),
@@ -177,6 +184,12 @@ pub fn from_hir_internal(
 		match item {
 			hir::NamespaceItem::Inner(ns) => from_hir_internal(ns, path, out)?,
 			hir::NamespaceItem::Type(d) => {
+				// Template `def_native`s are compile-time only: their use-sites are
+				// inlined/monomorphized away, so they are not emitted to MIR.
+				if matches!(&d.kind, hir::TypeKind::Native(n) if n.is_template()) {
+					path.pop().expect("stack underflow");
+					continue;
+				}
 				let old = out.insert(d.id(), Definition::from_hir(Path::new(path.clone()), d)?);
 				assert!(old.is_none());
 			}

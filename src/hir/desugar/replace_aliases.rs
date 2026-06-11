@@ -14,18 +14,28 @@
 
 use std::collections::BTreeMap;
 
-use crate::ast::{FieldRefSegment, Ident};
+use crate::ast::{BaseFieldRef, FieldRefSegment, Ident};
 use crate::hir::{
-	BaseFieldRefOrConst, FieldRefOrConst, Namespace, Reference, ReferenceKind, Traverse,
-	TraverseSkip, Type, TypeId, TypeKind, Visitor,
+	FieldRefOrConst, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip, Type, TypeId,
+	TypeKind, Visitor,
 };
 use crate::specializer::Registry;
 use anyhow::Result;
 
+/// How one target argument of an alias is produced from the alias's own arguments.
+#[derive(Debug)]
+enum RemapArg {
+	/// take the use-site value of the alias parameter, descend by the path suffix
+	/// (`def(p, x) => thing(a: $x.inner)` remaps target arg `a` from param `x` via `.inner`)
+	Arg(Ident, BaseFieldRef),
+	Const(crate::hir::Value),
+}
+
 #[derive(Debug)]
 struct Alias {
 	target: TypeId,
-	remap_arguments: BTreeMap<Ident, BaseFieldRefOrConst>,
+	/// target argument name -> how to build it from the use-site arguments
+	remap_arguments: BTreeMap<Ident, RemapArg>,
 }
 
 struct CollectAliasList<'t> {
@@ -43,6 +53,11 @@ impl<'t> CollectAliasList<'t> {
 }
 impl Visitor for CollectAliasList<'_> {
 	fn visit_type(&mut self, typ: &mut Type, _reg: &Registry) -> Result<()> {
+		// `export;` keeps the def in the output: it stays a named alias to MIR
+		// instead of being dissolved into its use sites.
+		if typ.export {
+			return Ok(());
+		}
 		if let TypeKind::Reference(Reference {
 			ty, args, types, ..
 		}) = &mut typ.kind
@@ -53,9 +68,6 @@ impl Visitor for CollectAliasList<'_> {
 			let remap_arguments = args
 				.iter()
 				.map(|(name, value)| {
-					dbg!(value);
-					dbg!(name);
-
 					(
 						name.clone(),
 						match value {
@@ -63,14 +75,12 @@ impl Visitor for CollectAliasList<'_> {
 								assert_eq!(value.up, 0);
 								let mut refer = value.path.clone();
 								let first_segment = refer.0.remove(0);
-								let FieldRefSegment::Arg(_arg) = first_segment else {
+								let FieldRefSegment::Arg(arg) = first_segment else {
 									panic!("first segment should be arg, got {first_segment:?}")
 								};
-								// assert_eq!(&arg, name);
-								// let mut value = value.clone();
-								BaseFieldRefOrConst::BaseFieldRef(refer)
+								RemapArg::Arg(arg, refer)
 							}
-							FieldRefOrConst::Const(c) => BaseFieldRefOrConst::Const(c.clone()),
+							FieldRefOrConst::Const(c) => RemapArg::Const(c.clone()),
 						},
 					)
 				})
@@ -112,31 +122,36 @@ impl Visitor for ReplaceAliasedReferences<'_> {
 
 		let resolved = value.ty.resolved().unwrap();
 		if let Some(alias) = self.aliases.get(&resolved) {
+			// Build the target's arguments: each remap names the alias parameter it
+			// takes its value from (alias and target parameter names are unrelated).
+			let args = alias
+				.remap_arguments
+				.iter()
+				.map(|(target_name, remap)| {
+					let arg = match remap {
+						RemapArg::Arg(param, suffix) => {
+							let supplied = value
+								.args
+								.iter()
+								.find(|(n, _)| n == param)
+								.unwrap_or_else(|| {
+									panic!("alias use-site is missing argument {param:?}")
+								});
+							let FieldRefOrConst::FieldRef(supplied) = &supplied.1 else {
+								panic!("alias remap through a path needs a field reference")
+							};
+							let mut supplied = supplied.clone();
+							supplied.path.0.extend_from_slice(&suffix.0);
+							FieldRefOrConst::FieldRef(supplied)
+						}
+						RemapArg::Const(c) => FieldRefOrConst::Const(c.clone()),
+					};
+					(target_name.clone(), arg)
+				})
+				.collect();
 			*value = Reference {
 				ty: ReferenceKind::Resolved(alias.target),
-				args: value
-					.args
-					.iter()
-					.map(|(name, value)| {
-						let mut value = value.clone();
-						let remap = alias
-							.remap_arguments
-							.get(name)
-							.ok_or_else(|| format!("TODO: unused argument? {name:?}"))
-							.unwrap();
-						match (remap, &mut value) {
-							(
-								BaseFieldRefOrConst::BaseFieldRef(remap),
-								FieldRefOrConst::FieldRef(value),
-							) => {
-								value.path.0.extend_from_slice(&remap.0);
-							}
-							(BaseFieldRefOrConst::Const(_), FieldRefOrConst::Const(_)) => {}
-							_ => unreachable!(),
-						}
-						(name.clone(), value)
-					})
-					.collect(),
+				args,
 				types: BTreeMap::new(),
 				body: vec![],
 			};
@@ -152,12 +167,12 @@ pub fn replace_aliases(ir: &mut Namespace, reg: &Registry) -> Result<()> {
 		let mut had_changed = false;
 		{
 			let mut visitor = CollectAliasList::new(&mut aliases);
-			ir.traverse(&mut visitor, TraverseSkip::empty(), reg)?;
+			ir.traverse(&mut visitor, TraverseSkip::SKIP_GENERIC_TYPES, reg)?;
 			had_changed |= visitor.found_new;
 		}
 		{
 			let mut visitor = ReplaceAliasedReferences::new(&mut aliases);
-			ir.traverse(&mut visitor, TraverseSkip::empty(), reg)?;
+			ir.traverse(&mut visitor, TraverseSkip::SKIP_GENERIC_TYPES, reg)?;
 			had_changed |= visitor.replaced;
 		}
 		if !had_changed {

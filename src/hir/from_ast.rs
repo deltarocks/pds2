@@ -6,7 +6,7 @@ use crate::{
 	},
 	hir::{
 		BodyArg, BodyField, Container, ContainerFieldType, FieldRefOrConst, NamespaceItem,
-		NativeType, NativeTypeVariant, Reference, ReferenceKind, Union, Value as HirValue,
+		NativeType, Reference, ReferenceKind, Union, Value as HirValue,
 	},
 	specializer::Registry,
 };
@@ -82,6 +82,7 @@ impl Type {
 	pub fn from_ast(value: Item, items: Vec<Value>, block: Block) -> Result<Type> {
 		let mut params = Vec::new();
 		let mut types = BTreeMap::new();
+		let mut export = false;
 		for stmt in block.statements {
 			let (_attrs, item, mut items) = stmt.pop_item()?;
 			ensure!(items.is_empty(), "expected only one item");
@@ -91,6 +92,11 @@ impl Type {
 					item.args.verify_unused()?;
 
 					params.push(name);
+				}
+				"export" => {
+					item.args.verify_unused()?;
+					ensure!(!export, "export set twice");
+					export = true;
 				}
 				"type" => {
 					let name: Ident = item.args.arg(0, "generic name")?;
@@ -119,6 +125,7 @@ impl Type {
 			types,
 			params,
 			kind: TypeKind::from_ast(value, items)?,
+			export,
 		})
 	}
 }
@@ -439,6 +446,10 @@ impl Namespace {
 									Self::Body
 								}
 								"virtual_field" => {
+									ensure!(
+										!items.is_empty(),
+										"virtual_field needs a type: `virtual_field(name) => type`"
+									);
 									let type_item = items
 										.remove(0)
 										.into_item()
@@ -450,6 +461,10 @@ impl Namespace {
 									)
 								}
 								"field" => {
+									ensure!(
+										!items.is_empty(),
+										"field needs a type: `field(name) => type`"
+									);
 									let type_item = items
 										.remove(0)
 										.into_item()
@@ -479,27 +494,80 @@ impl Namespace {
 						}
 					}
 
+					/// Per-variant accumulator, before lowering to [`NativeType`].
+					#[derive(Default)]
+					struct NativeParts {
+						params: Vec<Ident>,
+						virtual_fields: Vec<(Ident, TypeKind)>,
+						fields: Vec<(Ident, TypeKind)>,
+						types: BTreeMap<Ident, Option<TypeKind>>,
+						accepts_body: bool,
+					}
+					impl NativeParts {
+						fn extend(&mut self, from: &Self) {
+							self.params.extend(from.params.iter().cloned());
+							self.virtual_fields
+								.extend(from.virtual_fields.iter().cloned());
+							self.fields.extend(from.fields.iter().cloned());
+							self.types
+								.extend(from.types.iter().map(|(k, v)| (k.clone(), v.clone())));
+							self.accepts_body |= from.accepts_body;
+						}
+						/// A native's generics/params live on the surrounding [`Type`] like
+						/// any generic def, so the generic-type machinery covers natives.
+						fn into_type(self, specializer: Option<Ident>, variant: Ident) -> Type {
+							let specialization = self
+								.types
+								.iter()
+								.map(|(n, t)| {
+									(
+										n.clone(),
+										t.clone().unwrap_or_else(|| {
+											TypeKind::Reference(Reference {
+												ty: ReferenceKind::Generic(n.clone()),
+												args: vec![],
+												types: BTreeMap::new(),
+												body: vec![],
+											})
+										}),
+									)
+								})
+								.collect();
+							Type {
+								_id: Default::default(),
+								kind: TypeKind::Native(NativeType {
+									specializer,
+									variant,
+									virtual_fields: self.virtual_fields,
+									fields: self.fields,
+									accepts_body: self.accepts_body,
+									specialization,
+									body: vec![],
+								}),
+								types: self.types,
+								params: self.params,
+								export: false,
+							}
+						}
+					}
+
 					fn native_type_statements(
 						stmts: Vec<NativeStmt>,
-					) -> Result<(NativeTypeVariant, BTreeMap<Ident, NativeTypeVariant>)> {
-						let mut params = Vec::new();
-						let mut virtual_fields = Vec::new();
-						let mut fields = Vec::new();
-						let mut types = BTreeMap::new();
-						let mut accepts_body = false;
+					) -> Result<(NativeParts, BTreeMap<Ident, NativeParts>)> {
+						let mut parts = NativeParts::default();
 						let mut variants = BTreeMap::new();
 						for statement in stmts {
 							match statement {
-								NativeStmt::Param(name) => params.push(name),
+								NativeStmt::Param(name) => parts.params.push(name),
 								NativeStmt::VirtualField(name, ty) => {
-									virtual_fields.push((name, ty))
+									parts.virtual_fields.push((name, ty))
 								}
-								NativeStmt::Field(name, ty) => fields.push((name, ty)),
+								NativeStmt::Field(name, ty) => parts.fields.push((name, ty)),
 								NativeStmt::Type(ty, default) => ensure!(
-									types.insert(ty.clone(), default).is_none(),
+									parts.types.insert(ty.clone(), default).is_none(),
 									"generic set twice: {ty:?}"
 								),
-								NativeStmt::Body => accepts_body = true,
+								NativeStmt::Body => parts.accepts_body = true,
 								NativeStmt::Variant(name, v) => {
 									let (var, vars) = native_type_statements(v)?;
 									assert!(vars.is_empty(), "checked in stmt parsing");
@@ -507,33 +575,7 @@ impl Namespace {
 								}
 							}
 						}
-						let specialization = types
-							.iter()
-							.map(|(n, t)| {
-								(
-									n.clone(),
-									t.clone().unwrap_or_else(|| {
-										TypeKind::Reference(Reference {
-											ty: ReferenceKind::Generic(n.clone()),
-											args: vec![],
-											types: BTreeMap::new(),
-											body: vec![],
-										})
-									}),
-								)
-							})
-							.collect();
-						Ok((
-							NativeTypeVariant {
-								virtual_fields,
-								fields,
-								accepts_body,
-								specialization,
-								params,
-								types,
-							},
-							variants,
-						))
+						Ok((parts, variants))
 					}
 
 					let mut native_stmt = Vec::new();
@@ -541,45 +583,48 @@ impl Namespace {
 						let stmt = NativeStmt::from_ast(statement)?;
 						native_stmt.push(stmt);
 					}
-					let (default, mut variants) = native_type_statements(native_stmt)?;
-					if variants.is_empty() {
-						variants.insert(Ident::new("default"), default);
-					} else {
-						ensure!(
-							!variants.contains_key(&Ident::new("default")),
-							"default variant name is reserved"
-						);
-						for (_, var) in variants.iter_mut() {
-							var.extend(&default);
-						}
-					}
+					let (default, variants) = native_type_statements(native_stmt)?;
 
-					let has_types = variants.values().any(|v| !v.types.is_empty());
-					let accepts_body = variants.values().any(|v| v.accepts_body);
+					let has_types =
+						!default.types.is_empty() || variants.values().any(|v| !v.types.is_empty());
+					let accepts_body =
+						default.accepts_body || variants.values().any(|v| v.accepts_body);
 
-					let name = item.args.arg(0, "native name")?;
+					let name: Ident = item.args.arg(0, "native name")?;
 					ensure!(
 						(!has_types && !accepts_body) == specializer.is_none(),
 						"specializer should be set when the native has generics or a body in <{name:?}>"
 					);
 
-					(
-						name,
-						NamespaceItem::Type(Type {
-							_id: Default::default(),
-							kind: TypeKind::Native(NativeType {
-								specializer,
-								variants,
-							}),
-							// Native type is not generic per-se and won't be monomorphised as normal types do
-							// However, it might make sense to have optional @monomorphise on generic type so the
-							// actual native type is monomorphised?..
-							types: BTreeMap::new(),
-							params: Vec::new(),
-							// types,
-							// params,
-						}),
-					)
+					if variants.is_empty() {
+						// No overloads: the native is a single type named directly.
+						(
+							name,
+							NamespaceItem::Type(
+								default.into_type(specializer, Ident::new("default")),
+							),
+						)
+					} else {
+						// Overloaded native: emit a namespace of per-variant types
+						// (`name::variant`). Use-site references to the bare `name` select an
+						// overload by shape during path resolution; `name::variant` selects
+						// explicitly.
+						ensure!(
+							!variants.contains_key(&Ident::new("default")),
+							"default variant name is reserved"
+						);
+						let mut items = BTreeMap::new();
+						for (vname, mut parts) in variants {
+							parts.extend(&default);
+							items.insert(
+								vname.clone(),
+								NamespaceItem::Type(
+									parts.into_type(specializer.clone(), vname),
+								),
+							);
+						}
+						(name, NamespaceItem::Inner(Namespace { items }))
+					}
 				}
 				"def" => {
 					ensure!(!items.is_empty(), "def has no items");

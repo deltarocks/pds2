@@ -1,4 +1,4 @@
-use crate::ast::{BaseFieldRef, FieldRef, Ident, Path};
+use crate::ast::{FieldRef, Ident, Path};
 use crate::specializer::Registry;
 use std::{cell::Cell, collections::BTreeMap};
 mod from_ast;
@@ -37,6 +37,27 @@ pub struct Namespace {
 	pub items: BTreeMap<Ident, NamespaceItem>,
 }
 impl Namespace {
+	/// The per-variant native types of an overload set, or `None` for a regular
+	/// namespace. An overload-set namespace is only produced by `from_ast` for a
+	/// `def_native` with `variant(..)` blocks: every member is a native type carrying
+	/// its own item name as variant. Anything user-written has variant `"default"`.
+	pub fn overload_set(&self) -> Option<Vec<&Type>> {
+		let mut out = Vec::new();
+		for (name, item) in self.items.iter() {
+			let NamespaceItem::Type(t) = item else {
+				return None;
+			};
+			let TypeKind::Native(n) = &t.kind else {
+				return None;
+			};
+			if &n.variant != name || n.variant.as_str() == "default" {
+				return None;
+			}
+			out.push(t);
+		}
+		(!out.is_empty()).then_some(out)
+	}
+
 	pub fn retain_types<F: FnMut(&mut Type) -> bool>(&mut self, mut cond: F) {
 		for (_, i) in self.items.iter_mut() {
 			let NamespaceItem::Inner(ns) = i else {
@@ -212,43 +233,36 @@ impl Traverse for Union {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NativeType {
 	pub specializer: Option<Ident>,
-	pub variants: BTreeMap<Ident, NativeTypeVariant>,
-}
-impl Traverse for NativeType {
-	fn traverse(
-		&mut self,
-		visitor: &mut impl Visitor,
-		skip: TraverseSkip,
-		reg: &Registry,
-	) -> Result<()> {
-		for (_, ele) in &mut self.variants {
-			ele.traverse(visitor, skip, reg)?;
-		}
-		Ok(())
-	}
-}
+	/// The overload this type is. A `def_native` without `variant(..)` blocks declares
+	/// the single `default` variant; one with overloads is split by `from_ast` into a
+	/// namespace of per-variant types, each carrying its variant name here. Use-site
+	/// references select the overload during path resolution, so a separate TypeId per
+	/// overload exists and MIR never sees variants.
+	pub variant: Ident,
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct NativeTypeVariant {
 	pub virtual_fields: Vec<(Ident, TypeKind)>,
 	pub fields: Vec<(Ident, TypeKind)>,
 	/// whether use-sites may carry a `{ ... }` body for the specializer to process
 	pub accepts_body: bool,
+	/// generic bindings of this native: monomorphization substitutes them like any
+	/// generic def's; unbound generics are pruned (absent entry = unbound)
 	pub specialization: Vec<(Ident, TypeKind)>,
-
-	pub params: Vec<Ident>,
-	pub types: BTreeMap<Ident, Option<TypeKind>>,
+	/// the consumed use-site body, kept as metadata for codegen (e.g. bitfield sizes);
+	/// the field projection already happened in `apply_specializers`
+	pub body: Vec<BodyField>,
 }
-impl NativeTypeVariant {
-	fn extend(&mut self, from: &Self) {
-		self.virtual_fields.extend(from.virtual_fields.clone());
-		self.fields.extend(from.fields.clone());
-		self.accepts_body |= from.accepts_body;
-		self.specialization.extend(from.specialization.clone());
+impl NativeType {
+	/// A body-accepting native is compile-time only: every use-site is inlined by its
+	/// specializer, the declaration itself never reaches MIR. (Generic natives are
+	/// compile-time too, but their generics live on [`Type::types`] like any generic
+	/// def, so the generic-type machinery covers them.) Natives with only value
+	/// `argument(..)`s are real wire types and survive to MIR with params.
+	pub fn is_template(&self) -> bool {
+		self.accepts_body
 	}
 }
 
-impl Traverse for NativeTypeVariant {
+impl Traverse for NativeType {
 	fn traverse(
 		&mut self,
 		visitor: &mut impl Visitor,
@@ -258,6 +272,10 @@ impl Traverse for NativeTypeVariant {
 		for (n, t) in self.virtual_fields.iter_mut() {
 			t.traverse(visitor, skip, reg)
 				.with_context(|| format!("virtual_field({n:?})"))?;
+		}
+		for (n, t) in self.fields.iter_mut() {
+			t.traverse(visitor, skip, reg)
+				.with_context(|| format!("field({n:?})"))?;
 		}
 		for (n, t) in self.specialization.iter_mut() {
 			t.traverse(visitor, skip, reg)
@@ -333,12 +351,6 @@ impl Traverse for FieldRefOrConst {
 		}
 	}
 }
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum BaseFieldRefOrConst {
-	BaseFieldRef(BaseFieldRef),
-	Const(Value),
-}
-
 /// A single statement of a specializer body (`field(x, size: 26)`, `flag(add_player)`),
 /// captured verbatim at the use-site of a body-accepting native type.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -411,6 +423,11 @@ pub enum TypeKind {
 	Reference(Reference),
 	Native(NativeType),
 }
+impl TypeKind {
+	fn is_native_template(&self) -> bool {
+		matches!(self, TypeKind::Native(n) if n.is_template())
+	}
+}
 impl Traverse for TypeKind {
 	fn traverse(
 		&mut self,
@@ -445,6 +462,9 @@ pub struct Type {
 	pub params: Vec<Ident>,
 	pub types: BTreeMap<Ident, Option<TypeKind>>,
 	pub kind: TypeKind,
+	/// `export;` in the def block: keep this def in the output even when it is a
+	/// trivial alias that `replace_aliases` would otherwise dissolve
+	pub export: bool,
 }
 impl Traverse for Type {
 	fn traverse(
@@ -453,7 +473,9 @@ impl Traverse for Type {
 		skip: TraverseSkip,
 		reg: &Registry,
 	) -> Result<()> {
-		if !self.types.is_empty() && skip.contains(TraverseSkip::SKIP_GENERIC_TYPES) {
+		if skip.contains(TraverseSkip::SKIP_GENERIC_TYPES)
+			&& (!self.types.is_empty() || self.kind.is_native_template())
+		{
 			return Ok(());
 		}
 
@@ -501,6 +523,7 @@ impl Type {
 			params,
 			types,
 			kind,
+			export: false,
 		}
 	}
 	pub fn id(&self) -> TypeId {
@@ -520,6 +543,8 @@ impl Type {
 
 /// Everything a specializer needs to project a reference body into fields.
 pub struct HirSpecializerCtx<'a> {
+	/// the selected overload variant of the native
+	pub variant: &'a Ident,
 	/// the use-site body statements
 	pub body: &'a [BodyField],
 	/// generic bindings of the reference (e.g. `Value` -> the wrapped integer type)

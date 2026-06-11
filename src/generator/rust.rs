@@ -11,8 +11,8 @@ use crate::mir::FieldOrConst;
 use crate::mir::{self, Field, Type, TypeKind, TypeMap};
 
 use super::GeneratorOutput;
-use super::SpecializerObj;
-use anyhow::Result;
+use crate::specializer::{NativeCodegenCtx, Registry, RustNames};
+use anyhow::{Context as _, Result};
 
 #[derive(Clone)]
 struct RustMeta {
@@ -59,6 +59,21 @@ impl RustMeta {
 	}
 }
 
+impl RustNames for RustMeta {
+	fn ty(&self, id: TypeId) -> Import {
+		RustMeta::ty(self, id)
+	}
+	fn serialize(&self, id: TypeId) -> Import {
+		RustMeta::serialize(self, id)
+	}
+	fn deserialize(&self, id: TypeId) -> Import {
+		RustMeta::deserialize(self, id)
+	}
+	fn size_of(&self, id: TypeId) -> Import {
+		RustMeta::size_of(self, id)
+	}
+}
+
 fn generate_read_or_const_reference(
 	types: &RustMeta,
 	from_locals: bool,
@@ -67,6 +82,9 @@ fn generate_read_or_const_reference(
 ) -> Tokens {
 	let input = match input {
 		FieldOrConst::Field(field) => field,
+		FieldOrConst::Const(mir::Value::Signed(n)) => {
+			return quote!(&($(n.to_string())).into())
+		}
 		FieldOrConst::Const(_) => return quote!(Into::<$target>::into(todo!("const"))),
 	};
 	generate_read_reference(types, from_locals, input, target)
@@ -122,7 +140,7 @@ fn generate_args_passing(types: &RustMeta, input: &Type) -> Tokens {
 pub fn generator(
 	input: &mir::TypeMap,
 	output: &mut GeneratorOutput,
-	spec: &SpecializerObj,
+	reg: &Registry,
 ) -> Result<()> {
 	let meta = RustMeta::new(input);
 
@@ -172,6 +190,12 @@ pub fn generator(
 								let $(&field.name) = $(meta.deserialize(field.ty.target))(
 									input,
 									$(if !input[field.ty.target].params.is_empty() => $(generate_args_passing(&meta, &field.ty)),)
+								);
+							)
+							$(for field in fields.iter().filter(|f| f.load_from.is_some()) join($['\r']) =>
+								debug_assert!(
+									&$(&field.name) == $(generate_read_reference(&meta, true, field.load_from.as_ref().unwrap(), None)),
+									$(quoted(format!("virtual field {} does not match its value source", field.name.as_str())))
 								);
 							)
 							Ok(Ty {
@@ -237,6 +261,23 @@ pub fn generator(
 						}
 					}
 				}
+				TypeKind::Alias(target) => {
+					quote! {
+						pub type Ty = $(meta.ty(target.target));
+						pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+							$(meta.serialize(target.target))(_0, output)
+						}
+						pub fn deserialize(input: &mut $pinput) -> $presult<Ty> {
+							$(meta.deserialize(target.target))(
+								input,
+								$(if !input[target.target].params.is_empty() => $(generate_args_passing(&meta, target)),)
+							)
+						}
+						pub fn size_of(_0: &Ty) -> usize {
+							$(meta.size_of(target.target))(_0)
+						}
+					}
+				}
 				TypeKind::Native(_) | TypeKind::Void => {
 					quote! {$("// TODO: Native")}
 				}
@@ -256,68 +297,30 @@ pub fn generator(
 			};
 			match native {
 				mir::NativeType {
-					specializer: Some(specializer),
-					specialization,
-					virtual_fields: _,
-					fields: _,
+					specializer: Some((specializer, variant)),
+					..
 				} => {
-					// let specializer = spec
-					// 	.specializer
-					// 	.get(specializer.as_str().into())
-					// 	.map_err(|e| anyhow!("{e}"))?
-					// 	.ok_or_else(|| anyhow!("missing specializer for {specializer:?}"))?;
-					// let func = specializer
-					// 	.as_func()
-					// 	.ok_or_else(|| anyhow!("specializer should be function"))?;
-
-					// let mut args: GcHashMap<IStr, Any> = GcHashMap::new();
-					// args.insert("pds".into(), Any(Val::Obj(pds.clone())));
-					// for (name, ty) in specialization {
-					// 	args.insert(
-					// 		name.as_str().into(),
-					// 		Any(TypeId::into_untyped(ty.target)
-					// 			.expect("into conversion always succeeds")),
-					// 	);
-					// }
-					// let out = func
-					// 	.evaluate(
-					// 		ContextBuilder::dangerous_empty_state().build(),
-					// 		CallLocation::native(),
-					// 		&args,
-					// 		true,
-					// 	)
-					// 	.map_err(|e| anyhow!("{e}"))?;
-
-					// #[derive(Typed)]
-					// struct SpecializerOutput {
-					// 	ty: Any,
-					// 	read: Any,
-					// 	write: Any,
-					// 	size: Any,
-					// }
-					//
-					// let out = SpecializerOutput::from_untyped(out).map_err(|e| anyhow!("{e}"))?;
-					// let tyf =
-					// 	crate::format::convert_format(&out.ty.0).map_err(|e| anyhow!("{e}"))?;
-					// let readf =
-					// 	crate::format::convert_format(&out.read.0).map_err(|e| anyhow!("{e}"))?;
-					// let writef =
-					// 	crate::format::convert_format(&out.write.0).map_err(|e| anyhow!("{e}"))?;
-					// let sizef =
-					// 	crate::format::convert_format(&out.size.0).map_err(|e| anyhow!("{e}"))?;
-					// todo!();
-
-					// pi!(pi => "pub mod pds_" {=ty.name.readable_name()} " {" INDENT NL);
-					// pi!(pi => "use std::convert::TryInto;" NL);
-					// pi!(pi => "use super::{Input, Output, Result};" NL);
-					// pi!(pi => "pub type Ty = " {<tyf} ";" NL);
-					// pi!(pi => "pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {" INDENT NL {<writef} DEDENT NL "}" NL);
-					// pi!(pi => "pub fn deserialize(input: &mut Input) -> Result<Ty> {" INDENT NL {<readf} DEDENT NL "}" NL);
-					// pi!(pi => "pub fn size_of(_0: &Ty) -> usize {" INDENT NL {<sizef} DEDENT NL "}" NL);
-					// pi!(pi => DEDENT "}" NL)
+					let resolve = |n: &str| {
+						meta.raw_names
+							.iter()
+							.find(|(_, v)| v.as_str() == n)
+							.map(|(k, _)| *k)
+					};
+					let Some(codegen) = reg.codegen::<Tokens>(specializer.as_str()) else {
+						anyhow::bail!("no rust codegen for specializer {specializer:?}");
+					};
+					let contents = codegen
+						.generate(&NativeCodegenCtx {
+							variant,
+							native,
+							params: &ty.params,
+							rust: &meta,
+							resolve: &resolve,
+						})
+						.with_context(|| format!("codegen for {:?}", ty.name))?;
 					quote! {
-						pub mod pds_$(ty.name.readable_name()) {
-
+						pub mod $(meta.name(*id)) {
+							$contents
 						}
 					}
 				}
