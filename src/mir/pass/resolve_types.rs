@@ -24,7 +24,6 @@ impl TypeUsageCollector {
 			self.has_invalid = true;
 			return;
 		}
-		eprintln!("Resolving {name:?} to {ty:?}");
 		let args = self.data.entry(id).or_default();
 		let possible = args.entry(name.clone()).or_default();
 		if !possible.contains(&ty) {
@@ -79,7 +78,18 @@ impl Definition {
 				matches,
 				default,
 			} => {
-				out.used_internal(self_id, "tag_type", Self::resolve_ref(self_id, types, tag)?);
+				match tag {
+					mir::UnionTag::External(tag) => {
+						out.used_internal(
+							self_id,
+							"tag_type",
+							Self::resolve_ref(self_id, types, tag)?,
+						);
+					}
+					mir::UnionTag::Inline(ty) => {
+						Self::resolve_type_use(self_id, ty, types, out)?;
+					}
+				}
 				for (_, _, ty) in matches {
 					Self::resolve_type_use(self_id, ty, types, out)?;
 				}
@@ -113,11 +123,16 @@ impl Definition {
 		types: &TypeMap,
 		out: &mut TypeUsageCollector,
 	) -> Result<()> {
-		Self::resolve_type_use_inner(scope, ty, types, out, &mut HashSet::new())
+		Self::resolve_type_use_inner(scope, scope, ty, types, out, &mut HashSet::new())
 	}
 
+	/// `scope` resolves field paths (`./x`): the enclosing container of the use-site.
+	/// `arg_scope` resolves `$param` references: the def whose params are in scope —
+	/// inside a native's specialization that is the native itself (its params were
+	/// closure-converted from the use-site), outside it equals `scope`.
 	fn resolve_type_use_inner(
 		scope: TypeId,
+		arg_scope: TypeId,
 		ty: &mir::Type,
 		types: &TypeMap,
 		out: &mut TypeUsageCollector,
@@ -127,7 +142,11 @@ impl Definition {
 			let Some(arg) = arg.as_field() else {
 				continue;
 			};
-			out.used(ty.target, name, Self::resolve_ref(scope, types, arg)?);
+			let from = match arg.0.first().map(|i| &i.segment) {
+				Some(FieldRefSegment::Arg(_)) => arg_scope,
+				_ => scope,
+			};
+			out.used(ty.target, name, Self::resolve_ref(from, types, arg)?);
 		}
 		if !visited.insert(ty.target) {
 			return Ok(());
@@ -139,7 +158,7 @@ impl Definition {
 				.chain(native.virtual_fields.iter())
 				.chain(native.fields.iter())
 			{
-				Self::resolve_type_use_inner(scope, sub, types, out, visited)?;
+				Self::resolve_type_use_inner(scope, ty.target, sub, types, out, visited)?;
 			}
 		}
 		Ok(())
@@ -230,9 +249,7 @@ impl Definition {
 			}
 			(
 				FieldRefSegment::Virtual(name),
-				mir::TypeKind::Native(NativeType {
-					virtual_fields, ..
-				}),
+				mir::TypeKind::Native(NativeType { virtual_fields, .. }),
 			) => {
 				let (_, ty) = virtual_fields
 					.iter()
@@ -260,8 +277,7 @@ impl Definition {
 
 	fn propogate_types(&mut self, i: TypeId, collector: &TypeUsageCollector) -> Result<()> {
 		for (name, param) in self.params.iter_mut() {
-			dbg!(&name);
-			*param = dbg!(collector.find_type(i, name)?);
+			*param = collector.find_type(i, name)?;
 		}
 		match &mut self.kind {
 			mir::TypeKind::Container {
@@ -270,11 +286,16 @@ impl Definition {
 				delegate_all: _,
 			} => {}
 			mir::TypeKind::Union {
-				tag: _,
+				tag,
 				tag_type,
 				matches: _,
 				default: _,
-			} => *tag_type = collector.find_internal_type(i, "tag_type")?,
+			} => {
+				// inline tags know their type from construction
+				if matches!(tag, mir::UnionTag::External(_)) {
+					*tag_type = collector.find_internal_type(i, "tag_type")?
+				}
+			}
 			mir::TypeKind::Native(_native_type) => {}
 			mir::TypeKind::Alias(_) => {}
 			mir::TypeKind::Void => {}
@@ -283,6 +304,12 @@ impl Definition {
 	}
 
 	fn assert_no_unresolved(&self) -> Result<()> {
+		// A native's params may legitimately stay uninferred when every use passes a
+		// constant (`buffer(count: 256)`): there is no referenced field to take the
+		// type from. The generator falls back to a plain integer for them.
+		if matches!(self.kind, mir::TypeKind::Native(_)) {
+			return Ok(());
+		}
 		for (n, par) in self.params.iter() {
 			ensure!(
 				par.is_valid(),
@@ -298,7 +325,6 @@ pub fn resolve_types(types: &mut TypeMap) -> Result<()> {
 	let mut collector = TypeUsageCollector::default();
 
 	loop {
-		println!("resolving types");
 		collector.reset_validity();
 		for (i, d) in types.0.iter() {
 			d.resolve_types(*i, types, &mut collector)

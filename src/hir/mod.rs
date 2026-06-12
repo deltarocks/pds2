@@ -185,6 +185,7 @@ impl Traverse for Container {
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
 pub enum Value {
 	Number(i128),
+	Bool(bool),
 	String(String),
 	UnionDescriminator(Ident),
 }
@@ -199,10 +200,19 @@ impl Traverse for Value {
 	}
 }
 
+/// Where a union's discriminant comes from.
+#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
+pub enum UnionTag {
+	/// an already-read field of an enclosing container (`union(tag: ../kind)`)
+	External(FieldRef),
+	/// read inline by the union itself, immediately before the value
+	/// (`union(tagType: varint)`); the union is self-contained
+	Inline(Box<TypeKind>),
+}
+
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
 pub struct Union {
-	// TODO: Should it be `tag or tagType`, and not just `tag` in HIR?
-	pub tag: FieldRef,
+	pub tag: UnionTag,
 	// TODO: Conditional value? To make Union a replacement for match statement of some sort.
 	pub values: Vec<(Value, Ident, TypeKind)>,
 	pub default: Option<Box<TypeKind>>,
@@ -214,9 +224,10 @@ impl Traverse for Union {
 		skip: TraverseSkip,
 		reg: &Registry,
 	) -> Result<()> {
-		visitor
-			.visit_field_ref(&mut self.tag)
-			.context("union tag")?;
+		match &mut self.tag {
+			UnionTag::External(f) => visitor.visit_field_ref(f).context("union tag")?,
+			UnionTag::Inline(t) => t.traverse(visitor, skip, reg).context("union tag type")?,
+		}
 		for (v, a, ele) in self.values.iter_mut() {
 			v.traverse(visitor, skip, reg).context("union key")?;
 			ele.traverse(visitor, skip, reg)
@@ -250,6 +261,13 @@ pub struct NativeType {
 	/// the consumed use-site body, kept as metadata for codegen (e.g. bitfield sizes);
 	/// the field projection already happened in `apply_specializers`
 	pub body: Vec<BodyField>,
+	/// constant configuration arguments captured at the use-site when the reference
+	/// was inlined (`registryEntryHolder(baseName: "patternId") { ... }`); inlining
+	/// leaves no reference to hold them, and only constants are scope-free
+	pub const_args: Vec<(Ident, Value)>,
+	/// `is_void;` in the def_native block: the type carries no data. All inline void
+	/// kinds and other is_void natives are deduplicated to the first such def.
+	pub is_void: bool,
 }
 impl NativeType {
 	/// A body-accepting native is compile-time only: every use-site is inlined by its

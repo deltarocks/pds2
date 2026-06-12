@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{anyhow, Context, Result};
 
 use crate::{
 	ast::{Ident, Path},
@@ -85,13 +85,18 @@ impl Visitor for Apply<'_> {
 			.asthir
 			.get(name.as_str())
 			.ok_or_else(|| anyhow!("no specializer implementation for {name:?}"))?;
-		// The inline result has nowhere to keep value arguments; none of the
-		// body-accepting natives take them so far.
-		ensure!(
-			r.args.is_empty(),
-			"body-accepting native does not take value arguments: {:?}",
-			r.args
-		);
+		// Constant configuration arguments move onto the inline native; field
+		// references would escape the use-site scope once the reference is gone.
+		let const_args = r
+			.args
+			.iter()
+			.map(|(n, a)| match a {
+				crate::hir::FieldRefOrConst::Const(c) => Ok((n.clone(), c.clone())),
+				crate::hir::FieldRefOrConst::FieldRef(f) => Err(anyhow!(
+					"body-accepting native cannot take a field-reference argument: {n:?} = {f:?}"
+				)),
+			})
+			.collect::<Result<Vec<_>>>()?;
 
 		let resolve = |n: &str| {
 			self.by_path
@@ -127,6 +132,8 @@ impl Visitor for Apply<'_> {
 			accepts_body: false,
 			specialization,
 			body,
+			const_args,
+			is_void: false,
 		});
 		Ok(())
 	}

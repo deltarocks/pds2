@@ -62,6 +62,11 @@ impl TypeId {
 	pub fn is_valid(&self) -> bool {
 		self.0 != 0
 	}
+	/// Raw numeric id, used to disambiguate generated per-type helper names
+	/// (e.g. `is_equal_{type_id}`).
+	pub fn raw(&self) -> u64 {
+		self.0
+	}
 }
 impl Default for TypeId {
 	fn default() -> Self {

@@ -5,11 +5,12 @@
 //! the implementation. The `apply_specializers` pass calls [`Specializer::fields`]
 //! during HIR desugaring (after path resolution) to project the body into fields.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::rust;
 use genco::prelude::*;
+use tracing::info;
 
 use crate::ast::{self, Ident, Statement};
 use crate::upgrade::{NativeSig, NativeSigVariant, UpgradeCtx};
@@ -43,21 +44,44 @@ pub struct NativeCodegenCtx<'a> {
 	/// the selected def_native overload
 	pub variant: &'a Ident,
 	pub native: &'a mir::NativeType,
-	/// value params of the def (`argument(size)`), with resolved types
+	/// value params of the def (`argument(size)` + closure-converted captures), with
+	/// resolved types
 	pub params: &'a [(Ident, TypeId)],
 	pub rust: &'a dyn RustNames,
 	/// resolve a top-level type by name (e.g. `u8` for raw byte IO)
 	pub resolve: &'a dyn Fn(&str) -> Option<TypeId>,
+	/// the `pub struct Args<'a> { ... }` declaration for this def's params (empty
+	/// tokens when there are none)
+	pub args_struct: &'a dyn Fn() -> rust::Tokens,
+	/// extra `deserialize` parameter (`args: Args<'_>,`) when the def has params
+	pub args_param: &'a dyn Fn() -> rust::Tokens,
+	/// the `Args { ... },` to pass when calling `deserialize` of the given type-use
+	/// (empty tokens when the target takes no params); arg refs resolve against this
+	/// def's own `args`
+	pub pass_args: &'a dyn Fn(&mir::Type) -> rust::Tokens,
+	/// types this native is compared against when used as a union discriminant; a
+	/// tag-capable native (e.g. `option`) emits an `is_equal_{t}` helper per entry.
+	pub eq_targets: &'a [TypeId],
 }
 
 impl NativeCodegenCtx<'_> {
-	pub fn specialization(&self, name: &str) -> Result<TypeId> {
+	pub fn specialization_use(&self, name: &str) -> Result<&mir::Type> {
 		self.native
 			.specialization
 			.iter()
 			.find(|(n, _)| n.as_str() == name)
-			.map(|(_, t)| t.target)
+			.map(|(_, t)| t)
 			.ok_or_else(|| anyhow!("generic {name:?} is not bound"))
+	}
+	pub fn specialization(&self, name: &str) -> Result<TypeId> {
+		Ok(self.specialization_use(name)?.target)
+	}
+	/// a full `deserialize(input, args...)` call expression for a type-use,
+	/// threading the use's bound arguments (assumes `input`/`args` in scope)
+	pub fn deserialize_call(&self, u: &mir::Type) -> rust::Tokens {
+		let de = self.rust.deserialize(u.target);
+		let pass = (self.pass_args)(u);
+		quote!($de(input, $pass))
 	}
 	/// the declared type of a virtual field, if the variant declares it
 	pub fn virtual_field(&self, name: &str) -> Option<TypeId> {
@@ -139,10 +163,19 @@ pub fn register_protodef_types(reg: &mut Registry) {
 	reg.register_asthir("bitfield", Bitfield);
 	reg.register_asthir("bitflags", Bitflags);
 	reg.register_asthir("array", Array);
+	reg.register_asthir("registryEntryHolder", RegistryEntryHolder);
+	reg.register_asthir("registryEntryHolderSet", RegistryEntryHolderSet);
 
 	reg.register_codegen::<rust::Tokens>("bitfield", Bitfield);
 	reg.register_codegen::<rust::Tokens>("bitflags", Bitflags);
 	reg.register_codegen::<rust::Tokens>("array", Array);
+	reg.register_codegen::<rust::Tokens>("option", OptionP);
+	reg.register_codegen::<rust::Tokens>("buffer", Buffer);
+	reg.register_codegen::<rust::Tokens>("pstring", PString);
+	reg.register_codegen::<rust::Tokens>("entityMetadataLoop", EntityMetadataLoop);
+	reg.register_codegen::<rust::Tokens>("topBitSetTerminatedArray", TopBitSetTerminatedArray);
+	reg.register_codegen::<rust::Tokens>("registryEntryHolder", RegistryEntryHolder);
+	reg.register_codegen::<rust::Tokens>("registryEntryHolderSet", RegistryEntryHolderSet);
 
 	reg.register_upgrade(Bitfield);
 	reg.register_upgrade(Bitflags);
@@ -188,14 +221,52 @@ macro_rules! trivial_upgrade {
 		}
 	};
 }
+struct Void;
+impl Upgrade for Void {
+	fn name(&self) -> String {
+		"void".to_owned()
+	}
+	fn sig(&self) -> NativeSig {
+		NativeSig {
+			is_void: true,
+			..Default::default()
+		}
+	}
+}
+
 trivial_upgrade!(U8P => "u8");
 trivial_upgrade!(U16P => "u16");
 trivial_upgrade!(U32P => "u32");
 trivial_upgrade!(U64P => "u64");
 trivial_upgrade!(Varlong => "varlong");
-trivial_upgrade!(Void => "void");
 
 struct TopBitSetTerminatedArray;
+impl NativeCodegen<rust::Tokens> for TopBitSetTerminatedArray {
+	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+		let value = ctx
+			.specialization("Value")
+			.context("topBitSetTerminatedArray value")?;
+		let (pinput, poutput, presult) = pds_io();
+		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		Ok(quote! {
+			$((ctx.args_struct)())
+			pub type Ty = Vec<$(ctx.rust.ty(value))>;
+			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+				let _ = (_0, output);
+				todo!("topBitSetTerminatedArray serialization needs byte patching")
+			}
+			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+				let _ = input;
+				todo!("topBitSetTerminatedArray deserialization needs input peeking")
+			}
+			pub fn size_of(_0: &Ty) -> usize {
+				let mut n = 0;
+				for e in _0.iter() { n += $(ctx.rust.size_of(value))(e); }
+				n
+			}
+		})
+	}
+}
 impl Upgrade for TopBitSetTerminatedArray {
 	fn name(&self) -> String {
 		"topBitSetTerminatedArray".to_owned()
@@ -304,6 +375,7 @@ impl NativeCodegen<rust::Tokens> for Bitfield {
 		}
 
 		Ok(quote! {
+			$((ctx.args_struct)())
 			pub struct Ty {
 				$(for (e, (_, ty)) in entries.iter().zip(ctx.native.fields.iter()) join($['\r']) =>
 					pub $(&e.name): $(ctx.rust.ty(ty.target)),
@@ -319,7 +391,7 @@ impl NativeCodegen<rust::Tokens> for Bitfield {
 				}
 				Ok(())
 			}
-			pub fn deserialize(input: &mut $pinput) -> $presult<Ty> {
+			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
 				let mut acc: u128 = 0;
 				for _ in 0..$(bytes.to_string())u32 {
 					acc = (acc << 8) | ($(ctx.rust.deserialize(u8id))(input)? as u128);
@@ -333,6 +405,16 @@ impl NativeCodegen<rust::Tokens> for Bitfield {
 				$(bytes.to_string())
 			}
 		})
+	}
+}
+
+/// A def param type for generated Args structs: uninferred (const-only usage) params
+/// fall back to a plain integer.
+fn param_ty(ctx: &NativeCodegenCtx, id: TypeId) -> rust::Tokens {
+	if id.is_valid() {
+		quote!($(ctx.rust.ty(id)))
+	} else {
+		quote!(usize)
 	}
 }
 
@@ -425,6 +507,7 @@ impl NativeCodegen<rust::Tokens> for Bitflags {
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 
 		Ok(quote! {
+			$((ctx.args_struct)())
 			pub struct Ty {
 				$(for (name, ty) in ctx.native.fields.iter() join($['\r']) =>
 					pub $name: $(ctx.rust.ty(ty.target)),
@@ -440,7 +523,7 @@ impl NativeCodegen<rust::Tokens> for Bitflags {
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
 				$(ctx.rust.serialize(value))(&pack(_0).try_into().expect("bitflags value"), output)
 			}
-			pub fn deserialize(input: &mut $pinput) -> $presult<Ty> {
+			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
 				let acc: u64 = $(ctx.rust.deserialize(value))(input)?.try_into().expect("bitflags value");
 				Ok(Ty {
 					$(for (i, (name, _)) in ctx.native.fields.iter().enumerate() join($['\r']) =>
@@ -500,7 +583,10 @@ impl Upgrade for Bitflags {
 				statements,
 				root: false,
 			})
-			.then(ctx.upgrade_type(ty.clone()).context("bitflags value")?))
+			.then(
+				ctx.wrapped(|ctx| ctx.upgrade_type(ty.clone()))
+					.context("bitflags value")?,
+			))
 	}
 }
 
@@ -532,7 +618,73 @@ fn upgrade_registry_holder(
 		})
 		.build_values())
 }
+/// Project a use-site body of `field(name) => type` statements into typed fields.
+fn body_fields(ctx: &HirSpecializerCtx) -> Result<Vec<(Ident, hir::TypeKind)>> {
+	let mut out = Vec::new();
+	for f in ctx.body {
+		ensure!(
+			f.kind.as_str() == "field",
+			"unexpected body statement {:?}",
+			f.kind
+		);
+		let ty =
+			f.ty.clone()
+				.ok_or_else(|| anyhow!("body field {:?} needs a type", f.name))?;
+		out.push((f.name.clone(), ty));
+	}
+	Ok(out)
+}
+
 struct RegistryEntryHolder;
+impl AstHir for RegistryEntryHolder {
+	fn fields(&self, ctx: &HirSpecializerCtx) -> Result<Vec<(Ident, hir::TypeKind)>> {
+		body_fields(ctx)
+	}
+}
+impl NativeCodegen<rust::Tokens> for RegistryEntryHolder {
+	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+		let varint = (ctx.resolve)("varint")
+			.ok_or_else(|| anyhow!("registryEntryHolder needs the `varint` native"))?;
+		let (pinput, poutput, presult) = pds_io();
+		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		// the projected use-site body field is the inline (id 0) representation
+		let Some((iname, ity_use)) = ctx.native.fields.first() else {
+			bail!("registryEntryHolder needs an inline field from its body");
+		};
+		let _ = iname;
+		let ity = ity_use.target;
+		Ok(quote! {
+			$((ctx.args_struct)())
+			pub enum Ty {
+				Id($(ctx.rust.ty(varint))),
+				Inline($(ctx.rust.ty(ity))),
+			}
+			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+				match _0 {
+					Ty::Id(id) => $(ctx.rust.serialize(varint))(&(id + 1), output),
+					Ty::Inline(v) => {
+						$(ctx.rust.serialize(varint))(&0, output)?;
+						$(ctx.rust.serialize(ity))(v, output)
+					}
+				}
+			}
+			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+				let n = $(ctx.rust.deserialize(varint))(input)?;
+				Ok(if n == 0 {
+					Ty::Inline($(ctx.deserialize_call(ity_use))?)
+				} else {
+					Ty::Id(n - 1)
+				})
+			}
+			pub fn size_of(_0: &Ty) -> usize {
+				match _0 {
+					Ty::Id(id) => $(ctx.rust.size_of(varint))(&(id + 1)),
+					Ty::Inline(v) => $(ctx.rust.size_of(varint))(&0) + $(ctx.rust.size_of(ity))(v),
+				}
+			}
+		})
+	}
+}
 impl Upgrade for RegistryEntryHolder {
 	fn name(&self) -> String {
 		"registryEntryHolder".to_owned()
@@ -540,8 +692,10 @@ impl Upgrade for RegistryEntryHolder {
 
 	fn sig(&self) -> NativeSig {
 		NativeSig {
+			specializer: Some("registryEntryHolder".to_owned()),
 			default: NativeSigVariant {
 				args: BTreeSet::from_iter(["baseName".to_owned()]),
+				accepts_body: true,
 				..Default::default()
 			},
 			..Default::default()
@@ -557,14 +711,78 @@ impl Upgrade for RegistryEntryHolder {
 	}
 }
 struct RegistryEntryHolderSet;
+impl AstHir for RegistryEntryHolderSet {
+	fn fields(&self, ctx: &HirSpecializerCtx) -> Result<Vec<(Ident, hir::TypeKind)>> {
+		body_fields(ctx)
+	}
+}
+impl NativeCodegen<rust::Tokens> for RegistryEntryHolderSet {
+	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+		let varint = (ctx.resolve)("varint")
+			.ok_or_else(|| anyhow!("registryEntryHolderSet needs the `varint` native"))?;
+		let (pinput, poutput, presult) = pds_io();
+		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let Some((nname, nty_use)) = ctx.native.fields.first() else {
+			bail!("registryEntryHolderSet needs a named field from its body");
+		};
+		let _ = nname;
+		let nty = nty_use.target;
+		Ok(quote! {
+			$((ctx.args_struct)())
+			pub enum Ty {
+				Named($(ctx.rust.ty(nty))),
+				Ids(Vec<$(ctx.rust.ty(varint))>),
+			}
+			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+				match _0 {
+					Ty::Named(v) => {
+						$(ctx.rust.serialize(varint))(&0, output)?;
+						$(ctx.rust.serialize(nty))(v, output)
+					}
+					Ty::Ids(ids) => {
+						$(ctx.rust.serialize(varint))(&(ids.len() + 1).try_into().expect("id set length"), output)?;
+						for id in ids.iter() {
+							$(ctx.rust.serialize(varint))(id, output)?;
+						}
+						Ok(())
+					}
+				}
+			}
+			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+				let n: usize = $(ctx.rust.deserialize(varint))(input)?.try_into().expect("id set length");
+				Ok(if n == 0 {
+					Ty::Named($(ctx.deserialize_call(nty_use))?)
+				} else {
+					let mut ids = Vec::with_capacity(n - 1);
+					for _ in 0..n - 1 {
+						ids.push($(ctx.rust.deserialize(varint))(input)?);
+					}
+					Ty::Ids(ids)
+				})
+			}
+			pub fn size_of(_0: &Ty) -> usize {
+				match _0 {
+					Ty::Named(v) => 1 + $(ctx.rust.size_of(nty))(v),
+					Ty::Ids(ids) => {
+						let mut n = $(ctx.rust.size_of(varint))(&(ids.len() + 1).try_into().expect("id set length"));
+						for id in ids.iter() { n += $(ctx.rust.size_of(varint))(id); }
+						n
+					}
+				}
+			}
+		})
+	}
+}
 impl Upgrade for RegistryEntryHolderSet {
 	fn name(&self) -> String {
 		"registryEntryHolderSet".to_owned()
 	}
 	fn sig(&self) -> NativeSig {
 		NativeSig {
+			specializer: Some("registryEntryHolderSet".to_owned()),
 			default: NativeSigVariant {
 				args: BTreeSet::from_iter(["baseName".to_owned()]),
+				accepts_body: true,
 				..Default::default()
 			},
 			..Default::default()
@@ -583,32 +801,36 @@ impl Upgrade for RegistryEntryHolderSet {
 struct Array;
 impl NativeCodegen<rust::Tokens> for Array {
 	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
-		let value = ctx.specialization("Value").context("array element type")?;
+		let value_use = ctx
+			.specialization_use("Value")
+			.context("array element type")?;
+		let value = value_use.target;
+		let de_value = |ctx: &NativeCodegenCtx| ctx.deserialize_call(value_use);
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 
 		let main = match ctx.variant.as_str() {
-			// length prefix read inline, as the `Size` type
+			// length prefix read inline, as the `Count` type
 			"inline" => {
-				let size = ctx.specialization("Size").context("array size type")?;
+				let count = ctx.specialization("Count").context("array count type")?;
 				quote! {
 					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
-						$(ctx.rust.serialize(size))(&_0.len().try_into().expect("array length"), output)?;
+						$(ctx.rust.serialize(count))(&_0.len().try_into().expect("array length"), output)?;
 						for e in _0.iter() {
 							$(ctx.rust.serialize(value))(e, output)?;
 						}
 						Ok(())
 					}
-					pub fn deserialize(input: &mut $pinput) -> $presult<Ty> {
-						let count: usize = $(ctx.rust.deserialize(size))(input)?.try_into().expect("array length");
+					pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+						let count: usize = $(ctx.rust.deserialize(count))(input)?.try_into().expect("array length");
 						let mut out = Vec::with_capacity(count);
 						for _ in 0..count {
-							out.push($(ctx.rust.deserialize(value))(input)?);
+							out.push($(de_value(ctx))?);
 						}
 						Ok(out)
 					}
 					pub fn size_of(_0: &Ty) -> usize {
-						let mut n = $(ctx.rust.size_of(size))(&_0.len().try_into().expect("array length"));
+						let mut n = $(ctx.rust.size_of(count))(&_0.len().try_into().expect("array length"));
 						for e in _0.iter() { n += $(ctx.rust.size_of(value))(e); }
 						n
 					}
@@ -618,25 +840,20 @@ impl NativeCodegen<rust::Tokens> for Array {
 			"sized" => {
 				ensure!(
 					!ctx.params.is_empty(),
-					"array::sized needs a `size` argument"
+					"array::sized needs a `count` argument"
 				);
 				quote! {
-					pub struct Args<'a> {
-						$(for (name, ty) in ctx.params.iter() join($['\r']) =>
-							pub $name: &'a $(ctx.rust.ty(*ty)),
-						)
-					}
 					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
 						for e in _0.iter() {
 							$(ctx.rust.serialize(value))(e, output)?;
 						}
 						Ok(())
 					}
-					pub fn deserialize(input: &mut $pinput, args: Args<'_>) -> $presult<Ty> {
-						let count: usize = (*args.size).try_into().expect("array length");
+					pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+						let count: usize = (*args.count).try_into().expect("array length");
 						let mut out = Vec::with_capacity(count);
 						for _ in 0..count {
-							out.push($(ctx.rust.deserialize(value))(input)?);
+							out.push($(de_value(ctx))?);
 						}
 						Ok(out)
 					}
@@ -661,6 +878,7 @@ impl NativeCodegen<rust::Tokens> for Array {
 		};
 
 		Ok(quote! {
+			$((ctx.args_struct)())
 			pub type Ty = Vec<$(ctx.rust.ty(value))>;
 			$main
 			$virtual_size
@@ -680,13 +898,13 @@ impl AstHir for Array {
 		match ctx.variant.as_str() {
 			// length prefix read inline, as the `Size` type
 			"inline" => ensure!(
-				ctx.types.contains_key(&Ident::new("Size")),
-				"array::inline needs a `Size:` type binding"
+				ctx.types.contains_key(&Ident::new("Count")),
+				"array::inline needs a `Count:` type binding"
 			),
 			// length supplied by the use-site (field reference or constant)
 			"sized" => ensure!(
-				ctx.args.iter().any(|(n, _)| n.as_str() == "size"),
-				"array::sized needs a `size:` argument"
+				ctx.args.iter().any(|(n, _)| n.as_str() == "count"),
+				"array::sized needs a `count:` argument"
 			),
 			v => bail!("unknown array overload: {v:?}"),
 		}
@@ -700,15 +918,90 @@ impl Upgrade for Array {
 	fn sig(&self) -> NativeSig {
 		NativeSig {
 			specializer: Some("array".to_owned()),
+			is_void: false,
 			default: NativeSigVariant {
 				value_generic: true,
 				..Default::default()
 			},
-			..Default::default()
+			variants: BTreeMap::from_iter([
+				(
+					"inline".to_owned(),
+					NativeSigVariant {
+						generics: BTreeSet::from_iter(["Count".to_owned()]),
+						..Default::default()
+					},
+				),
+				(
+					"sized".to_owned(),
+					NativeSigVariant {
+						args: BTreeSet::from_iter(["count".to_owned()]),
+						..Default::default()
+					},
+				),
+			]),
 		}
 	}
 }
 struct Buffer;
+impl NativeCodegen<rust::Tokens> for Buffer {
+	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+		let u8id = (ctx.resolve)("u8").ok_or_else(|| anyhow!("buffer needs the `u8` native"))?;
+		let (pinput, poutput, presult) = pds_io();
+		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let read_bytes = quote! {
+			let mut out = Vec::with_capacity(count);
+			for _ in 0..count {
+				out.push($(ctx.rust.deserialize(u8id))(input)?);
+			}
+			Ok(out)
+		};
+		let write_bytes = quote! {
+			for b in _0.iter() {
+				$(ctx.rust.serialize(u8id))(b, output)?;
+			}
+		};
+		let main = match ctx.variant.as_str() {
+			"inline" => {
+				let count = ctx.specialization("Count").context("buffer count type")?;
+				quote! {
+					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+						$(ctx.rust.serialize(count))(&_0.len().try_into().expect("buffer length"), output)?;
+						$write_bytes
+						Ok(())
+					}
+					pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+						let count: usize = $(ctx.rust.deserialize(count))(input)?.try_into().expect("buffer length");
+						$read_bytes
+					}
+					pub fn size_of(_0: &Ty) -> usize {
+						$(ctx.rust.size_of(count))(&_0.len().try_into().expect("buffer length")) + _0.len()
+					}
+				}
+			}
+			"sized" => {
+				quote! {
+					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+						$write_bytes
+						Ok(())
+					}
+					pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+						let count: usize = (*args.count).try_into().expect("buffer length");
+						$read_bytes
+					}
+					pub fn size_of(_0: &Ty) -> usize {
+						_0.len()
+					}
+				}
+			}
+			v => bail!("unknown buffer overload: {v:?}"),
+		};
+		Ok(quote! {
+			$((ctx.args_struct)())
+			pub type Ty = Vec<u8>;
+			$main
+		})
+	}
+}
 impl Upgrade for Buffer {
 	fn name(&self) -> String {
 		"buffer".to_owned()
@@ -716,16 +1009,54 @@ impl Upgrade for Buffer {
 	fn sig(&self) -> NativeSig {
 		NativeSig {
 			specializer: Some("buffer".to_owned()),
-			default: NativeSigVariant {
-				value_generic: true,
-				..Default::default()
-			},
+			variants: BTreeMap::from_iter([
+				(
+					"inline".to_owned(),
+					NativeSigVariant {
+						generics: BTreeSet::from_iter(["Count".to_owned()]),
+						..Default::default()
+					},
+				),
+				(
+					"sized".to_owned(),
+					NativeSigVariant {
+						args: BTreeSet::from_iter(["count".to_owned()]),
+						..Default::default()
+					},
+				),
+			]),
 			..Default::default()
 		}
 	}
 }
 
 struct EntityMetadataLoop;
+impl NativeCodegen<rust::Tokens> for EntityMetadataLoop {
+	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+		let value = ctx
+			.specialization("Value")
+			.context("entityMetadataLoop value")?;
+		let (pinput, poutput, presult) = pds_io();
+		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		Ok(quote! {
+			$((ctx.args_struct)())
+			pub type Ty = Vec<$(ctx.rust.ty(value))>;
+			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+				let _ = (_0, output);
+				todo!("entityMetadataLoop serialization needs the terminator key")
+			}
+			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+				let _ = input;
+				todo!("entityMetadataLoop deserialization needs input peeking")
+			}
+			pub fn size_of(_0: &Ty) -> usize {
+				let mut n = 1;
+				for e in _0.iter() { n += $(ctx.rust.size_of(value))(e); }
+				n
+			}
+		})
+	}
+}
 impl Upgrade for EntityMetadataLoop {
 	fn name(&self) -> String {
 		"entityMetadataLoop".to_owned()
@@ -735,6 +1066,7 @@ impl Upgrade for EntityMetadataLoop {
 			specializer: Some("entityMetadataLoop".to_owned()),
 			default: NativeSigVariant {
 				value_generic: true,
+				args: BTreeSet::from_iter(["end".to_owned()]),
 				..Default::default()
 			},
 			..Default::default()
@@ -742,6 +1074,48 @@ impl Upgrade for EntityMetadataLoop {
 	}
 }
 struct OptionP;
+impl NativeCodegen<rust::Tokens> for OptionP {
+	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+		let value_use = ctx
+			.specialization_use("Value")
+			.context("option value type")?;
+		let value = value_use.target;
+		let boolean =
+			(ctx.resolve)("bool").ok_or_else(|| anyhow!("option needs the `bool` native"))?;
+		let (pinput, poutput, presult) = pds_io();
+		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		Ok(quote! {
+			$((ctx.args_struct)())
+			pub type Ty = Option<Box<$(ctx.rust.ty(value))>>;
+			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+				$(ctx.rust.serialize(boolean))(&_0.is_some(), output)?;
+				if let Some(v) = _0 {
+					$(ctx.rust.serialize(value))(v, output)?;
+				}
+				Ok(())
+			}
+			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+				Ok(if $(ctx.rust.deserialize(boolean))(input)? {
+					Some(Box::new($(ctx.deserialize_call(value_use))?))
+				} else {
+					None
+				})
+			}
+			pub fn size_of(_0: &Ty) -> usize {
+				let mut n = $(ctx.rust.size_of(boolean))(&_0.is_some());
+				if let Some(v) = _0 { n += $(ctx.rust.size_of(value))(v); }
+				n
+			}
+			// Union arm matching when an `option` is used as a discriminant: each
+			// target is the inner value type; the present value is compared to it.
+			$(for t in ctx.eq_targets join($['\r']) =>
+				pub fn $(format!("is_equal_{}", t.raw()))(a: &Ty, b: &$(ctx.rust.ty(*t))) -> bool {
+					a.as_deref() == Some(b)
+				}
+			)
+		})
+	}
+}
 impl Upgrade for OptionP {
 	fn name(&self) -> String {
 		"option".to_owned()
@@ -831,9 +1205,49 @@ impl Upgrade for LpVec3 {
 	}
 }
 struct PString;
+impl NativeCodegen<rust::Tokens> for PString {
+	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+		let count = ctx.specialization("Count").context("pstring count type")?;
+		let u8id = (ctx.resolve)("u8").ok_or_else(|| anyhow!("pstring needs the `u8` native"))?;
+		let (pinput, poutput, presult) = pds_io();
+		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		Ok(quote! {
+			$((ctx.args_struct)())
+			pub type Ty = String;
+			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+				$(ctx.rust.serialize(count))(&_0.len().try_into().expect("string length"), output)?;
+				for b in _0.as_bytes() {
+					$(ctx.rust.serialize(u8id))(b, output)?;
+				}
+				Ok(())
+			}
+			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+				let count: usize = $(ctx.rust.deserialize(count))(input)?.try_into().expect("string length");
+				let mut out = Vec::with_capacity(count);
+				for _ in 0..count {
+					out.push($(ctx.rust.deserialize(u8id))(input)?);
+				}
+				Ok(String::from_utf8(out).expect("utf8 string"))
+			}
+			pub fn size_of(_0: &Ty) -> usize {
+				$(ctx.rust.size_of(count))(&_0.len().try_into().expect("string length")) + _0.len()
+			}
+		})
+	}
+}
 impl Upgrade for PString {
 	fn name(&self) -> String {
 		"pstring".to_owned()
+	}
+	fn sig(&self) -> NativeSig {
+		NativeSig {
+			specializer: Some("pstring".to_owned()),
+			default: NativeSigVariant {
+				generics: BTreeSet::from_iter(["Count".to_owned()]),
+				..Default::default()
+			},
+			..Default::default()
+		}
 	}
 }
 struct RestBuffer;
@@ -864,27 +1278,141 @@ impl Upgrade for Container {
 		let data = data[0]
 			.as_array()
 			.ok_or_else(|| anyhow!("expected container data to be array"))?;
-		let mut statements = Vec::new();
-		for item in data {
-			let item = item
-				.as_object()
-				.ok_or_else(|| anyhow!("object field should be object"))?;
-			let name = if item.contains_key("anon") {
+		fn field_name(item: &serde_json::Map<String, serde_json::Value>) -> Result<&str> {
+			Ok(if item.contains_key("anon") {
 				"ANON"
 			} else {
 				item.get("name")
 					.ok_or_else(|| anyhow!("missing name"))?
 					.as_str()
 					.ok_or_else(|| anyhow!("expected name to be string"))?
+			})
+		}
+		let mut names = BTreeSet::new();
+		for item in data {
+			if let Some(item) = item.as_object() {
+				names.insert(field_name(item)?.to_owned());
+			}
+		}
+
+		// protodef `mapper` (discriminant) + `switch(compareTo: mapper)` is a pds
+		// inline-tag union; merge them when the mapper feeds exactly one switch and
+		// nothing else refers to it.
+		fn typed<'a>(
+			item: &'a serde_json::Value,
+			head: &str,
+		) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+			let arr = item.get("type")?.as_array()?;
+			if arr.first()?.as_str()? != head {
+				return None;
+			}
+			arr.get(1)?.as_object()
+		}
+		fn count_refs(data: &[serde_json::Value], name: &str) -> usize {
+			fn scan(v: &serde_json::Value, name: &str, acc: &mut usize) {
+				match v {
+					serde_json::Value::Object(m) => {
+						for (k, val) in m {
+							if (k == "compareTo" || k == "count" || k.ends_with("To"))
+								&& val.as_str() == Some(name)
+							{
+								*acc += 1;
+							}
+							scan(val, name, acc);
+						}
+					}
+					serde_json::Value::Array(a) => a.iter().for_each(|e| scan(e, name, acc)),
+					_ => {}
+				}
+			}
+			let mut acc = 0;
+			for f in data {
+				scan(f, name, &mut acc);
+			}
+			acc
+		}
+		// switch field name -> the mapper spec it absorbs
+		let mut merge: std::collections::HashMap<
+			&str,
+			&serde_json::Map<String, serde_json::Value>,
+		> = std::collections::HashMap::new();
+		let mut absorbed: BTreeSet<&str> = BTreeSet::new();
+		for item in data {
+			let Some(sw) = typed(item, "switch") else {
+				continue;
 			};
-			let ty = item.get("type").ok_or_else(|| anyhow!("missing type"))?;
+			let Some(ct) = sw.get("compareTo").and_then(serde_json::Value::as_str) else {
+				continue;
+			};
+			let mapper = data
+				.iter()
+				.find(|m| m.get("name").and_then(serde_json::Value::as_str) == Some(ct))
+				.and_then(|m| typed(m, "mapper"));
+			if let Some(mapper) = mapper {
+				if count_refs(data, ct) == 1 {
+					let sw_name = item
+						.as_object()
+						.map(field_name)
+						.transpose()?
+						.unwrap_or("ANON");
+					merge.insert(sw_name, mapper);
+					absorbed.insert(ct);
+				}
+			}
+		}
+
+		let upgrade_one = |ctx: &mut UpgradeCtx,
+		                   item: &serde_json::Value,
+		                   name: &str,
+		                   framed: bool|
+		 -> Result<Vec<ast::Value>> {
+			let go = |ctx: &mut UpgradeCtx| -> Result<Vec<ast::Value>> {
+				if let Some(mapper) = merge.get(name).copied() {
+					let switch = typed(item, "switch").expect("switch located during planning");
+					info!("container field {name} looks like legacy protodef mapper+switch, it will be replaced with union");
+					crate::upgrade::merge_mapper_switch(mapper, switch, ctx)
+				} else {
+					let ty = item.get("type").ok_or_else(|| anyhow!("missing type"))?;
+					ctx.upgrade_type(ty.clone())
+				}
+			};
+			if framed {
+				ctx.in_container(names.clone(), go)
+			} else {
+				go(ctx)
+			}
+		};
+
+		// effective = fields surviving the mapper merge
+		let mut effective: Vec<&serde_json::Value> = Vec::new();
+		for item in data {
+			let obj = item
+				.as_object()
+				.ok_or_else(|| anyhow!("object field should be object"))?;
+			if !absorbed.contains(field_name(obj)?) {
+				effective.push(item);
+			}
+		}
+		// A container left with a single field is a transparent wrapper: emit that
+		// field's type directly (e.g. a packet *is* its body union, not a struct
+		// wrapping it). Unframed so the inner type's references account for the missing
+		// container level.
+		if let [only] = effective.as_slice() {
+			let name = field_name(only.as_object().unwrap())?.to_owned();
+			return upgrade_one(ctx, only, &name, false)
+				.with_context(|| format!("transparent container <{name}>"));
+		}
+
+		let mut statements = Vec::new();
+		for item in effective {
+			let obj = item.as_object().unwrap();
+			let name = field_name(obj)?;
+			let ty = upgrade_one(ctx, item, name, true)
+				.with_context(|| format!("container field <{name}> value"))?;
 			statements.push(Statement::simple(
 				ast::Item::simple_builder("field")
 					.argsb(ast::ItemArgs::builder().arg(ast::Value::new_simple_item(name)))
-					.then(
-						ctx.upgrade_type(ty.clone())
-							.with_context(|| format!("container field <{name}> value"))?,
-					),
+					.then(ty),
 			));
 		}
 		Ok(ast::Item::simple_builder("container")

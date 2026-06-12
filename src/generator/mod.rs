@@ -26,15 +26,3 @@ impl GeneratorTypes {
 		}
 	}
 }
-
-impl FromStr for GeneratorTypes {
-	type Err = anyhow::Error;
-
-	fn from_str(s: &str) -> Result<Self, Self::Err> {
-		match s {
-			// "rust" => Ok(Self::Rust),
-			// "typescript" => Ok(Self::Typescript),
-			n => bail!("unknown generator type: {}", n),
-		}
-	}
-}

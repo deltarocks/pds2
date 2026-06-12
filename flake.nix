@@ -1,6 +1,6 @@
 {
   description = "Prodocol Description Something 2";
-  inputs.nixpkgs.url = "github:nixos/nixpkgs/release-24.11";
+  inputs.nixpkgs.url = "github:nixos/nixpkgs/release-26.05";
   inputs.flake-utils.url = "github:numtide/flake-utils";
   inputs.rust-overlay = {
     url = "github:oxalica/rust-overlay";
@@ -32,7 +32,6 @@
     in {
       devShells.default = craneLib.devShell {
         packages = with pkgs; [
-          nodePackages.node-gyp
           tree-sitter
           nodejs
           binutils

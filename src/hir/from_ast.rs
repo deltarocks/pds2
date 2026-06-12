@@ -1,12 +1,10 @@
 use std::collections::BTreeMap;
 
 use crate::{
-	ast::{
-		BaseFieldRef, Block, FieldRef, FieldRefSegment, Ident, Item, ParseValue, Statement, Value,
-	},
+	ast::{Block, FieldRef, Ident, Item, ParseValue, Statement, Value},
 	hir::{
 		BodyArg, BodyField, Container, ContainerFieldType, FieldRefOrConst, NamespaceItem,
-		NativeType, Reference, ReferenceKind, Union, Value as HirValue,
+		NativeType, Reference, ReferenceKind, Union, UnionTag, Value as HirValue,
 	},
 	specializer::Registry,
 };
@@ -14,8 +12,6 @@ use crate::{
 use super::{IdGenerator, Namespace, Type, TypeKind};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 
-/// Parse a use-site native body (`{ field(x, size: 26); flag(a); ... }`) into [`BodyField`]s.
-/// Empty for the common case of a plain reference with no block.
 fn parse_specializer_body(block: &Block) -> Result<Vec<BodyField>> {
 	let mut out = Vec::new();
 	for stmt in &block.statements {
@@ -69,10 +65,13 @@ pub fn parse_ast(ast: Block, reg: &Registry) -> Result<Namespace> {
 	super::desugar::rewrite_paths_to_absolute(&mut ns);
 	super::desugar::resolve_paths_to_ids(&mut ns).context("resolving paths")?;
 
+	super::desugar::deduplicate_voids(&mut ns, reg).context("deduplicating voids")?;
 	super::desugar::apply_specializers(&mut ns, reg).context("applying specializers")?;
 
+	// Make monomorphization only see scope-free references in bindings
+	super::desugar::extract_nested_types(id.clone(), &mut ns, reg)?;
 	super::desugar::monomorphize(id.clone(), &mut ns, reg)?;
-
+	// After monomorphization we can see new inline kinds (cloned template bodies)
 	super::desugar::extract_nested_types(id, &mut ns, reg)?;
 	super::desugar::replace_aliases(&mut ns, reg)?;
 	Ok(ns)
@@ -150,11 +149,14 @@ impl Union {
 					item.args.verify_unused()?;
 					let value = match i128::parse(value.clone()) {
 						Ok(n) => HirValue::Number(n),
-						Err(_) => match value {
-							Value::String { string, is_block: _ } => {
-								HirValue::UnionDescriminator(Ident::new(&string))
+						Err(_) => match bool::parse(value.clone()) {
+							Ok(b) => HirValue::Bool(b),
+							Err(_) => match value {
+								Value::String { string, is_block: _ } => {
+									HirValue::UnionDescriminator(Ident::new(&string))
+								},
+								_ => bail!("union match value should be a number, boolean, or discriminator string")
 							},
-							_ => bail!("union match value should be either number on union descriminator string")
 						},
 					};
 					if items.is_empty() {
@@ -191,58 +193,17 @@ impl Union {
 			}
 		}
 
-		match tag {
-			Ok(t) => Ok(TypeKind::Container(Container {
-				virt: true,
-				fields: vec![
-					(
-						Ident::new("_tag"),
-						ContainerFieldType::Normal(
-							TypeKind::from_ast(t, vec![]).context("union tag")?,
-						),
-					),
-					(
-						Ident::new("_value"),
-						ContainerFieldType::Normal(TypeKind::Union(Self {
-							tag: FieldRef {
-								up: 1,
-								path: BaseFieldRef(vec![FieldRefSegment::Down {
-									to: Ident::new("_tag"),
-									ignore_delegation: true,
-								}]),
-							},
-							values: fields,
-							default: default.map(Box::new),
-						})),
-					),
-				],
-				delegate_all: Some(Ident::new("_value")),
-			})),
-			Err(tag) => Ok(TypeKind::Union(Self {
-				tag,
-				values: fields,
-				default: default.map(Box::new),
-			})),
-		}
-		// Ok(Self{
-		// 	tag:
-		// })
-
-		// match
-		// {
-		// 	Ok(tag_ty) => {
-		// 		todo!()
-		// 	}
-		// 	Err(v) => {
-		// 		for ele in item.block.statements {
-		//
-		// 		}
-		// 		Ok(Self{
-		// 		tag: v,
-		// 		values:
-		// 	})
-		// 	}
-		// }
+		let tag = match tag {
+			Ok(t) => UnionTag::Inline(Box::new(
+				TypeKind::from_ast(t, vec![]).context("union tag type")?,
+			)),
+			Err(f) => UnionTag::External(f),
+		};
+		Ok(TypeKind::Union(Self {
+			tag,
+			values: fields,
+			default: default.map(Box::new),
+		}))
 	}
 }
 
@@ -411,6 +372,7 @@ impl Namespace {
 						Field(Ident, TypeKind),
 						Type(Ident, Option<TypeKind>),
 						Body,
+						IsVoid,
 
 						Variant(Ident, Vec<NativeStmt>),
 					}
@@ -444,6 +406,11 @@ impl Namespace {
 									ensure!(items.is_empty(), "body has no items");
 									item.args.verify_unused()?;
 									Self::Body
+								}
+								"is_void" => {
+									ensure!(items.is_empty(), "is_void has no items");
+									item.args.verify_unused()?;
+									Self::IsVoid
 								}
 								"virtual_field" => {
 									ensure!(
@@ -502,6 +469,7 @@ impl Namespace {
 						fields: Vec<(Ident, TypeKind)>,
 						types: BTreeMap<Ident, Option<TypeKind>>,
 						accepts_body: bool,
+						is_void: bool,
 					}
 					impl NativeParts {
 						fn extend(&mut self, from: &Self) {
@@ -512,6 +480,7 @@ impl Namespace {
 							self.types
 								.extend(from.types.iter().map(|(k, v)| (k.clone(), v.clone())));
 							self.accepts_body |= from.accepts_body;
+							self.is_void |= from.is_void;
 						}
 						/// A native's generics/params live on the surrounding [`Type`] like
 						/// any generic def, so the generic-type machinery covers natives.
@@ -543,6 +512,8 @@ impl Namespace {
 									accepts_body: self.accepts_body,
 									specialization,
 									body: vec![],
+									const_args: vec![],
+									is_void: self.is_void,
 								}),
 								types: self.types,
 								params: self.params,
@@ -568,6 +539,7 @@ impl Namespace {
 									"generic set twice: {ty:?}"
 								),
 								NativeStmt::Body => parts.accepts_body = true,
+								NativeStmt::IsVoid => parts.is_void = true,
 								NativeStmt::Variant(name, v) => {
 									let (var, vars) = native_type_statements(v)?;
 									assert!(vars.is_empty(), "checked in stmt parsing");
@@ -618,9 +590,7 @@ impl Namespace {
 							parts.extend(&default);
 							items.insert(
 								vname.clone(),
-								NamespaceItem::Type(
-									parts.into_type(specializer.clone(), vname),
-								),
+								NamespaceItem::Type(parts.into_type(specializer.clone(), vname)),
 							);
 						}
 						(name, NamespaceItem::Inner(Namespace { items }))

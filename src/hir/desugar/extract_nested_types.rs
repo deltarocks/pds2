@@ -56,9 +56,34 @@ struct TypeReceiver {
 	extracted: Vec<Type>,
 }
 
+struct HasEscapingRefs<'t>(&'t mut bool);
+impl Visitor for HasEscapingRefs<'_> {
+	fn visit_field_ref(&mut self, r: &mut FieldRef) -> Result<()> {
+		*self.0 |= r.up > 0;
+		Ok(())
+	}
+}
+
 impl Visitor for TypeReceiver {
 	fn visit_type_kind(&mut self, ty: &mut TypeKind, reg: &Registry) -> Result<()> {
-		let mut collector = ReferenceCollector::default();
+		// A plain reference is already flat; re-extracting it (e.g. on the second
+		// extraction pass) would orphan its scope-rooted arguments. Only pull it out
+		// when it still carries scope-crossing refs that need rewiring into params.
+		if matches!(ty, TypeKind::Reference(_)) {
+			let mut escaping = false;
+			ty.traverse(&mut HasEscapingRefs(&mut escaping), TraverseSkip::empty(), reg)?;
+			if !escaping {
+				return Ok(());
+			}
+		}
+		let mut collector = ReferenceCollector {
+			// A union is transparent: refs in its arms (tag args, arm-reference
+			// arguments) are scoped to the *enclosing* container even at up=0, so
+			// extracting the union must rewire them into params too. A container
+			// owns its up=0 refs (they point at its own fields).
+			include_local: matches!(ty, TypeKind::Union(_)),
+			..ReferenceCollector::default()
+		};
 		ty.traverse(&mut collector, TraverseSkip::empty(), reg)?;
 
 		let vty = mem::replace(ty, TypeKind::Void);
@@ -88,23 +113,45 @@ impl Visitor for TypeReceiver {
 struct ReferenceCollector {
 	args: Vec<(Ident, FieldRef)>,
 	params: Vec<Ident>,
+	/// rewire up=0 refs too (the extracted kind does not own its local scope, e.g. a
+	/// union whose arm refs are scoped to the enclosing container)
+	include_local: bool,
 }
 impl Visitor for ReferenceCollector {
 	fn visit_field_ref(&mut self, r: &mut FieldRef) -> Result<()> {
-		if r.up == 0 {
+		if r.up == 0 && !self.include_local {
+			return Ok(());
+		}
+		if matches!(r.path.0.first(), Some(FieldRefSegment::Arg(_))) {
+			// already rewired to a param by a previous (inner) extraction
 			return Ok(());
 		}
 		let mut orig = r.clone();
-		orig.up -= 1;
-		let name: Ident = r.name().as_str().into();
+		orig.up = orig.up.saturating_sub(1);
+		let mut name: Ident = r.name().as_str().into();
 
-		self.args.push((name.clone(), orig));
+		// reuse the param if the same source ref was already captured; uniquify the
+		// name on collision with a different source
+		if let Some((existing, _)) = self
+			.args
+			.iter()
+			.find(|(n, o)| o == &orig && n.as_str().starts_with(name.as_str()))
+		{
+			name = existing.clone();
+		} else {
+			let mut i = 0;
+			while self.params.contains(&name) {
+				name = Ident::new(&format!("{}_{i}", r.name().as_str()));
+				i += 1;
+			}
+			self.args.push((name.clone(), orig));
+			self.params.push(name.clone());
+		}
 
 		*r = FieldRef {
 			up: 0,
 			path: BaseFieldRef(vec![FieldRefSegment::Arg(name.clone())]),
 		};
-		self.params.push(name);
 		Ok(())
 	}
 }

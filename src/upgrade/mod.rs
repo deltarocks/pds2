@@ -64,13 +64,27 @@ pub struct NativeSigVariant {
 pub struct NativeSig {
 	/// `@specializer` name, if the native is specializer-backed
 	pub specializer: Option<String>,
+	/// the native carries no data (`is_void;`); all void types deduplicate to it
+	pub is_void: bool,
 	pub default: NativeSigVariant,
 	pub variants: BTreeMap<String, NativeSigVariant>,
+}
+
+/// One level of the lexical scope stack tracked during upgrade, used to convert
+/// protodef references (bare names resolved by searching enclosing containers) into
+/// pds references (explicit `../` counts).
+enum ScopeFrame {
+	/// a container with its field names
+	Container(BTreeSet<String>),
+	/// a native wrapper (option, array element, generic binding): consumes one
+	/// `../` level in pds scoping but holds no fields
+	Wrapper,
 }
 
 pub struct UpgradeCtx<'r> {
 	registry: &'r Registry,
 	natives: BTreeMap<String, NativeSig>,
+	scopes: Vec<ScopeFrame>,
 }
 
 impl UpgradeCtx<'_> {
@@ -83,16 +97,73 @@ impl UpgradeCtx<'_> {
 	pub fn upgrade_value(&mut self, value: &Value) -> Result<ast::Value> {
 		upgrade_value(value)
 	}
+	/// run `f` one native-wrapper level deeper (a chained `=> T` value, a generic
+	/// binding): pds scoping counts the wrapper as one `../` level
+	pub fn wrapped<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+		self.scopes.push(ScopeFrame::Wrapper);
+		let r = f(self);
+		self.scopes.pop();
+		r
+	}
+	/// run `f` inside a container scope with the given field names
+	pub fn in_container<T>(
+		&mut self,
+		fields: BTreeSet<String>,
+		f: impl FnOnce(&mut Self) -> Result<T>,
+	) -> Result<T> {
+		self.scopes.push(ScopeFrame::Container(fields));
+		let r = f(self);
+		self.scopes.pop();
+		r
+	}
+	/// Convert a protodef reference to a pds one. Protodef resolves bare names by
+	/// searching enclosing containers lexically (`../` skips one container); pds
+	/// wants an explicit up-count where every container *and* native wrapper is a
+	/// level, and level 1 is the reference holder itself.
+	pub fn reference(&self, r: &str) -> Result<ast::FieldRef> {
+		let mut parsed = parse_reference(r, 0)?;
+		let dots = parsed.up;
+		let head = match parsed.path.0.first() {
+			Some(FieldRefSegment::Down { to, .. }) => to.as_str().to_owned(),
+			_ => bail!("protodef reference should start with a field name: {r:?}"),
+		};
+		let mut up = 1;
+		let mut skipped = 0;
+		let mut found = false;
+		for frame in self.scopes.iter().rev() {
+			match frame {
+				ScopeFrame::Wrapper => up += 1,
+				ScopeFrame::Container(fields) => {
+					if skipped < dots {
+						skipped += 1;
+						up += 1;
+					} else if fields.contains(&head) {
+						found = true;
+						break;
+					} else {
+						up += 1;
+					}
+				}
+			}
+		}
+		ensure!(
+			found,
+			"reference {r:?} does not resolve in any enclosing container"
+		);
+		parsed.up = up;
+		Ok(parsed)
+	}
 	pub fn upgrade_named_field(&mut self, obj: &Map<String, Value>) -> Result<Statement> {
 		let name = obj
 			.get("name")
 			.and_then(Value::as_str)
 			.ok_or_else(|| anyhow!("expected name in {obj:?}"))?;
 		let ty = obj.get("type").ok_or_else(|| anyhow!("missing type"))?;
+		let ty = self.wrapped(|ctx| ctx.upgrade_type(ty.clone()))?;
 		Ok(Statement::simple(
 			Item::simple_builder("field")
 				.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(name)))
-				.then(self.upgrade_type(ty.clone())?),
+				.then(ty),
 		))
 	}
 }
@@ -117,10 +188,10 @@ pub fn upgrade_value(value: &Value) -> Result<ast::Value> {
 
 /// Convert a json value used in a positional argument slot (count, endVal, ...) into
 /// a field reference or constant.
-fn upgrade_scalar_arg(value: &Value) -> Result<ast::Value> {
+fn upgrade_scalar_arg(value: &Value, ctx: &UpgradeCtx) -> Result<ast::Value> {
 	match value {
 		Value::Number(_) | Value::Bool(_) => upgrade_value(value),
-		Value::String(s) => Ok(ast::Value::FieldRef(parse_reference(s, 1)?)),
+		Value::String(s) => Ok(ast::Value::FieldRef(ctx.reference(s)?)),
 		// Keep anything more exotic as a string literal rather than bailing.
 		other => Ok(ast::Value::new_string(other.to_string())),
 	}
@@ -160,10 +231,14 @@ fn sanitize_ident(key: &str) -> String {
 	out
 }
 
-/// `match:` value for a variant — a number when the key is numeric, otherwise a discriminator string.
+/// `match:` value for a variant — a number when the key is numeric, a bare
+/// `true`/`false` item when the key is a boolean literal (so HIR maps it to
+/// `Value::Bool` rather than a string discriminator), otherwise a discriminator string.
 fn match_value(key: &str) -> ast::Value {
 	if let Ok(n) = key.parse::<i128>() {
 		ast::Value::Int(n)
+	} else if key == "true" || key == "false" {
+		ast::Value::new_simple_item(key)
 	} else {
 		ast::Value::new_string(key.to_string())
 	}
@@ -182,6 +257,10 @@ fn upgrade_switch(obj: &Map<String, Value>, ctx: &mut UpgradeCtx) -> Result<Vec<
 
 	let mut statements = Vec::new();
 	for (key, ty) in fields {
+		// arm values live at the union's enclosing scope: no new frame
+		let ty = ctx
+			.upgrade_type(ty.clone())
+			.context("union variant value")?;
 		statements.push(simple_stmt(
 			Item::simple_builder("variant")
 				.argsb(
@@ -189,26 +268,18 @@ fn upgrade_switch(obj: &Map<String, Value>, ctx: &mut UpgradeCtx) -> Result<Vec<
 						.arg(ast::Value::new_simple_item(sanitize_ident(key).as_str()))
 						.named("match", match_value(key)),
 				)
-				.then(
-					ctx.upgrade_type(ty.clone())
-						.context("union variant value")?,
-				),
+				.then(ty),
 		));
 	}
 	if let Some(default) = obj.get("default") {
-		// pds `union` has no default arm; emit a `default` statement to preserve the info.
-		statements.push(simple_stmt(
-			Item::simple_builder("default").then(
-				ctx.upgrade_type(default.clone())
-					.context("union default value")?,
-			),
-		));
+		let ty = ctx
+			.upgrade_type(default.clone())
+			.context("union default value")?;
+		statements.push(simple_stmt(Item::simple_builder("default").then(ty)));
 	}
 
 	Ok(Item::simple_builder("union")
-		.argsb(
-			ItemArgs::builder().named("tag", ast::Value::FieldRef(parse_reference(compare_to, 1)?)),
-		)
+		.argsb(ItemArgs::builder().named("tag", ast::Value::FieldRef(ctx.reference(compare_to)?)))
 		.block(Block {
 			attributes: Default::default(),
 			statements,
@@ -253,6 +324,69 @@ fn upgrade_mapper(obj: &Map<String, Value>, ctx: &mut UpgradeCtx) -> Result<Vec<
 		.build_values())
 }
 
+/// Merge a protodef `mapper` (discriminant) with the `switch` keyed on it into a
+/// single self-contained pds inline-tag `union`: the mapper supplies the wire tag
+/// type and each variant's `match` value, the switch supplies each variant's payload.
+/// Wire-compatible with the separate mapper-field + external-switch encoding, but the
+/// discriminant field disappears (the union reads its tag inline).
+pub fn merge_mapper_switch(
+	mapper: &Map<String, Value>,
+	switch: &Map<String, Value>,
+	ctx: &mut UpgradeCtx,
+) -> Result<Vec<ast::Value>> {
+	let tag_ty = mapper
+		.get("type")
+		.ok_or_else(|| anyhow!("mapper missing type"))?;
+	let mappings = mapper
+		.get("mappings")
+		.and_then(Value::as_object)
+		.ok_or_else(|| anyhow!("mapper missing mappings"))?;
+	let fields = switch
+		.get("fields")
+		.and_then(Value::as_object)
+		.ok_or_else(|| anyhow!("switch missing fields"))?;
+	let tag_ty = upgrade_type_single(tag_ty, ctx)?;
+
+	let mut statements = Vec::new();
+	for (val, name) in mappings {
+		let name = name
+			.as_str()
+			.ok_or_else(|| anyhow!("mapper mapping value should be string"))?;
+		// payload from the switch, or a void arm when the switch maps this tag to nothing
+		let payload = match fields.get(name) {
+			Some(p) => Some(
+				ctx.upgrade_type(p.clone())
+					.context("merged union variant value")?,
+			),
+			None => None,
+		};
+		let variant = Item::simple_builder("variant").argsb(
+			ItemArgs::builder()
+				.arg(ast::Value::new_simple_item(sanitize_ident(name).as_str()))
+				.named("match", match_value(val)),
+		);
+		statements.push(simple_stmt(match payload {
+			Some(ty) => variant.then(ty),
+			None => variant.build_values(),
+		}));
+	}
+	if let Some(default) = switch.get("default") {
+		let ty = ctx
+			.upgrade_type(default.clone())
+			.context("merged union default value")?;
+		statements.push(simple_stmt(Item::simple_builder("default").then(ty)));
+	}
+
+	Ok(Item::simple_builder("union")
+		.argsb(ItemArgs::builder().named("tagType", tag_ty))
+		.block(Block {
+			attributes: Default::default(),
+			statements,
+			root: false,
+		})
+		.build_values())
+}
+
 pub fn upgrade_type_generic(
 	f: &str,
 	args: &[Value],
@@ -264,17 +398,15 @@ pub fn upgrade_type_generic(
 	let a = &args[0];
 
 	Ok(if a.is_string() {
-		// ctx.record_value_generic(f);
-		Item::simple_builder(f).then(
-			ctx.upgrade_type(a.clone())
-				.context("unknown string type def")?,
-		)
+		let inner = ctx
+			.wrapped(|ctx| ctx.upgrade_type(a.clone()))
+			.context("unknown string type def")?;
+		Item::simple_builder(f).then(inner)
 	} else if a.is_array() {
-		// ctx.record_value_generic(f);
-		Item::simple_builder(f).then(
-			ctx.upgrade_type(a.clone())
-				.with_context(|| format!("unknown array type def <{f}>"))?,
-		)
+		let inner = ctx
+			.wrapped(|ctx| ctx.upgrade_type(a.clone()))
+			.with_context(|| format!("unknown array type def <{f}>"))?;
+		Item::simple_builder(f).then(inner)
 	} else if a.is_object() {
 		let obj = a.as_object().unwrap();
 		let mut builder = Item::simple_builder(f);
@@ -294,15 +426,14 @@ pub fn upgrade_type_generic(
 			} else if let Some(val) = k.strip_suffix("To") {
 				args = args.named(
 					val,
-					ast::Value::FieldRef(parse_reference(
-						v.as_str().ok_or_else(|| anyhow!("bad reference value"))?,
-						1,
-					)?),
+					ast::Value::FieldRef(
+						ctx.reference(v.as_str().ok_or_else(|| anyhow!("bad reference value"))?)?,
+					),
 				);
 				// ctx.record_arg(f, val);
 			} else {
 				// A plain value argument (count, endVal, ...).
-				args = args.named(k.as_str(), upgrade_scalar_arg(v)?);
+				args = args.named(k.as_str(), upgrade_scalar_arg(v, ctx)?);
 				// ctx.record_arg(f, k);
 			}
 		}
@@ -313,8 +444,7 @@ pub fn upgrade_type_generic(
 
 		let mut o = builder.build_values();
 		if let Some(value) = value {
-			// ctx.record_value_generic(f);
-			o.extend(upgrade_type(value, ctx)?);
+			o.extend(ctx.wrapped(|ctx| ctx.upgrade_type(value))?);
 		}
 		o
 	} else {
@@ -385,6 +515,9 @@ fn native_variant(sig: &NativeSigVariant) -> Vec<Statement> {
 
 fn native_block(sig: &NativeSig) -> Block {
 	let mut statements = native_variant(&sig.default);
+	if sig.is_void {
+		statements.push(simple_stmt(Item::simple_builder("is_void").build_values()));
+	}
 	for (name, stmts) in &sig.variants {
 		let body = native_variant(&stmts);
 		statements.push(Statement::simple(
@@ -411,6 +544,10 @@ fn upgrade_namespace(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::Block> 
 	if let Some(types) = value.get("types") {
 		for (k, v) in types.as_object().unwrap() {
 			if v == "native" {
+				// builtin pds heads, not declarable natives
+				if matches!(k.as_str(), "container" | "switch" | "mapper") {
+					continue;
+				}
 				let sig = ctx
 					.registry
 					.upgrade
@@ -465,9 +602,9 @@ pub fn upgrade(value: Value, registry: &Registry) -> Result<ast::Block> {
 	let mut ctx = UpgradeCtx {
 		registry,
 		natives: BTreeMap::new(),
+		scopes: Vec::new(),
 	};
 
-	// Pass 2: build the actual block, now emitting native signatures.
 	let mut block = upgrade_namespace(&value, &mut ctx)?;
 	block.root = true;
 	Ok(block)

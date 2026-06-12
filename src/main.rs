@@ -2,7 +2,9 @@
 
 use clap::Parser;
 use generator::GeneratorTypes;
+use std::io;
 use std::path::PathBuf;
+use tracing::info;
 
 use self::specializer::{register_protodef_types, Registry};
 pub mod ast;
@@ -222,6 +224,10 @@ fn main() {
 }
 
 fn try_main() -> anyhow::Result<()> {
+	tracing_subscriber::fmt()
+		.without_time()
+		.with_writer(io::stderr)
+		.init();
 	let opts = Opts::parse();
 
 	let mut reg = Registry::default();
@@ -300,7 +306,7 @@ fn try_main() -> anyhow::Result<()> {
 
 			let to = to.unwrap_or_else(|| from.with_extension("pds"));
 			std::fs::write(&to, out)?;
-			eprintln!("wrote {}", to.display());
+			info!("wrote upgraded {}", to.display());
 		}
 	}
 	Ok(())

@@ -1,10 +1,10 @@
 use crate::{
-	ast::{self, FieldRef, Ident, Path},
+	ast::{FieldRef, Ident, Path},
 	hir::{self, FieldRefOrConst, Reference, ReferenceKind, TypeId},
 	mir::{self, FieldItem},
 	should_be_desugared,
 };
-use anyhow::{anyhow, bail, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 
 use super::{Definition, Field, FieldOrConst, NativeType, Type, TypeKind, TypeMap, Value};
@@ -39,6 +39,7 @@ impl Value {
 	fn from_hir(hir: &hir::Value) -> Self {
 		match hir {
 			hir::Value::Number(n) => Self::Signed(*n),
+			hir::Value::Bool(b) => Self::Bool(*b),
 			hir::Value::String(_) => todo!(),
 			hir::Value::UnionDescriminator(ident) => todo!(),
 		}
@@ -72,28 +73,42 @@ impl TypeKind {
 				delegate_all: c.delegate_all.clone(),
 			},
 			hir::TypeKind::Union(u) => {
+				let (tag, tag_type) = match &u.tag {
+					hir::UnionTag::External(f) => (
+						super::UnionTag::External(Field::from_hir(f)),
+						TypeId::default(),
+					),
+					hir::UnionTag::Inline(t) => {
+						let t = Type::from_hir(t);
+						let target = t.target;
+						(super::UnionTag::Inline(t), target)
+					}
+				};
 				Self::Union {
-					tag: Field::from_hir(&u.tag),
-					tag_type: TypeId::default(),
+					tag,
+					tag_type,
 					matches: u
 						.values
 						.iter()
 						.map(|(value, map, ty)| {
 							(
-								match value {
-									hir::Value::Number(n) => Value::Signed(*n),
-									hir::Value::String(n) => Value::String(n.clone()),
-									hir::Value::UnionDescriminator(id) => {
-										Value::UnionDescriminator(id.clone())
-									}
-								},
+							match value {
+								hir::Value::Number(n) => Value::Signed(*n),
+								hir::Value::Bool(b) => Value::Bool(*b),
+								hir::Value::String(n) => Value::String(n.clone()),
+								hir::Value::UnionDescriminator(id) => {
+									Value::UnionDescriminator(id.clone())
+								}
+							},
 								map.clone(),
 								Type::from_hir(ty),
 							)
 						})
 						.collect(),
-					// TODO
-					default: None,
+					default: u
+						.default
+						.as_ref()
+						.map(|d| (Ident::new("default"), Type::from_hir(d))),
 				}
 			}
 			// An exported alias def surviving replace_aliases: keep it as a named
@@ -119,6 +134,8 @@ impl TypeKind {
 					.clone()
 					.map(|s| (s, native.variant.clone())),
 				body: native.body.clone(),
+				const_args: native.const_args.clone(),
+				is_void: native.is_void,
 				specialization: native
 					.specialization
 					.iter()

@@ -1,8 +1,8 @@
 //! Generate static version of every generic struct usage
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Context as _, Result};
 
 use crate::{
 	ast::Ident,
@@ -21,7 +21,29 @@ impl Visitor for HasGenericReferences<'_> {
 	}
 }
 
-type Monomorphizations = BTreeMap<(TypeId, BTreeMap<Ident, TypeKind>), (PendingTypeId, String)>;
+/// Collect the params a generic binding captures from its use-site scope. After the
+/// pre-mono extraction pass, every scope-crossing reference inside a binding is
+/// `$param`-rooted (params of the def the use-site lives in); planting the binding
+/// into the monomorphized def closure-converts them: the mono gains the params, the
+/// use-site reference passes them as arguments.
+struct CollectCaptures<'t>(&'t mut BTreeSet<Ident>);
+impl Visitor for CollectCaptures<'_> {
+	fn visit_field_ref(&mut self, r: &mut crate::ast::FieldRef) -> Result<()> {
+		ensure!(
+			r.up == 0,
+			"scope-crossing reference in a generic binding survived extraction: {r:?}"
+		);
+		if let Some(crate::ast::FieldRefSegment::Arg(name)) = r.path.0.first() {
+			self.0.insert(name.clone());
+		}
+		Ok(())
+	}
+}
+
+type Monomorphizations = BTreeMap<
+	(TypeId, BTreeMap<Ident, TypeKind>),
+	(PendingTypeId, String, BTreeSet<Ident>),
+>;
 
 struct FindGenericTypeReferences<'t> {
 	id: IdGenerator,
@@ -53,25 +75,42 @@ impl Visitor for FindGenericTypeReferences<'_> {
 		}
 
 		let mut usage: BTreeMap<Ident, TypeKind> = BTreeMap::new();
+		let mut captured = BTreeSet::new();
 		for (n, t) in &value.types {
-			if let TypeKind::Reference(re) = t {
-				ensure!(re.args.is_empty(), "no args for generic");
-			}
-			usage.insert(n.clone(), t.clone());
+			let mut t = t.clone();
+			t.traverse(&mut CollectCaptures(&mut captured), TraverseSkip::empty(), reg)
+				.with_context(|| format!("generic binding {n:?}"))?;
+			usage.insert(n.clone(), t);
 		}
 
-		if let Some((monoed, _)) = self.monos.get(&(ty, usage.clone())) {
+		let pass_captured = |value: &mut Reference, captured: &BTreeSet<Ident>| {
+			for name in captured {
+				value.args.push((
+					name.clone(),
+					crate::hir::FieldRefOrConst::FieldRef(crate::ast::FieldRef {
+						up: 0,
+						path: crate::ast::BaseFieldRef(vec![crate::ast::FieldRefSegment::Arg(
+							name.clone(),
+						)]),
+					}),
+				));
+			}
+		};
+
+		if let Some((monoed, _, captured)) = self.monos.get(&(ty, usage.clone())) {
 			if value.ty != ReferenceKind::Resolved(monoed.id()) {
 				*self.found = true;
+				value.ty = ReferenceKind::Resolved(monoed.id());
+				value.types = BTreeMap::new();
+				pass_captured(value, &captured.clone());
 			}
-			value.ty = ReferenceKind::Resolved(monoed.id());
-			value.types = BTreeMap::new();
 		} else if !usage.is_empty() || self.natives.contains(&ty) {
 			let pending = self.id.next_pending();
 			value.ty = ReferenceKind::Resolved(pending.id());
 			value.types = BTreeMap::new();
-			self.monos
-				.insert((ty, usage), (pending, format!("mono of {value:?}")));
+			let name = format!("mono of {value:?}");
+			pass_captured(value, &captured);
+			self.monos.insert((ty, usage), (pending, name, captured));
 			*self.found = true;
 		}
 		Ok(())
@@ -107,9 +146,10 @@ impl Visitor for ReplaceGenericReferencesWithSpecified<'_> {
 
 		match &mut resolved {
 			TypeKind::Reference(resolved) => {
-				assert!(resolved.args.is_empty());
-				resolved.args = re.args.clone();
-				resolved.types = re.types.clone();
+				// the binding may itself carry (constant) args (`Value: buffer(count: 256)`);
+				// use-site args of the generic reference are appended
+				resolved.args.extend(re.args.iter().cloned());
+				resolved.types.extend(re.types.clone());
 			}
 			_ => ensure!(
 				re.args.is_empty() && re.types.is_empty(),
@@ -130,7 +170,7 @@ struct ImplementMonomorphized<'t> {
 }
 impl Visitor for ImplementMonomorphized<'_> {
 	fn visit_type(&mut self, ty: &mut Type, reg: &Registry) -> Result<()> {
-		for ((_, otypes), (pending, pending_name)) in
+		for ((_, otypes), (pending, pending_name, captured)) in
 			self.monos.extract_if(|(m, _), _| &ty.id() == m)
 		{
 			let mut kind = ty.kind.clone();
@@ -158,6 +198,9 @@ impl Visitor for ImplementMonomorphized<'_> {
 				TraverseSkip::empty(),
 				reg,
 			)?;
+			// Closure-converted captures become params of the mono; use-sites pass
+			// them as arguments (added in FindGenericTypeReferences).
+			let captured_params = captured.into_iter().collect::<Vec<_>>();
 			if let TypeKind::Native(native) = &mut kind {
 				// Natives may leave generics unbound (opaque to the compiler, the
 				// generator decides): prune them, absent entry = unbound. The mono is
@@ -166,15 +209,17 @@ impl Visitor for ImplementMonomorphized<'_> {
 				native.specialization.retain(
 					|(_, v)| !matches!(v, TypeKind::Reference(r) if r.ty.is_generic()),
 				);
+				let mut params = ty.params.clone();
+				params.extend(captured_params);
 				self.created
-					.push(Type::new(pending, ty.params.clone(), kind, BTreeMap::new()));
+					.push(Type::new(pending, params, kind, BTreeMap::new()));
 			} else {
 				if !still_unset.is_empty() {
 					self.generic_types
 						.insert(pending.id(), format!("{pending_name} {types:?}"));
 				}
 				self.created
-					.push(Type::new(pending, Vec::new(), kind, still_unset));
+					.push(Type::new(pending, captured_params, kind, still_unset));
 			}
 			*self.created_new = true;
 		}

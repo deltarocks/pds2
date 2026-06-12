@@ -41,6 +41,19 @@ pub struct NativeType {
 	pub fields: Vec<(Ident, Type)>,
 	// The consumed use-site body (codegen metadata: bitfield sizes, flag order, ...)
 	pub body: Vec<crate::hir::BodyField>,
+	// Constant configuration arguments from the use-site (registryEntryHolder baseName)
+	pub const_args: Vec<(Ident, crate::hir::Value)>,
+	// carries no data (the deduplicated canonical void)
+	pub is_void: bool,
+}
+
+/// Where a union reads its discriminant from.
+#[derive(Debug)]
+pub enum UnionTag {
+	/// a field of the enclosing container, passed in as an argument
+	External(Field),
+	/// read inline by the union itself, immediately before the value
+	Inline(Type),
 }
 
 #[derive(Debug)]
@@ -51,7 +64,7 @@ pub enum TypeKind {
 		delegate_all: Option<Ident>,
 	},
 	Union {
-		tag: Field,
+		tag: UnionTag,
 		tag_type: TypeId,
 		matches: Vec<(Value, Ident, Type)>,
 		default: Option<(Ident, Type)>,
@@ -74,6 +87,7 @@ impl TypeKind {
 pub enum Value {
 	Unsigned(u128),
 	Signed(i128),
+	Bool(bool),
 	String(String),
 	UnionDescriminator(Ident),
 }
@@ -85,6 +99,17 @@ impl Index<TypeId> for TypeMap {
 
 	fn index(&self, index: TypeId) -> &Self::Output {
 		self.0.get(&index).as_ref().unwrap()
+	}
+}
+impl TypeMap {
+	/// Whether a type carries no wire data: the canonical `is_void` native, or a bare
+	/// `Void` kind (when no `is_void` native was declared to deduplicate to).
+	pub fn is_void(&self, id: TypeId) -> bool {
+		match &self[id].kind {
+			TypeKind::Void => true,
+			TypeKind::Native(n) => n.is_void,
+			_ => false,
+		}
 	}
 }
 

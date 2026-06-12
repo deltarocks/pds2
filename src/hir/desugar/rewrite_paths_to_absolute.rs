@@ -51,6 +51,7 @@ impl TypeKind {
 			TypeKind::Reference(Reference {
 				ty: ty @ ReferenceKind::Path(_),
 				types,
+				body,
 				..
 			}) => {
 				// Try to resolve generic
@@ -69,13 +70,20 @@ impl TypeKind {
 				for (_, ty) in types.iter_mut() {
 					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
+				for ty in body.iter_mut().filter_map(|f| f.ty.as_mut()) {
+					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
+				}
 			}
 			TypeKind::Reference(Reference {
 				ty: ReferenceKind::Generic(_) | ReferenceKind::Resolved(_),
 				types,
+				body,
 				..
 			}) => {
 				for (_, ty) in types.iter_mut() {
+					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
+				}
+				for ty in body.iter_mut().filter_map(|f| f.ty.as_mut()) {
 					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
 			}
@@ -140,8 +148,14 @@ impl Union {
 		generics: &HashSet<Ident>,
 		paths: &HashSet<Vec<Ident>>,
 	) {
+		if let crate::hir::UnionTag::Inline(t) = &mut self.tag {
+			t.rewrite_paths_to_absolute(current_ns, generics, paths);
+		}
 		for (_, _, v) in self.values.iter_mut() {
 			v.rewrite_paths_to_absolute(current_ns, generics, paths);
+		}
+		if let Some(d) = self.default.as_mut() {
+			d.rewrite_paths_to_absolute(current_ns, generics, paths);
 		}
 	}
 }

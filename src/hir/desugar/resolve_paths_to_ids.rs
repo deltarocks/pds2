@@ -97,11 +97,7 @@ impl TypeKind {
 							.with_context(|| format!("overload of {path:?}"))?
 							.id
 					} else {
-						bail!(
-							"path not found: {:?}, possible paths: {:?}",
-							path,
-							paths.plain
-						)
+						bail!("path not found: {path:?}")
 					};
 					r.ty = ReferenceKind::Resolved(id);
 				}
@@ -128,6 +124,9 @@ impl TypeKind {
 				}
 			}
 			TypeKind::Union(u) => {
+				if let crate::hir::UnionTag::Inline(t) = &mut u.tag {
+					t.resolve_paths_to_ids(paths)?
+				}
 				for (_, _, ele) in u.values.iter_mut() {
 					ele.resolve_paths_to_ids(paths)?
 				}
@@ -143,6 +142,8 @@ impl TypeKind {
 				accepts_body: _,
 				specialization,
 				body: _,
+				const_args: _,
+				is_void: _,
 			}) => {
 				for (_, v) in specialization.iter_mut() {
 					v.resolve_paths_to_ids(paths)?;
