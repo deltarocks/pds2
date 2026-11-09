@@ -171,7 +171,7 @@ struct ImplementMonomorphized<'t> {
 impl Visitor for ImplementMonomorphized<'_> {
 	fn visit_type(&mut self, ty: &mut Type, reg: &Registry) -> Result<()> {
 		for ((_, otypes), (pending, pending_name, captured)) in
-			self.monos.extract_if(|(m, _), _| &ty.id() == m)
+			self.monos.extract_if(.., |(m, _), _| &ty.id() == m)
 		{
 			let mut kind = ty.kind.clone();
 			let mut types = BTreeMap::new();

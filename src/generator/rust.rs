@@ -2,7 +2,8 @@ use genco::lang::rust::import;
 use genco::prelude::*;
 use genco::quote;
 use rust::{Import, Tokens};
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::ast::{FieldRefSegment, Ident};
@@ -15,18 +16,37 @@ use crate::specializer::{NativeCodegenCtx, Registry, RustNames};
 use anyhow::{Context as _, Result};
 
 #[derive(Clone)]
-struct RustMeta {
+struct RustMeta<'a> {
 	raw_names: Rc<BTreeMap<TypeId, String>>,
+	types: &'a TypeMap,
+	reg: &'a Registry,
+	inlining: Rc<RefCell<BTreeSet<TypeId>>>,
 }
-impl RustMeta {
-	fn new(source: &TypeMap) -> Self {
+impl<'a> RustMeta<'a> {
+	fn new(source: &'a TypeMap, reg: &'a Registry) -> Self {
 		let mut raw_names = BTreeMap::new();
 		for (id, ty) in source.0.iter() {
 			raw_names.insert(*id, ty.name.readable_name());
 		}
 		Self {
 			raw_names: Rc::new(raw_names),
+			types: source,
+			reg,
+			inlining: Rc::default(),
 		}
+	}
+	fn inline_ty(&self, type_id: TypeId) -> Option<Tokens> {
+		let TypeKind::Native(native) = &self.types[type_id].kind else {
+			return None;
+		};
+		let (specializer, _) = native.specializer.as_ref()?;
+		let codegen = self.reg.codegen::<Tokens>(specializer.as_str())?;
+		if !self.inlining.borrow_mut().insert(type_id) {
+			return None;
+		}
+		let ty = codegen.inline_ty(native, self);
+		self.inlining.borrow_mut().remove(&type_id);
+		ty
 	}
 	fn name_str(&self, type_id: TypeId) -> String {
 		assert!(type_id.is_valid());
@@ -39,8 +59,12 @@ impl RustMeta {
 	fn imported(&self, type_id: TypeId, ty: impl AsRef<str>) -> Import {
 		import(format!("super::{}", self.name_str(type_id)), ty.as_ref()).qualified()
 	}
-	fn ty(&self, type_id: TypeId) -> Import {
-		self.imported(type_id, "Ty")
+	fn ty(&self, type_id: TypeId) -> Tokens {
+		assert!(type_id.is_valid());
+		match self.inline_ty(type_id) {
+			Some(ty) => ty,
+			None => quote!($(self.imported(type_id, "Ty"))),
+		}
 	}
 	fn virt(&self, type_id: TypeId, field: Ident) -> Import {
 		self.imported(type_id, format!("virtual_{}", field.as_str()))
@@ -70,8 +94,8 @@ impl RustMeta {
 	}
 }
 
-impl RustNames for RustMeta {
-	fn ty(&self, id: TypeId) -> Import {
+impl RustNames for RustMeta<'_> {
+	fn ty(&self, id: TypeId) -> Tokens {
 		RustMeta::ty(self, id)
 	}
 	fn serialize(&self, id: TypeId) -> Import {
@@ -329,7 +353,7 @@ fn generate_args_passing(types: &RustMeta, input: &Type) -> Tokens {
 }
 
 pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Registry) -> Result<()> {
-	let meta = RustMeta::new(input);
+	let meta = RustMeta::new(input, reg);
 
 	// Unions referenced as another union's discriminant must expose `virtual_tag`
 	// even when they are external-tagged (the referencing union calls it to compute

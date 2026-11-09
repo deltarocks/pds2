@@ -32,7 +32,7 @@ pub enum GeneratorKind {
 /// Name resolution for generated Rust: genco imports for another pds type's items,
 /// so cross-module `use` statements are collected and deduplicated by genco.
 pub trait RustNames {
-	fn ty(&self, id: TypeId) -> rust::Import;
+	fn ty(&self, id: TypeId) -> rust::Tokens;
 	fn serialize(&self, id: TypeId) -> rust::Import;
 	fn deserialize(&self, id: TypeId) -> rust::Import;
 	fn size_of(&self, id: TypeId) -> rust::Import;
@@ -66,12 +66,7 @@ pub struct NativeCodegenCtx<'a> {
 
 impl NativeCodegenCtx<'_> {
 	pub fn specialization_use(&self, name: &str) -> Result<&mir::Type> {
-		self.native
-			.specialization
-			.iter()
-			.find(|(n, _)| n.as_str() == name)
-			.map(|(_, t)| t)
-			.ok_or_else(|| anyhow!("generic {name:?} is not bound"))
+		specialization_use(self.native, name).ok_or_else(|| anyhow!("generic {name:?} is not bound"))
 	}
 	pub fn specialization(&self, name: &str) -> Result<TypeId> {
 		Ok(self.specialization_use(name)?.target)
@@ -117,6 +112,22 @@ impl LanguageTokens for rust::Tokens {
 /// contents for a concrete native instance in the generator's language.
 pub trait NativeCodegen<T> {
 	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<T>;
+	fn inline_ty(&self, _native: &mir::NativeType, _rust: &dyn RustNames) -> Option<T> {
+		None
+	}
+}
+
+fn specialization_use<'n>(native: &'n mir::NativeType, name: &str) -> Option<&'n mir::Type> {
+	native
+		.specialization
+		.iter()
+		.find(|(n, _)| n.as_str() == name)
+		.map(|(_, t)| t)
+}
+
+fn vec_of_value(native: &mir::NativeType, rust: &dyn RustNames) -> Option<rust::Tokens> {
+	let value = specialization_use(native, "Value")?.target;
+	Some(quote!(Vec<$(rust.ty(value))>))
 }
 
 pub trait Upgrade {
@@ -242,15 +253,21 @@ trivial_upgrade!(Varlong => "varlong");
 
 struct TopBitSetTerminatedArray;
 impl NativeCodegen<rust::Tokens> for TopBitSetTerminatedArray {
+	fn inline_ty(&self, native: &mir::NativeType, rust: &dyn RustNames) -> Option<rust::Tokens> {
+		vec_of_value(native, rust)
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
 		let value = ctx
 			.specialization("Value")
 			.context("topBitSetTerminatedArray value")?;
+		let ty = self
+			.inline_ty(ctx.native, ctx.rust)
+			.context("topBitSetTerminatedArray type")?;
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 		Ok(quote! {
 			$((ctx.args_struct)())
-			pub type Ty = Vec<$(ctx.rust.ty(value))>;
+			pub type Ty = $ty;
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
 				let _ = (_0, output);
 				todo!("topBitSetTerminatedArray serialization needs byte patching")
@@ -800,11 +817,15 @@ impl Upgrade for RegistryEntryHolderSet {
 
 struct Array;
 impl NativeCodegen<rust::Tokens> for Array {
+	fn inline_ty(&self, native: &mir::NativeType, rust: &dyn RustNames) -> Option<rust::Tokens> {
+		vec_of_value(native, rust)
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
 		let value_use = ctx
 			.specialization_use("Value")
 			.context("array element type")?;
 		let value = value_use.target;
+		let ty = self.inline_ty(ctx.native, ctx.rust).context("array type")?;
 		let de_value = |ctx: &NativeCodegenCtx| ctx.deserialize_call(value_use);
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
@@ -879,7 +900,7 @@ impl NativeCodegen<rust::Tokens> for Array {
 
 		Ok(quote! {
 			$((ctx.args_struct)())
-			pub type Ty = Vec<$(ctx.rust.ty(value))>;
+			pub type Ty = $ty;
 			$main
 			$virtual_size
 		})
@@ -944,7 +965,11 @@ impl Upgrade for Array {
 }
 struct Buffer;
 impl NativeCodegen<rust::Tokens> for Buffer {
+	fn inline_ty(&self, _native: &mir::NativeType, _rust: &dyn RustNames) -> Option<rust::Tokens> {
+		Some(quote!(Vec<u8>))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+		let ty = self.inline_ty(ctx.native, ctx.rust).context("buffer type")?;
 		let u8id = (ctx.resolve)("u8").ok_or_else(|| anyhow!("buffer needs the `u8` native"))?;
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
@@ -997,7 +1022,7 @@ impl NativeCodegen<rust::Tokens> for Buffer {
 		};
 		Ok(quote! {
 			$((ctx.args_struct)())
-			pub type Ty = Vec<u8>;
+			pub type Ty = $ty;
 			$main
 		})
 	}
@@ -1032,15 +1057,21 @@ impl Upgrade for Buffer {
 
 struct EntityMetadataLoop;
 impl NativeCodegen<rust::Tokens> for EntityMetadataLoop {
+	fn inline_ty(&self, native: &mir::NativeType, rust: &dyn RustNames) -> Option<rust::Tokens> {
+		vec_of_value(native, rust)
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
 		let value = ctx
 			.specialization("Value")
 			.context("entityMetadataLoop value")?;
+		let ty = self
+			.inline_ty(ctx.native, ctx.rust)
+			.context("entityMetadataLoop type")?;
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 		Ok(quote! {
 			$((ctx.args_struct)())
-			pub type Ty = Vec<$(ctx.rust.ty(value))>;
+			pub type Ty = $ty;
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
 				let _ = (_0, output);
 				todo!("entityMetadataLoop serialization needs the terminator key")
@@ -1075,18 +1106,23 @@ impl Upgrade for EntityMetadataLoop {
 }
 struct OptionP;
 impl NativeCodegen<rust::Tokens> for OptionP {
+	fn inline_ty(&self, native: &mir::NativeType, rust: &dyn RustNames) -> Option<rust::Tokens> {
+		let value = specialization_use(native, "Value")?.target;
+		Some(quote!(Option<Box<$(rust.ty(value))>>))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
 		let value_use = ctx
 			.specialization_use("Value")
 			.context("option value type")?;
 		let value = value_use.target;
+		let ty = self.inline_ty(ctx.native, ctx.rust).context("option type")?;
 		let boolean =
 			(ctx.resolve)("bool").ok_or_else(|| anyhow!("option needs the `bool` native"))?;
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 		Ok(quote! {
 			$((ctx.args_struct)())
-			pub type Ty = Option<Box<$(ctx.rust.ty(value))>>;
+			pub type Ty = $ty;
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
 				$(ctx.rust.serialize(boolean))(&_0.is_some(), output)?;
 				if let Some(v) = _0 {
@@ -1206,14 +1242,18 @@ impl Upgrade for LpVec3 {
 }
 struct PString;
 impl NativeCodegen<rust::Tokens> for PString {
+	fn inline_ty(&self, _native: &mir::NativeType, _rust: &dyn RustNames) -> Option<rust::Tokens> {
+		Some(quote!(String))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
 		let count = ctx.specialization("Count").context("pstring count type")?;
+		let ty = self.inline_ty(ctx.native, ctx.rust).context("pstring type")?;
 		let u8id = (ctx.resolve)("u8").ok_or_else(|| anyhow!("pstring needs the `u8` native"))?;
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 		Ok(quote! {
 			$((ctx.args_struct)())
-			pub type Ty = String;
+			pub type Ty = $ty;
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
 				$(ctx.rust.serialize(count))(&_0.len().try_into().expect("string length"), output)?;
 				for b in _0.as_bytes() {

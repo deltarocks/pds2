@@ -1,5 +1,3 @@
-#![feature(btree_extract_if)]
-
 use clap::Parser;
 use generator::GeneratorTypes;
 use std::io;
