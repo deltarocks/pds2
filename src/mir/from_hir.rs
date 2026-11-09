@@ -105,10 +105,13 @@ impl TypeKind {
 							)
 						})
 						.collect(),
-					default: u
-						.default
-						.as_ref()
-						.map(|d| (Ident::new("default"), Type::from_hir(d))),
+					default: u.default.as_ref().map(|d| {
+						let mut name = "default".to_owned();
+						while u.values.iter().any(|(_, n, _)| n.as_str() == name) {
+							name.push('_');
+						}
+						(Ident::new(&name), Type::from_hir(d))
+					}),
 				}
 			}
 			// An exported alias def surviving replace_aliases: keep it as a named
@@ -136,6 +139,7 @@ impl TypeKind {
 				body: native.body.clone(),
 				const_args: native.const_args.clone(),
 				is_void: native.is_void,
+				scalar: native.scalar.clone(),
 				specialization: native
 					.specialization
 					.iter()

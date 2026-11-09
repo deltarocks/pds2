@@ -268,6 +268,7 @@ pub struct NativeType {
 	/// `is_void;` in the def_native block: the type carries no data. All inline void
 	/// kinds and other is_void natives are deduplicated to the first such def.
 	pub is_void: bool,
+	pub scalar: Option<Ident>,
 }
 impl NativeType {
 	/// A body-accepting native is compile-time only: every use-site is inlined by its

@@ -1,0 +1,2544 @@
+@encoding le @protobuf i64 @scalar f64 def_native(double);
+
+@encoding le @protobuf i32 @scalar f32 def_native(float);
+
+@encoding varint @protobuf varint @scalar i64 def_native(int64);
+
+@encoding varint @protobuf varint @scalar u64 def_native(uint64);
+
+@encoding varint64 @protobuf varint @scalar i32 def_native(int32);
+
+@encoding le @protobuf i64 @scalar u64 def_native(fixed64);
+
+@encoding le @protobuf i32 @scalar u32 def_native(fixed32);
+
+@encoding varint @protobuf varint @scalar bool def_native(bool);
+
+@encoding raw @protobuf len @scalar string def_native(string);
+
+@encoding raw @protobuf len @scalar bytes def_native(bytes);
+
+@encoding varint @protobuf varint @scalar u32 def_native(uint32);
+
+@encoding le @protobuf i32 @scalar i32 def_native(sfixed32);
+
+@encoding le @protobuf i64 @scalar i64 def_native(sfixed64);
+
+@encoding zigzag @protobuf varint @scalar i32 def_native(sint32);
+
+@encoding zigzag @protobuf varint @scalar i64 def_native(sint64);
+
+def_native(void) {
+	is_void;
+};
+
+@specializer const
+def_native(const) {
+	type(Value);
+
+	argument(value) => Value;
+
+	body;
+};
+
+@specializer message
+def_native(message) {
+	body {
+		item(field) {
+			argument(number);
+
+			type(Value);
+		};
+
+		item(repeated) {
+			argument(number);
+
+			type(Value);
+		};
+
+		item(oneof) {
+			argument(number);
+
+			argument(group);
+
+			type(Value);
+		};
+	};
+};
+
+@specializer enum
+def_native(enum) {
+	type(Tag);
+
+	body {
+		item(value) {
+			argument(number);
+		};
+	};
+};
+
+namespace(envoy) {
+	namespace(config) {
+		namespace(cluster) {
+			namespace(v3) {
+				def(CircuitBreakers) => message {
+					repeated(thresholds, number: 1)
+					=> root::envoy::config::cluster::v3::CircuitBreakers_Thresholds;
+
+					repeated(per_host_thresholds, number: 2)
+					=> root::envoy::config::cluster::v3::CircuitBreakers_Thresholds;
+				};
+
+				def(CircuitBreakers_Thresholds) => message {
+					field(priority, number: 1) => root::envoy::config::core::v3::RoutingPriority;
+
+					field(max_connections, number: 2) => root::google::protobuf::UInt32Value;
+
+					field(max_pending_requests, number: 3) => root::google::protobuf::UInt32Value;
+
+					field(max_requests, number: 4) => root::google::protobuf::UInt32Value;
+
+					field(max_retries, number: 5) => root::google::protobuf::UInt32Value;
+
+					field(retry_budget, number: 8)
+					=> root::envoy::config::cluster::v3::CircuitBreakers_Thresholds_RetryBudget;
+
+					field(track_remaining, number: 6) => root::bool;
+
+					field(max_connection_pools, number: 7) => root::google::protobuf::UInt32Value;
+				};
+
+				def(CircuitBreakers_Thresholds_RetryBudget) => message {
+					field(budget_percent, number: 1) => root::envoy::type::v3::Percent;
+
+					field(budget_interval, number: 3) => root::google::protobuf::Duration;
+
+					field(min_retry_concurrency, number: 2) => root::google::protobuf::UInt32Value;
+				};
+
+				def(Cluster) => message {
+					repeated(transport_socket_matches, number: 43)
+					=> root::envoy::config::cluster::v3::Cluster_TransportSocketMatch;
+
+					field(transport_socket_matcher, number: 59) => root::xds::type::matcher::v3::Matcher;
+
+					field(name, number: 1) => root::string;
+
+					field(alt_stat_name, number: 28) => root::string;
+
+					field(stats_matcher, number: 61) => root::envoy::config::metrics::v3::StatsMatcher;
+
+					oneof(type, number: 2, group: "cluster_discovery_type")
+					=> root::envoy::config::cluster::v3::Cluster_DiscoveryType;
+
+					oneof(cluster_type, number: 38, group: "cluster_discovery_type")
+					=> root::envoy::config::cluster::v3::Cluster_CustomClusterType;
+
+					field(eds_cluster_config, number: 3)
+					=> root::envoy::config::cluster::v3::Cluster_EdsClusterConfig;
+
+					field(connect_timeout, number: 4) => root::google::protobuf::Duration;
+
+					field(per_connection_buffer_limit_bytes, number: 5)
+					=> root::google::protobuf::UInt32Value;
+
+					field(per_connection_buffer_high_watermark_timeout, number: 60)
+					=> root::google::protobuf::Duration;
+
+					field(lb_policy, number: 6) => root::envoy::config::cluster::v3::Cluster_LbPolicy;
+
+					field(load_assignment, number: 33)
+					=> root::envoy::config::endpoint::v3::ClusterLoadAssignment;
+
+					repeated(health_checks, number: 8) => root::envoy::config::core::v3::HealthCheck;
+
+					field(max_requests_per_connection, number: 9) => root::google::protobuf::UInt32Value;
+
+					field(circuit_breakers, number: 10)
+					=> root::envoy::config::cluster::v3::CircuitBreakers;
+
+					field(upstream_http_protocol_options, number: 46)
+					=> root::envoy::config::core::v3::UpstreamHttpProtocolOptions;
+
+					field(common_http_protocol_options, number: 29)
+					=> root::envoy::config::core::v3::HttpProtocolOptions;
+
+					field(http_protocol_options, number: 13)
+					=> root::envoy::config::core::v3::Http1ProtocolOptions;
+
+					field(http2_protocol_options, number: 14)
+					=> root::envoy::config::core::v3::Http2ProtocolOptions;
+
+					repeated(typed_extension_protocol_options, number: 36)
+					=> root::envoy::config::cluster::v3::Cluster_TypedExtensionProtocolOptionsEntry;
+
+					field(dns_refresh_rate, number: 16) => root::google::protobuf::Duration;
+
+					field(dns_jitter, number: 58) => root::google::protobuf::Duration;
+
+					field(dns_failure_refresh_rate, number: 44)
+					=> root::envoy::config::cluster::v3::Cluster_RefreshRate;
+
+					field(respect_dns_ttl, number: 39) => root::bool;
+
+					field(dns_lookup_family, number: 17)
+					=> root::envoy::config::cluster::v3::Cluster_DnsLookupFamily;
+
+					repeated(dns_resolvers, number: 18) => root::envoy::config::core::v3::Address;
+
+					field(use_tcp_for_dns_lookups, number: 45) => root::bool;
+
+					field(dns_resolution_config, number: 53)
+					=> root::envoy::config::core::v3::DnsResolutionConfig;
+
+					field(typed_dns_resolver_config, number: 55)
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+
+					field(wait_for_warm_on_init, number: 54) => root::google::protobuf::BoolValue;
+
+					field(outlier_detection, number: 19)
+					=> root::envoy::config::cluster::v3::OutlierDetection;
+
+					field(cleanup_interval, number: 20) => root::google::protobuf::Duration;
+
+					field(upstream_bind_config, number: 21) => root::envoy::config::core::v3::BindConfig;
+
+					field(lb_subset_config, number: 22)
+					=> root::envoy::config::cluster::v3::Cluster_LbSubsetConfig;
+
+					oneof(ring_hash_lb_config, number: 23, group: "lb_config")
+					=> root::envoy::config::cluster::v3::Cluster_RingHashLbConfig;
+
+					oneof(maglev_lb_config, number: 52, group: "lb_config")
+					=> root::envoy::config::cluster::v3::Cluster_MaglevLbConfig;
+
+					oneof(original_dst_lb_config, number: 34, group: "lb_config")
+					=> root::envoy::config::cluster::v3::Cluster_OriginalDstLbConfig;
+
+					oneof(least_request_lb_config, number: 37, group: "lb_config")
+					=> root::envoy::config::cluster::v3::Cluster_LeastRequestLbConfig;
+
+					oneof(round_robin_lb_config, number: 56, group: "lb_config")
+					=> root::envoy::config::cluster::v3::Cluster_RoundRobinLbConfig;
+
+					field(common_lb_config, number: 27)
+					=> root::envoy::config::cluster::v3::Cluster_CommonLbConfig;
+
+					field(transport_socket, number: 24)
+					=> root::envoy::config::core::v3::TransportSocket;
+
+					field(metadata, number: 25) => root::envoy::config::core::v3::Metadata;
+
+					field(protocol_selection, number: 26)
+					=> root::envoy::config::cluster::v3::Cluster_ClusterProtocolSelection;
+
+					field(upstream_connection_options, number: 30)
+					=> root::envoy::config::cluster::v3::UpstreamConnectionOptions;
+
+					field(close_connections_on_host_health_failure, number: 31) => root::bool;
+
+					field(ignore_health_on_host_removal, number: 32) => root::bool;
+
+					repeated(filters, number: 40) => root::envoy::config::cluster::v3::Filter;
+
+					field(load_balancing_policy, number: 41)
+					=> root::envoy::config::cluster::v3::LoadBalancingPolicy;
+
+					field(lrs_server, number: 42) => root::envoy::config::core::v3::ConfigSource;
+
+					repeated(lrs_report_endpoint_metrics, number: 57) => root::string;
+
+					field(track_timeout_budgets, number: 47) => root::bool;
+
+					field(upstream_config, number: 48)
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+
+					field(track_cluster_stats, number: 49)
+					=> root::envoy::config::cluster::v3::TrackClusterStats;
+
+					field(preconnect_policy, number: 50)
+					=> root::envoy::config::cluster::v3::Cluster_PreconnectPolicy;
+
+					field(connection_pool_per_downstream_connection, number: 51) => root::bool;
+
+					field(queuing_policies, number: 62)
+					=> root::envoy::config::cluster::v3::Cluster_QueuingPolicies;
+				};
+
+				def(Cluster_ClusterProtocolSelection) => enum(Tag: root::int32) {
+					value(USE_CONFIGURED_PROTOCOL, number: 0);
+
+					value(USE_DOWNSTREAM_PROTOCOL, number: 1);
+				};
+
+				def(Cluster_CommonLbConfig) => message {
+					field(healthy_panic_threshold, number: 1) => root::envoy::type::v3::Percent;
+
+					oneof(zone_aware_lb_config, number: 2, group: "locality_config_specifier")
+					=> root::envoy::config::cluster::v3::Cluster_CommonLbConfig_ZoneAwareLbConfig;
+
+					oneof(locality_weighted_lb_config, number: 3, group: "locality_config_specifier")
+					=> root::envoy::config::cluster::v3::Cluster_CommonLbConfig_LocalityWeightedLbConfig;
+
+					field(update_merge_window, number: 4) => root::google::protobuf::Duration;
+
+					field(ignore_new_hosts_until_first_hc, number: 5) => root::bool;
+
+					field(close_connections_on_host_set_change, number: 6) => root::bool;
+
+					field(consistent_hashing_lb_config, number: 7)
+					=> root::envoy::config::cluster::v3::Cluster_CommonLbConfig_ConsistentHashingLbConfig;
+
+					field(override_host_status, number: 8)
+					=> root::envoy::config::core::v3::HealthStatusSet;
+				};
+
+				def(Cluster_CommonLbConfig_ConsistentHashingLbConfig) => message {
+					field(use_hostname_for_hashing, number: 1) => root::bool;
+
+					field(hash_balance_factor, number: 2) => root::google::protobuf::UInt32Value;
+				};
+
+				def(Cluster_CommonLbConfig_LocalityWeightedLbConfig) => message;
+
+				def(Cluster_CommonLbConfig_ZoneAwareLbConfig) => message {
+					field(routing_enabled, number: 1) => root::envoy::type::v3::Percent;
+
+					field(min_cluster_size, number: 2) => root::google::protobuf::UInt64Value;
+
+					field(fail_traffic_on_panic, number: 3) => root::bool;
+				};
+
+				def(Cluster_CustomClusterType) => message {
+					field(name, number: 1) => root::string;
+
+					field(typed_config, number: 2) => root::google::protobuf::Any;
+				};
+
+				def(Cluster_DiscoveryType) => enum(Tag: root::int32) {
+					value(STATIC, number: 0);
+
+					value(STRICT_DNS, number: 1);
+
+					value(LOGICAL_DNS, number: 2);
+
+					value(EDS, number: 3);
+
+					value(ORIGINAL_DST, number: 4);
+				};
+
+				def(Cluster_DnsLookupFamily) => enum(Tag: root::int32) {
+					value(AUTO, number: 0);
+
+					value(V4_ONLY, number: 1);
+
+					value(V6_ONLY, number: 2);
+
+					value(V4_PREFERRED, number: 3);
+
+					value(ALL, number: 4);
+				};
+
+				def(Cluster_EdsClusterConfig) => message {
+					field(eds_config, number: 1) => root::envoy::config::core::v3::ConfigSource;
+
+					field(service_name, number: 2) => root::string;
+				};
+
+				def(Cluster_LbPolicy) => enum(Tag: root::int32) {
+					value(ROUND_ROBIN, number: 0);
+
+					value(LEAST_REQUEST, number: 1);
+
+					value(RING_HASH, number: 2);
+
+					value(RANDOM, number: 3);
+
+					value(MAGLEV, number: 5);
+
+					value(CLUSTER_PROVIDED, number: 6);
+
+					value(LOAD_BALANCING_POLICY_CONFIG, number: 7);
+				};
+
+				def(Cluster_LbSubsetConfig) => message {
+					field(fallback_policy, number: 1)
+					=> root::envoy::config::cluster::v3::Cluster_LbSubsetConfig_LbSubsetFallbackPolicy;
+
+					field(default_subset, number: 2) => root::google::protobuf::Struct;
+
+					repeated(subset_selectors, number: 3)
+					=> root::envoy::config::cluster::v3::Cluster_LbSubsetConfig_LbSubsetSelector;
+
+					field(locality_weight_aware, number: 4) => root::bool;
+
+					field(scale_locality_weight, number: 5) => root::bool;
+
+					field(panic_mode_any, number: 6) => root::bool;
+
+					field(list_as_any, number: 7) => root::bool;
+
+					field(metadata_fallback_policy, number: 8)
+					=> root::envoy::config::cluster::v3::Cluster_LbSubsetConfig_LbSubsetMetadataFallbackPolicy;
+				};
+
+				def(Cluster_LbSubsetConfig_LbSubsetFallbackPolicy) => enum(Tag: root::int32) {
+					value(NO_FALLBACK, number: 0);
+
+					value(ANY_ENDPOINT, number: 1);
+
+					value(DEFAULT_SUBSET, number: 2);
+				};
+
+				def(Cluster_LbSubsetConfig_LbSubsetMetadataFallbackPolicy) => enum(Tag: root::int32) {
+					value(METADATA_NO_FALLBACK, number: 0);
+
+					value(FALLBACK_LIST, number: 1);
+				};
+
+				def(Cluster_LbSubsetConfig_LbSubsetSelector) => message {
+					repeated(keys, number: 1) => root::string;
+
+					field(single_host_per_subset, number: 4) => root::bool;
+
+					field(fallback_policy, number: 2)
+					=> root::envoy::config::cluster::v3::Cluster_LbSubsetConfig_LbSubsetSelector_LbSubsetSelectorFallbackPolicy;
+
+					repeated(fallback_keys_subset, number: 3) => root::string;
+				};
+
+				def(Cluster_LbSubsetConfig_LbSubsetSelector_LbSubsetSelectorFallbackPolicy)
+				=> enum(Tag: root::int32) {
+					value(NOT_DEFINED, number: 0);
+
+					value(NO_FALLBACK, number: 1);
+
+					value(ANY_ENDPOINT, number: 2);
+
+					value(DEFAULT_SUBSET, number: 3);
+
+					value(KEYS_SUBSET, number: 4);
+				};
+
+				def(Cluster_LeastRequestLbConfig) => message {
+					field(choice_count, number: 1) => root::google::protobuf::UInt32Value;
+
+					field(active_request_bias, number: 2)
+					=> root::envoy::config::core::v3::RuntimeDouble;
+
+					field(slow_start_config, number: 3)
+					=> root::envoy::config::cluster::v3::Cluster_SlowStartConfig;
+				};
+
+				def(Cluster_MaglevLbConfig) => message {
+					field(table_size, number: 1) => root::google::protobuf::UInt64Value;
+				};
+
+				def(Cluster_OriginalDstLbConfig) => message {
+					field(use_http_header, number: 1) => root::bool;
+
+					field(http_header_name, number: 2) => root::string;
+
+					field(upstream_port_override, number: 3) => root::google::protobuf::UInt32Value;
+
+					field(metadata_key, number: 4) => root::envoy::type::metadata::v3::MetadataKey;
+				};
+
+				def(Cluster_PreconnectPolicy) => message {
+					field(per_upstream_preconnect_ratio, number: 1)
+					=> root::google::protobuf::DoubleValue;
+
+					field(predictive_preconnect_ratio, number: 2) => root::google::protobuf::DoubleValue;
+
+					field(preconnect_enabled_metadata, number: 3)
+					=> root::envoy::type::matcher::v3::MetadataMatcher;
+				};
+
+				def(Cluster_QueuingPolicies) => message {
+					field(pending_rq_policy, number: 1)
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+				};
+
+				def(Cluster_RefreshRate) => message {
+					field(base_interval, number: 1) => root::google::protobuf::Duration;
+
+					field(max_interval, number: 2) => root::google::protobuf::Duration;
+				};
+
+				def(Cluster_RingHashLbConfig) => message {
+					field(minimum_ring_size, number: 1) => root::google::protobuf::UInt64Value;
+
+					field(hash_function, number: 3)
+					=> root::envoy::config::cluster::v3::Cluster_RingHashLbConfig_HashFunction;
+
+					field(maximum_ring_size, number: 4) => root::google::protobuf::UInt64Value;
+				};
+
+				def(Cluster_RingHashLbConfig_HashFunction) => enum(Tag: root::int32) {
+					value(XX_HASH, number: 0);
+
+					value(MURMUR_HASH_2, number: 1);
+				};
+
+				def(Cluster_RoundRobinLbConfig) => message {
+					field(slow_start_config, number: 1)
+					=> root::envoy::config::cluster::v3::Cluster_SlowStartConfig;
+				};
+
+				def(Cluster_SlowStartConfig) => message {
+					field(slow_start_window, number: 1) => root::google::protobuf::Duration;
+
+					field(aggression, number: 2) => root::envoy::config::core::v3::RuntimeDouble;
+
+					field(min_weight_percent, number: 3) => root::envoy::type::v3::Percent;
+				};
+
+				def(Cluster_TransportSocketMatch) => message {
+					field(name, number: 1) => root::string;
+
+					field(match, number: 2) => root::google::protobuf::Struct;
+
+					field(transport_socket, number: 3) => root::envoy::config::core::v3::TransportSocket;
+				};
+
+				def(Cluster_TypedExtensionProtocolOptionsEntry) => message {
+					field(key, number: 1) => root::string;
+
+					field(value, number: 2) => root::google::protobuf::Any;
+				};
+
+				def(ClusterCollection) => message {
+					field(entries, number: 1) => root::xds::core::v3::CollectionEntry;
+				};
+
+				def(Filter) => message {
+					field(name, number: 1) => root::string;
+
+					field(typed_config, number: 2) => root::google::protobuf::Any;
+
+					field(config_discovery, number: 3)
+					=> root::envoy::config::core::v3::ExtensionConfigSource;
+				};
+
+				def(LoadBalancingPolicy) => message {
+					repeated(policies, number: 1)
+					=> root::envoy::config::cluster::v3::LoadBalancingPolicy_Policy;
+				};
+
+				def(LoadBalancingPolicy_Policy) => message {
+					field(typed_extension_config, number: 4)
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+				};
+
+				def(OutlierDetection) => message {
+					field(consecutive_5xx, number: 1) => root::google::protobuf::UInt32Value;
+
+					field(interval, number: 2) => root::google::protobuf::Duration;
+
+					field(base_ejection_time, number: 3) => root::google::protobuf::Duration;
+
+					field(max_ejection_percent, number: 4) => root::google::protobuf::UInt32Value;
+
+					field(enforcing_consecutive_5xx, number: 5) => root::google::protobuf::UInt32Value;
+
+					field(enforcing_success_rate, number: 6) => root::google::protobuf::UInt32Value;
+
+					field(success_rate_minimum_hosts, number: 7) => root::google::protobuf::UInt32Value;
+
+					field(success_rate_request_volume, number: 8) => root::google::protobuf::UInt32Value;
+
+					field(success_rate_stdev_factor, number: 9) => root::google::protobuf::UInt32Value;
+
+					field(consecutive_gateway_failure, number: 10)
+					=> root::google::protobuf::UInt32Value;
+
+					field(enforcing_consecutive_gateway_failure, number: 11)
+					=> root::google::protobuf::UInt32Value;
+
+					field(split_external_local_origin_errors, number: 12) => root::bool;
+
+					field(consecutive_local_origin_failure, number: 13)
+					=> root::google::protobuf::UInt32Value;
+
+					field(enforcing_consecutive_local_origin_failure, number: 14)
+					=> root::google::protobuf::UInt32Value;
+
+					field(enforcing_local_origin_success_rate, number: 15)
+					=> root::google::protobuf::UInt32Value;
+
+					field(failure_percentage_threshold, number: 16)
+					=> root::google::protobuf::UInt32Value;
+
+					field(enforcing_failure_percentage, number: 17)
+					=> root::google::protobuf::UInt32Value;
+
+					field(enforcing_failure_percentage_local_origin, number: 18)
+					=> root::google::protobuf::UInt32Value;
+
+					field(failure_percentage_minimum_hosts, number: 19)
+					=> root::google::protobuf::UInt32Value;
+
+					field(failure_percentage_request_volume, number: 20)
+					=> root::google::protobuf::UInt32Value;
+
+					field(max_ejection_time, number: 21) => root::google::protobuf::Duration;
+
+					field(max_ejection_time_jitter, number: 22) => root::google::protobuf::Duration;
+
+					field(successful_active_health_check_uneject_host, number: 23)
+					=> root::google::protobuf::BoolValue;
+
+					repeated(monitors, number: 24)
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+
+					field(always_eject_one_host, number: 25) => root::google::protobuf::BoolValue;
+
+					field(detect_degraded_hosts, number: 26) => root::google::protobuf::BoolValue;
+				};
+
+				def(TrackClusterStats) => message {
+					field(timeout_budgets, number: 1) => root::bool;
+
+					field(request_response_sizes, number: 2) => root::bool;
+
+					field(per_endpoint_stats, number: 3) => root::bool;
+				};
+
+				def(UpstreamConnectionOptions) => message {
+					field(tcp_keepalive, number: 1) => root::envoy::config::core::v3::TcpKeepalive;
+
+					field(set_local_interface_name_on_upstream_connections, number: 2) => root::bool;
+
+					field(happy_eyeballs_config, number: 3)
+					=> root::envoy::config::cluster::v3::UpstreamConnectionOptions_HappyEyeballsConfig;
+				};
+
+				def(UpstreamConnectionOptions_FirstAddressFamilyVersion) => enum(Tag: root::int32) {
+					value(DEFAULT, number: 0);
+
+					value(V4, number: 1);
+
+					value(V6, number: 2);
+
+					value(PIPE, number: 3);
+
+					value(INTERNAL, number: 4);
+				};
+
+				def(UpstreamConnectionOptions_HappyEyeballsConfig) => message {
+					field(first_address_family_version, number: 1)
+					=> root::envoy::config::cluster::v3::UpstreamConnectionOptions_FirstAddressFamilyVersion;
+
+					field(first_address_family_count, number: 2) => root::google::protobuf::UInt32Value;
+				};
+			};
+		};
+
+		namespace(common) {
+			namespace(matcher) {
+				namespace(v3) {
+					def(HttpGenericBodyMatch) => message {
+						field(bytes_limit, number: 1) => root::uint32;
+
+						repeated(patterns, number: 2)
+						=> root::envoy::config::common::matcher::v3::HttpGenericBodyMatch_GenericTextMatch;
+					};
+
+					def(HttpGenericBodyMatch_GenericTextMatch) => message {
+						oneof(string_match, number: 1, group: "rule") => root::string;
+
+						oneof(binary_match, number: 2, group: "rule") => root::bytes;
+					};
+
+					def(HttpHeadersMatch) => message {
+						repeated(headers, number: 1) => root::envoy::config::route::v3::HeaderMatcher;
+					};
+
+					def(MatchPredicate) => message {
+						oneof(or_match, number: 1, group: "rule")
+						=> root::envoy::config::common::matcher::v3::MatchPredicate_MatchSet;
+
+						oneof(and_match, number: 2, group: "rule")
+						=> root::envoy::config::common::matcher::v3::MatchPredicate_MatchSet;
+
+						oneof(not_match, number: 3, group: "rule")
+						=> root::envoy::config::common::matcher::v3::MatchPredicate;
+
+						oneof(any_match, number: 4, group: "rule") => root::bool;
+
+						oneof(http_request_headers_match, number: 5, group: "rule")
+						=> root::envoy::config::common::matcher::v3::HttpHeadersMatch;
+
+						oneof(http_request_trailers_match, number: 6, group: "rule")
+						=> root::envoy::config::common::matcher::v3::HttpHeadersMatch;
+
+						oneof(http_response_headers_match, number: 7, group: "rule")
+						=> root::envoy::config::common::matcher::v3::HttpHeadersMatch;
+
+						oneof(http_response_trailers_match, number: 8, group: "rule")
+						=> root::envoy::config::common::matcher::v3::HttpHeadersMatch;
+
+						oneof(http_request_generic_body_match, number: 9, group: "rule")
+						=> root::envoy::config::common::matcher::v3::HttpGenericBodyMatch;
+
+						oneof(http_response_generic_body_match, number: 10, group: "rule")
+						=> root::envoy::config::common::matcher::v3::HttpGenericBodyMatch;
+					};
+
+					def(MatchPredicate_MatchSet) => message {
+						repeated(rules, number: 1)
+						=> root::envoy::config::common::matcher::v3::MatchPredicate;
+					};
+				};
+			};
+
+			namespace(mutation_rules) {
+				namespace(v3) {
+					def(HeaderMutation) => message {
+						oneof(remove, number: 1, group: "action") => root::string;
+
+						oneof(append, number: 2, group: "action")
+						=> root::envoy::config::core::v3::HeaderValueOption;
+
+						oneof(remove_on_match, number: 3, group: "action")
+						=> root::envoy::config::common::mutation_rules::v3::HeaderMutation_RemoveOnMatch;
+					};
+
+					def(HeaderMutation_RemoveOnMatch) => message {
+						field(key_matcher, number: 1) => root::envoy::type::matcher::v3::StringMatcher;
+					};
+				};
+			};
+		};
+
+		namespace(core) {
+			namespace(v3) {
+				def(Address) => message {
+					oneof(socket_address, number: 1, group: "address")
+					=> root::envoy::config::core::v3::SocketAddress;
+
+					oneof(pipe, number: 2, group: "address") => root::envoy::config::core::v3::Pipe;
+
+					oneof(envoy_internal_address, number: 3, group: "address")
+					=> root::envoy::config::core::v3::EnvoyInternalAddress;
+				};
+
+				def(AggregatedConfigSource) => message;
+
+				def(AlternateProtocolsCacheOptions) => message {
+					field(name, number: 1) => root::string;
+
+					field(max_entries, number: 2) => root::google::protobuf::UInt32Value;
+
+					field(key_value_store_config, number: 3)
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+
+					repeated(prepopulated_entries, number: 4)
+					=> root::envoy::config::core::v3::AlternateProtocolsCacheOptions_AlternateProtocolsCacheEntry;
+
+					repeated(canonical_suffixes, number: 5) => root::string;
+				};
+
+				def(AlternateProtocolsCacheOptions_AlternateProtocolsCacheEntry) => message {
+					field(hostname, number: 1) => root::string;
+
+					field(port, number: 2) => root::uint32;
+				};
+
+				def(ApiConfigSource) => message {
+					field(api_type, number: 1) => root::envoy::config::core::v3::ApiConfigSource_ApiType;
+
+					field(transport_api_version, number: 8) => root::envoy::config::core::v3::ApiVersion;
+
+					repeated(cluster_names, number: 2) => root::string;
+
+					repeated(grpc_services, number: 4) => root::envoy::config::core::v3::GrpcService;
+
+					field(refresh_delay, number: 3) => root::google::protobuf::Duration;
+
+					field(request_timeout, number: 5) => root::google::protobuf::Duration;
+
+					field(rate_limit_settings, number: 6)
+					=> root::envoy::config::core::v3::RateLimitSettings;
+
+					field(set_node_on_first_message_only, number: 7) => root::bool;
+
+					repeated(config_validators, number: 9)
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+				};
+
+				def(ApiConfigSource_ApiType) => enum(Tag: root::int32) {
+					value(DEPRECATED_AND_UNAVAILABLE_DO_NOT_USE, number: 0);
+
+					value(REST, number: 1);
+
+					value(GRPC, number: 2);
+
+					value(DELTA_GRPC, number: 3);
+
+					value(AGGREGATED_GRPC, number: 5);
+
+					value(AGGREGATED_DELTA_GRPC, number: 6);
+				};
+
+				def(ApiVersion) => enum(Tag: root::int32) {
+					value(AUTO, number: 0);
+
+					value(V2, number: 1);
+
+					value(V3, number: 2);
+				};
+
+				def(BackoffStrategy) => message {
+					field(base_interval, number: 1) => root::google::protobuf::Duration;
+
+					field(max_interval, number: 2) => root::google::protobuf::Duration;
+				};
+
+				def(BindConfig) => message {
+					field(source_address, number: 1) => root::envoy::config::core::v3::SocketAddress;
+
+					field(freebind, number: 2) => root::google::protobuf::BoolValue;
+
+					repeated(socket_options, number: 3) => root::envoy::config::core::v3::SocketOption;
+
+					repeated(extra_source_addresses, number: 5)
+					=> root::envoy::config::core::v3::ExtraSourceAddress;
+
+					repeated(additional_source_addresses, number: 4)
+					=> root::envoy::config::core::v3::SocketAddress;
+
+					field(local_address_selector, number: 6)
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+
+					field(validate_network_namespaces, number: 7) => root::bool;
+				};
+
+				def(ConfigSource) => message {
+					repeated(authorities, number: 7) => root::xds::core::v3::Authority;
+
+					oneof(path, number: 1, group: "config_source_specifier") => root::string;
+
+					oneof(path_config_source, number: 8, group: "config_source_specifier")
+					=> root::envoy::config::core::v3::PathConfigSource;
+
+					oneof(api_config_source, number: 2, group: "config_source_specifier")
+					=> root::envoy::config::core::v3::ApiConfigSource;
+
+					oneof(ads, number: 3, group: "config_source_specifier")
+					=> root::envoy::config::core::v3::AggregatedConfigSource;
+
+					oneof(self, number: 5, group: "config_source_specifier")
+					=> root::envoy::config::core::v3::SelfConfigSource;
+
+					field(initial_fetch_timeout, number: 4) => root::google::protobuf::Duration;
+
+					field(resource_api_version, number: 6) => root::envoy::config::core::v3::ApiVersion;
+				};
+
+				def(DataSource) => message {
+					oneof(filename, number: 1, group: "specifier") => root::string;
+
+					oneof(inline_bytes, number: 2, group: "specifier") => root::bytes;
+
+					oneof(inline_string, number: 3, group: "specifier") => root::string;
+
+					oneof(environment_variable, number: 4, group: "specifier") => root::string;
+
+					field(watched_directory, number: 5)
+					=> root::envoy::config::core::v3::WatchedDirectory;
+				};
+
+				def(DnsResolutionConfig) => message {
+					repeated(resolvers, number: 1) => root::envoy::config::core::v3::Address;
+
+					field(dns_resolver_options, number: 2)
+					=> root::envoy::config::core::v3::DnsResolverOptions;
+				};
+
+				def(DnsResolverOptions) => message {
+					field(use_tcp_for_dns_lookups, number: 1) => root::bool;
+
+					field(no_default_search_domain, number: 2) => root::bool;
+				};
+
+				def(EnvoyInternalAddress) => message {
+					oneof(server_listener_name, number: 1, group: "address_name_specifier")
+					=> root::string;
+
+					field(endpoint_id, number: 2) => root::string;
+				};
+
+				def(EventServiceConfig) => message {
+					oneof(grpc_service, number: 1, group: "config_source_specifier")
+					=> root::envoy::config::core::v3::GrpcService;
+				};
+
+				def(ExtensionConfigSource) => message {
+					field(config_source, number: 1) => root::envoy::config::core::v3::ConfigSource;
+
+					field(default_config, number: 2) => root::google::protobuf::Any;
+
+					field(apply_default_config_without_warming, number: 3) => root::bool;
+
+					repeated(type_urls, number: 4) => root::string;
+				};
+
+				def(ExtraSourceAddress) => message {
+					field(address, number: 1) => root::envoy::config::core::v3::SocketAddress;
+
+					field(socket_options, number: 2)
+					=> root::envoy::config::core::v3::SocketOptionsOverride;
+				};
+
+				def(GrpcService) => message {
+					oneof(envoy_grpc, number: 1, group: "target_specifier")
+					=> root::envoy::config::core::v3::GrpcService_EnvoyGrpc;
+
+					oneof(google_grpc, number: 2, group: "target_specifier")
+					=> root::envoy::config::core::v3::GrpcService_GoogleGrpc;
+
+					field(timeout, number: 3) => root::google::protobuf::Duration;
+
+					repeated(initial_metadata, number: 5) => root::envoy::config::core::v3::HeaderValue;
+
+					field(retry_policy, number: 6) => root::envoy::config::core::v3::RetryPolicy;
+				};
+
+				def(GrpcService_EnvoyGrpc) => message {
+					field(cluster_name, number: 1) => root::string;
+
+					field(authority, number: 2) => root::string;
+
+					field(retry_policy, number: 3) => root::envoy::config::core::v3::RetryPolicy;
+
+					field(max_receive_message_length, number: 4) => root::google::protobuf::UInt32Value;
+
+					field(skip_envoy_headers, number: 5) => root::bool;
+
+					field(per_stream_buffer_limit_bytes, number: 6)
+					=> root::google::protobuf::UInt32Value;
+				};
+
+				def(GrpcService_GoogleGrpc) => message {
+					field(target_uri, number: 1) => root::string;
+
+					field(channel_credentials, number: 2)
+					=> root::envoy::config::core::v3::GrpcService_GoogleGrpc_ChannelCredentials;
+
+					repeated(channel_credentials_plugin, number: 9) => root::google::protobuf::Any;
+
+					repeated(call_credentials, number: 3)
+					=> root::envoy::config::core::v3::GrpcService_GoogleGrpc_CallCredentials;
+
+					repeated(call_credentials_plugin, number: 10) => root::google::protobuf::Any;
+
+					field(stat_prefix, number: 4) => root::string;
+
+					field(credentials_factory_name, number: 5) => root::string;
+
+					field(config, number: 6) => root::google::protobuf::Struct;
+
+					field(per_stream_buffer_limit_bytes, number: 7)
+					=> root::google::protobuf::UInt32Value;
+
+					field(channel_args, number: 8)
+					=> root::envoy::config::core::v3::GrpcService_GoogleGrpc_ChannelArgs;
+				};
+
+				def(GrpcService_GoogleGrpc_CallCredentials) => message {
+					oneof(access_token, number: 1, group: "credential_specifier") => root::string;
+
+					oneof(google_compute_engine, number: 2, group: "credential_specifier")
+					=> root::google::protobuf::Empty;
+
+					oneof(google_refresh_token, number: 3, group: "credential_specifier")
+					=> root::string;
+
+					oneof(service_account_jwt_access, number: 4, group: "credential_specifier")
+					=> root::envoy::config::core::v3::GrpcService_GoogleGrpc_CallCredentials_ServiceAccountJWTAccessCredentials;
+
+					oneof(google_iam, number: 5, group: "credential_specifier")
+					=> root::envoy::config::core::v3::GrpcService_GoogleGrpc_CallCredentials_GoogleIAMCredentials;
+
+					oneof(from_plugin, number: 6, group: "credential_specifier")
+					=> root::envoy::config::core::v3::GrpcService_GoogleGrpc_CallCredentials_MetadataCredentialsFromPlugin;
+
+					oneof(sts_service, number: 7, group: "credential_specifier")
+					=> root::envoy::config::core::v3::GrpcService_GoogleGrpc_CallCredentials_StsService;
+				};
+
+				def(GrpcService_GoogleGrpc_CallCredentials_GoogleIAMCredentials) => message {
+					field(authorization_token, number: 1) => root::string;
+
+					field(authority_selector, number: 2) => root::string;
+				};
+
+				def(GrpcService_GoogleGrpc_CallCredentials_MetadataCredentialsFromPlugin) => message {
+					field(name, number: 1) => root::string;
+
+					oneof(typed_config, number: 3, group: "config_type") => root::google::protobuf::Any;
+				};
+
+				def(GrpcService_GoogleGrpc_CallCredentials_ServiceAccountJWTAccessCredentials)
+				=> message {
+					field(json_key, number: 1) => root::string;
+
+					field(token_lifetime_seconds, number: 2) => root::uint64;
+				};
+
+				def(GrpcService_GoogleGrpc_CallCredentials_StsService) => message {
+					field(token_exchange_service_uri, number: 1) => root::string;
+
+					field(resource, number: 2) => root::string;
+
+					field(audience, number: 3) => root::string;
+
+					field(scope, number: 4) => root::string;
+
+					field(requested_token_type, number: 5) => root::string;
+
+					field(subject_token_path, number: 6) => root::string;
+
+					field(subject_token_type, number: 7) => root::string;
+
+					field(actor_token_path, number: 8) => root::string;
+
+					field(actor_token_type, number: 9) => root::string;
+				};
+
+				def(GrpcService_GoogleGrpc_ChannelArgs) => message {
+					repeated(args, number: 1)
+					=> root::envoy::config::core::v3::GrpcService_GoogleGrpc_ChannelArgs_ArgsEntry;
+				};
+
+				def(GrpcService_GoogleGrpc_ChannelArgs_ArgsEntry) => message {
+					field(key, number: 1) => root::string;
+
+					field(value, number: 2)
+					=> root::envoy::config::core::v3::GrpcService_GoogleGrpc_ChannelArgs_Value;
+				};
+
+				def(GrpcService_GoogleGrpc_ChannelArgs_Value) => message {
+					oneof(string_value, number: 1, group: "value_specifier") => root::string;
+
+					oneof(int_value, number: 2, group: "value_specifier") => root::int64;
+				};
+
+				def(GrpcService_GoogleGrpc_ChannelCredentials) => message {
+					oneof(ssl_credentials, number: 1, group: "credential_specifier")
+					=> root::envoy::config::core::v3::GrpcService_GoogleGrpc_SslCredentials;
+
+					oneof(google_default, number: 2, group: "credential_specifier")
+					=> root::google::protobuf::Empty;
+
+					oneof(local_credentials, number: 3, group: "credential_specifier")
+					=> root::envoy::config::core::v3::GrpcService_GoogleGrpc_GoogleLocalCredentials;
+				};
+
+				def(GrpcService_GoogleGrpc_GoogleLocalCredentials) => message;
+
+				def(GrpcService_GoogleGrpc_SslCredentials) => message {
+					field(root_certs, number: 1) => root::envoy::config::core::v3::DataSource;
+
+					field(private_key, number: 2) => root::envoy::config::core::v3::DataSource;
+
+					field(cert_chain, number: 3) => root::envoy::config::core::v3::DataSource;
+				};
+
+				def(HeaderValue) => message {
+					field(key, number: 1) => root::string;
+
+					field(value, number: 2) => root::string;
+
+					field(raw_value, number: 3) => root::bytes;
+				};
+
+				def(HeaderValueOption) => message {
+					field(header, number: 1) => root::envoy::config::core::v3::HeaderValue;
+
+					field(append, number: 2) => root::google::protobuf::BoolValue;
+
+					field(append_action, number: 3)
+					=> root::envoy::config::core::v3::HeaderValueOption_HeaderAppendAction;
+
+					field(keep_empty_value, number: 4) => root::bool;
+				};
+
+				def(HeaderValueOption_HeaderAppendAction) => enum(Tag: root::int32) {
+					value(APPEND_IF_EXISTS_OR_ADD, number: 0);
+
+					value(ADD_IF_ABSENT, number: 1);
+
+					value(OVERWRITE_IF_EXISTS_OR_ADD, number: 2);
+
+					value(OVERWRITE_IF_EXISTS, number: 3);
+				};
+
+				def(HealthCheck) => message {
+					field(name, number: 27) => root::string;
+
+					field(timeout, number: 1) => root::google::protobuf::Duration;
+
+					field(interval, number: 2) => root::google::protobuf::Duration;
+
+					field(initial_jitter, number: 20) => root::google::protobuf::Duration;
+
+					field(interval_jitter, number: 3) => root::google::protobuf::Duration;
+
+					field(interval_jitter_percent, number: 18) => root::uint32;
+
+					field(unhealthy_threshold, number: 4) => root::google::protobuf::UInt32Value;
+
+					field(healthy_threshold, number: 5) => root::google::protobuf::UInt32Value;
+
+					field(alt_port, number: 6) => root::google::protobuf::UInt32Value;
+
+					field(reuse_connection, number: 7) => root::google::protobuf::BoolValue;
+
+					oneof(http_health_check, number: 8, group: "health_checker")
+					=> root::envoy::config::core::v3::HealthCheck_HttpHealthCheck;
+
+					oneof(tcp_health_check, number: 9, group: "health_checker")
+					=> root::envoy::config::core::v3::HealthCheck_TcpHealthCheck;
+
+					oneof(grpc_health_check, number: 11, group: "health_checker")
+					=> root::envoy::config::core::v3::HealthCheck_GrpcHealthCheck;
+
+					oneof(custom_health_check, number: 13, group: "health_checker")
+					=> root::envoy::config::core::v3::HealthCheck_CustomHealthCheck;
+
+					field(no_traffic_interval, number: 12) => root::google::protobuf::Duration;
+
+					field(no_traffic_healthy_interval, number: 24) => root::google::protobuf::Duration;
+
+					field(unhealthy_interval, number: 14) => root::google::protobuf::Duration;
+
+					field(unhealthy_edge_interval, number: 15) => root::google::protobuf::Duration;
+
+					field(healthy_edge_interval, number: 16) => root::google::protobuf::Duration;
+
+					field(event_log_path, number: 17) => root::string;
+
+					repeated(event_logger, number: 25)
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+
+					field(event_service, number: 22)
+					=> root::envoy::config::core::v3::EventServiceConfig;
+
+					field(always_log_health_check_failures, number: 19) => root::bool;
+
+					field(always_log_health_check_success, number: 26) => root::bool;
+
+					field(tls_options, number: 21)
+					=> root::envoy::config::core::v3::HealthCheck_TlsOptions;
+
+					field(transport_socket_match_criteria, number: 23) => root::google::protobuf::Struct;
+				};
+
+				def(HealthCheck_CustomHealthCheck) => message {
+					field(name, number: 1) => root::string;
+
+					oneof(typed_config, number: 3, group: "config_type") => root::google::protobuf::Any;
+				};
+
+				def(HealthCheck_GrpcHealthCheck) => message {
+					field(service_name, number: 1) => root::string;
+
+					field(authority, number: 2) => root::string;
+
+					repeated(initial_metadata, number: 3)
+					=> root::envoy::config::core::v3::HeaderValueOption;
+				};
+
+				def(HealthCheck_HttpHealthCheck) => message {
+					field(host, number: 1) => root::string;
+
+					field(path, number: 2) => root::string;
+
+					field(send, number: 3) => root::envoy::config::core::v3::HealthCheck_Payload;
+
+					repeated(receive, number: 4) => root::envoy::config::core::v3::HealthCheck_Payload;
+
+					field(response_buffer_size, number: 14) => root::google::protobuf::UInt64Value;
+
+					repeated(request_headers_to_add, number: 6)
+					=> root::envoy::config::core::v3::HeaderValueOption;
+
+					repeated(request_headers_to_remove, number: 8) => root::string;
+
+					repeated(expected_statuses, number: 9) => root::envoy::type::v3::Int64Range;
+
+					repeated(retriable_statuses, number: 12) => root::envoy::type::v3::Int64Range;
+
+					field(codec_client_type, number: 10) => root::envoy::type::v3::CodecClientType;
+
+					field(use_alpn_protocol, number: 15) => root::bool;
+
+					field(service_name_matcher, number: 11)
+					=> root::envoy::type::matcher::v3::StringMatcher;
+
+					field(method, number: 13) => root::envoy::config::core::v3::RequestMethod;
+				};
+
+				def(HealthCheck_Payload) => message {
+					oneof(text, number: 1, group: "payload") => root::string;
+
+					oneof(binary, number: 2, group: "payload") => root::bytes;
+				};
+
+				def(HealthCheck_TcpHealthCheck) => message {
+					field(send, number: 1) => root::envoy::config::core::v3::HealthCheck_Payload;
+
+					repeated(receive, number: 2) => root::envoy::config::core::v3::HealthCheck_Payload;
+
+					field(proxy_protocol_config, number: 3)
+					=> root::envoy::config::core::v3::ProxyProtocolConfig;
+				};
+
+				def(HealthCheck_TlsOptions) => message {
+					repeated(alpn_protocols, number: 1) => root::string;
+				};
+
+				def(HealthStatus) => enum(Tag: root::int32) {
+					value(UNKNOWN, number: 0);
+
+					value(HEALTHY, number: 1);
+
+					value(UNHEALTHY, number: 2);
+
+					value(DRAINING, number: 3);
+
+					value(TIMEOUT, number: 4);
+
+					value(DEGRADED, number: 5);
+				};
+
+				def(HealthStatusSet) => message {
+					repeated(statuses, number: 1) => root::envoy::config::core::v3::HealthStatus;
+				};
+
+				def(Http1ProtocolOptions) => message {
+					field(allow_absolute_url, number: 1) => root::google::protobuf::BoolValue;
+
+					field(accept_http_10, number: 2) => root::bool;
+
+					field(default_host_for_http_10, number: 3) => root::string;
+
+					field(header_key_format, number: 4)
+					=> root::envoy::config::core::v3::Http1ProtocolOptions_HeaderKeyFormat;
+
+					field(enable_trailers, number: 5) => root::bool;
+
+					field(allow_chunked_length, number: 6) => root::bool;
+
+					field(override_stream_error_on_invalid_http_message, number: 7)
+					=> root::google::protobuf::BoolValue;
+
+					field(send_fully_qualified_url, number: 8) => root::bool;
+
+					field(use_balsa_parser, number: 9) => root::google::protobuf::BoolValue;
+
+					field(allow_custom_methods, number: 10) => root::bool;
+
+					repeated(ignore_http_11_upgrade, number: 11)
+					=> root::envoy::type::matcher::v3::StringMatcher;
+				};
+
+				def(Http1ProtocolOptions_HeaderKeyFormat) => message {
+					oneof(proper_case_words, number: 1, group: "header_format")
+					=> root::envoy::config::core::v3::Http1ProtocolOptions_HeaderKeyFormat_ProperCaseWords;
+
+					oneof(stateful_formatter, number: 8, group: "header_format")
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+				};
+
+				def(Http1ProtocolOptions_HeaderKeyFormat_ProperCaseWords) => message;
+
+				def(Http2ProtocolOptions) => message {
+					field(hpack_table_size, number: 1) => root::google::protobuf::UInt32Value;
+
+					field(max_concurrent_streams, number: 2) => root::google::protobuf::UInt32Value;
+
+					field(initial_stream_window_size, number: 3) => root::google::protobuf::UInt32Value;
+
+					field(initial_connection_window_size, number: 4)
+					=> root::google::protobuf::UInt32Value;
+
+					field(allow_connect, number: 5) => root::bool;
+
+					field(allow_metadata, number: 6) => root::bool;
+
+					field(max_outbound_frames, number: 7) => root::google::protobuf::UInt32Value;
+
+					field(max_outbound_control_frames, number: 8) => root::google::protobuf::UInt32Value;
+
+					field(max_consecutive_inbound_frames_with_empty_payload, number: 9)
+					=> root::google::protobuf::UInt32Value;
+
+					field(max_inbound_priority_frames_per_stream, number: 10)
+					=> root::google::protobuf::UInt32Value;
+
+					field(max_inbound_window_update_frames_per_data_frame_sent, number: 11)
+					=> root::google::protobuf::UInt32Value;
+
+					field(stream_error_on_invalid_http_messaging, number: 12) => root::bool;
+
+					field(override_stream_error_on_invalid_http_message, number: 14)
+					=> root::google::protobuf::BoolValue;
+
+					repeated(custom_settings_parameters, number: 13)
+					=> root::envoy::config::core::v3::Http2ProtocolOptions_SettingsParameter;
+
+					field(connection_keepalive, number: 15)
+					=> root::envoy::config::core::v3::KeepaliveSettings;
+
+					field(use_oghttp2_codec, number: 16) => root::google::protobuf::BoolValue;
+
+					field(max_metadata_size, number: 17) => root::google::protobuf::UInt64Value;
+
+					field(enable_huffman_encoding, number: 18) => root::google::protobuf::BoolValue;
+
+					field(max_header_field_size_kb, number: 19) => root::google::protobuf::UInt32Value;
+
+					field(disallow_obs_text, number: 20) => root::google::protobuf::BoolValue;
+
+					field(stream_reset_burst, number: 21) => root::google::protobuf::UInt64Value;
+
+					field(stream_reset_rate, number: 22) => root::google::protobuf::UInt64Value;
+				};
+
+				def(Http2ProtocolOptions_SettingsParameter) => message {
+					field(identifier, number: 1) => root::google::protobuf::UInt32Value;
+
+					field(value, number: 2) => root::google::protobuf::UInt32Value;
+				};
+
+				def(Http3ProtocolOptions) => message {
+					field(quic_protocol_options, number: 1)
+					=> root::envoy::config::core::v3::QuicProtocolOptions;
+
+					field(override_stream_error_on_invalid_http_message, number: 2)
+					=> root::google::protobuf::BoolValue;
+
+					field(allow_extended_connect, number: 5) => root::bool;
+
+					field(allow_metadata, number: 6) => root::bool;
+
+					field(disable_qpack, number: 7) => root::bool;
+
+					field(disable_connection_flow_control_for_streams, number: 8) => root::bool;
+
+					field(disallow_obs_text, number: 9) => root::google::protobuf::BoolValue;
+				};
+
+				def(HttpProtocolOptions) => message {
+					field(idle_timeout, number: 1) => root::google::protobuf::Duration;
+
+					field(max_connection_duration, number: 3) => root::google::protobuf::Duration;
+
+					field(max_connection_duration_jitter, number: 8) => root::envoy::type::v3::Percent;
+
+					field(max_headers_count, number: 2) => root::google::protobuf::UInt32Value;
+
+					field(max_response_headers_kb, number: 7) => root::google::protobuf::UInt32Value;
+
+					field(max_stream_duration, number: 4) => root::google::protobuf::Duration;
+
+					field(headers_with_underscores_action, number: 5)
+					=> root::envoy::config::core::v3::HttpProtocolOptions_HeadersWithUnderscoresAction;
+
+					field(max_requests_per_connection, number: 6) => root::google::protobuf::UInt32Value;
+				};
+
+				def(HttpProtocolOptions_HeadersWithUnderscoresAction) => enum(Tag: root::int32) {
+					value(ALLOW, number: 0);
+
+					value(REJECT_REQUEST, number: 1);
+
+					value(DROP_HEADER, number: 2);
+				};
+
+				def(JsonFormatOptions) => message {
+					field(sort_properties, number: 1) => root::bool;
+				};
+
+				def(KeepaliveSettings) => message {
+					field(interval, number: 1) => root::google::protobuf::Duration;
+
+					field(timeout, number: 2) => root::google::protobuf::Duration;
+
+					field(interval_jitter, number: 3) => root::envoy::type::v3::Percent;
+
+					field(connection_idle_interval, number: 4) => root::google::protobuf::Duration;
+				};
+
+				def(Locality) => message {
+					field(region, number: 1) => root::string;
+
+					field(zone, number: 2) => root::string;
+
+					field(sub_zone, number: 3) => root::string;
+				};
+
+				def(Metadata) => message {
+					repeated(filter_metadata, number: 1)
+					=> root::envoy::config::core::v3::Metadata_FilterMetadataEntry;
+
+					repeated(typed_filter_metadata, number: 2)
+					=> root::envoy::config::core::v3::Metadata_TypedFilterMetadataEntry;
+				};
+
+				def(Metadata_FilterMetadataEntry) => message {
+					field(key, number: 1) => root::string;
+
+					field(value, number: 2) => root::google::protobuf::Struct;
+				};
+
+				def(Metadata_TypedFilterMetadataEntry) => message {
+					field(key, number: 1) => root::string;
+
+					field(value, number: 2) => root::google::protobuf::Any;
+				};
+
+				def(PathConfigSource) => message {
+					field(path, number: 1) => root::string;
+
+					field(watched_directory, number: 2)
+					=> root::envoy::config::core::v3::WatchedDirectory;
+
+					field(poll_interval, number: 3) => root::google::protobuf::Duration;
+				};
+
+				def(Pipe) => message {
+					field(path, number: 1) => root::string;
+
+					field(mode, number: 2) => root::uint32;
+				};
+
+				def(ProxyProtocolConfig) => message {
+					field(version, number: 1)
+					=> root::envoy::config::core::v3::ProxyProtocolConfig_Version;
+
+					field(pass_through_tlvs, number: 2)
+					=> root::envoy::config::core::v3::ProxyProtocolPassThroughTLVs;
+
+					repeated(added_tlvs, number: 3) => root::envoy::config::core::v3::TlvEntry;
+				};
+
+				def(ProxyProtocolConfig_Version) => enum(Tag: root::int32) {
+					value(V1, number: 0);
+
+					value(V2, number: 1);
+				};
+
+				def(ProxyProtocolPassThroughTLVs) => message {
+					field(match_type, number: 1)
+					=> root::envoy::config::core::v3::ProxyProtocolPassThroughTLVs_PassTLVsMatchType;
+
+					repeated(tlv_type, number: 2) => root::uint32;
+				};
+
+				def(ProxyProtocolPassThroughTLVs_PassTLVsMatchType) => enum(Tag: root::int32) {
+					value(INCLUDE_ALL, number: 0);
+
+					value(INCLUDE, number: 1);
+				};
+
+				def(QuicKeepAliveSettings) => message {
+					field(max_interval, number: 1) => root::google::protobuf::Duration;
+
+					field(initial_interval, number: 2) => root::google::protobuf::Duration;
+				};
+
+				def(QuicProtocolOptions) => message {
+					field(max_concurrent_streams, number: 1) => root::google::protobuf::UInt32Value;
+
+					field(initial_stream_window_size, number: 2) => root::google::protobuf::UInt32Value;
+
+					field(initial_connection_window_size, number: 3)
+					=> root::google::protobuf::UInt32Value;
+
+					field(num_timeouts_to_trigger_port_migration, number: 4)
+					=> root::google::protobuf::UInt32Value;
+
+					field(connection_keepalive, number: 5)
+					=> root::envoy::config::core::v3::QuicKeepAliveSettings;
+
+					field(connection_options, number: 6) => root::string;
+
+					field(client_connection_options, number: 7) => root::string;
+
+					field(idle_network_timeout, number: 8) => root::google::protobuf::Duration;
+
+					field(max_packet_length, number: 9) => root::google::protobuf::UInt64Value;
+
+					field(client_packet_writer, number: 10)
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+
+					field(connection_migration, number: 11)
+					=> root::envoy::config::core::v3::QuicProtocolOptions_ConnectionMigrationSettings;
+
+					field(memory_reduction_timeout, number: 12) => root::google::protobuf::Duration;
+
+					field(enable_scone, number: 13) => root::google::protobuf::BoolValue;
+				};
+
+				def(QuicProtocolOptions_ConnectionMigrationSettings) => message {
+					field(migrate_idle_connections, number: 1)
+					=> root::envoy::config::core::v3::QuicProtocolOptions_ConnectionMigrationSettings_MigrateIdleConnectionSettings;
+
+					field(max_time_on_non_default_network, number: 2)
+					=> root::google::protobuf::Duration;
+				};
+
+				def(QuicProtocolOptions_ConnectionMigrationSettings_MigrateIdleConnectionSettings)
+				=> message {
+					field(max_idle_time_before_migration, number: 1) => root::google::protobuf::Duration;
+				};
+
+				def(RateLimitSettings) => message {
+					field(max_tokens, number: 1) => root::google::protobuf::UInt32Value;
+
+					field(fill_rate, number: 2) => root::google::protobuf::DoubleValue;
+				};
+
+				def(RequestMethod) => enum(Tag: root::int32) {
+					value(METHOD_UNSPECIFIED, number: 0);
+
+					value(GET, number: 1);
+
+					value(HEAD, number: 2);
+
+					value(POST, number: 3);
+
+					value(PUT, number: 4);
+
+					value(DELETE, number: 5);
+
+					value(CONNECT, number: 6);
+
+					value(OPTIONS, number: 7);
+
+					value(TRACE, number: 8);
+
+					value(PATCH, number: 9);
+				};
+
+				def(RetryPolicy) => message {
+					field(retry_back_off, number: 1) => root::envoy::config::core::v3::BackoffStrategy;
+
+					field(num_retries, number: 2) => root::google::protobuf::UInt32Value;
+
+					field(retry_on, number: 3) => root::string;
+
+					field(retry_priority, number: 4)
+					=> root::envoy::config::core::v3::RetryPolicy_RetryPriority;
+
+					repeated(retry_host_predicate, number: 5)
+					=> root::envoy::config::core::v3::RetryPolicy_RetryHostPredicate;
+
+					field(host_selection_retry_max_attempts, number: 6) => root::int64;
+
+					field(per_try_timeout, number: 7) => root::google::protobuf::Duration;
+				};
+
+				def(RetryPolicy_RetryHostPredicate) => message {
+					field(name, number: 1) => root::string;
+
+					oneof(typed_config, number: 2, group: "config_type") => root::google::protobuf::Any;
+				};
+
+				def(RetryPolicy_RetryPriority) => message {
+					field(name, number: 1) => root::string;
+
+					oneof(typed_config, number: 2, group: "config_type") => root::google::protobuf::Any;
+				};
+
+				def(RoutingPriority) => enum(Tag: root::int32) {
+					value(DEFAULT, number: 0);
+
+					value(HIGH, number: 1);
+				};
+
+				def(RuntimeDouble) => message {
+					field(default_value, number: 1) => root::double;
+
+					field(runtime_key, number: 2) => root::string;
+				};
+
+				def(RuntimeFractionalPercent) => message {
+					field(default_value, number: 1) => root::envoy::type::v3::FractionalPercent;
+
+					field(runtime_key, number: 2) => root::string;
+				};
+
+				def(SelfConfigSource) => message {
+					field(transport_api_version, number: 1) => root::envoy::config::core::v3::ApiVersion;
+				};
+
+				def(SocketAddress) => message {
+					field(protocol, number: 1) => root::envoy::config::core::v3::SocketAddress_Protocol;
+
+					field(address, number: 2) => root::string;
+
+					oneof(port_value, number: 3, group: "port_specifier") => root::uint32;
+
+					oneof(named_port, number: 4, group: "port_specifier") => root::string;
+
+					field(resolver_name, number: 5) => root::string;
+
+					field(ipv4_compat, number: 6) => root::bool;
+
+					field(network_namespace_filepath, number: 7) => root::string;
+				};
+
+				def(SocketAddress_Protocol) => enum(Tag: root::int32) {
+					value(TCP, number: 0);
+
+					value(UDP, number: 1);
+				};
+
+				def(SocketOption) => message {
+					field(description, number: 1) => root::string;
+
+					field(level, number: 2) => root::int64;
+
+					field(name, number: 3) => root::int64;
+
+					oneof(int_value, number: 4, group: "value") => root::int64;
+
+					oneof(buf_value, number: 5, group: "value") => root::bytes;
+
+					field(state, number: 6) => root::envoy::config::core::v3::SocketOption_SocketState;
+
+					field(type, number: 7) => root::envoy::config::core::v3::SocketOption_SocketType;
+
+					field(ip_version, number: 8)
+					=> root::envoy::config::core::v3::SocketOption_SocketIpVersion;
+				};
+
+				def(SocketOption_SocketIpVersion) => enum(Tag: root::int32) {
+					value(SOCKET_IP_VERSION_UNSPECIFIED, number: 0);
+
+					value(SOCKET_IP_VERSION_IPV4, number: 1);
+
+					value(SOCKET_IP_VERSION_IPV6, number: 2);
+				};
+
+				def(SocketOption_SocketState) => enum(Tag: root::int32) {
+					value(STATE_PREBIND, number: 0);
+
+					value(STATE_BOUND, number: 1);
+
+					value(STATE_LISTENING, number: 2);
+				};
+
+				def(SocketOption_SocketType) => message {
+					field(stream, number: 1)
+					=> root::envoy::config::core::v3::SocketOption_SocketType_Stream;
+
+					field(datagram, number: 2)
+					=> root::envoy::config::core::v3::SocketOption_SocketType_Datagram;
+				};
+
+				def(SocketOption_SocketType_Datagram) => message;
+
+				def(SocketOption_SocketType_Stream) => message;
+
+				def(SocketOptionsOverride) => message {
+					repeated(socket_options, number: 1) => root::envoy::config::core::v3::SocketOption;
+				};
+
+				def(SubstitutionFormatString) => message {
+					oneof(text_format, number: 1, group: "format") => root::string;
+
+					oneof(json_format, number: 2, group: "format") => root::google::protobuf::Struct;
+
+					oneof(text_format_source, number: 5, group: "format")
+					=> root::envoy::config::core::v3::DataSource;
+
+					field(omit_empty_values, number: 3) => root::bool;
+
+					field(content_type, number: 4) => root::string;
+
+					repeated(formatters, number: 6)
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+
+					field(json_format_options, number: 7)
+					=> root::envoy::config::core::v3::JsonFormatOptions;
+				};
+
+				def(TcpKeepalive) => message {
+					field(keepalive_probes, number: 1) => root::google::protobuf::UInt32Value;
+
+					field(keepalive_time, number: 2) => root::google::protobuf::UInt32Value;
+
+					field(keepalive_interval, number: 3) => root::google::protobuf::UInt32Value;
+				};
+
+				def(TlvEntry) => message {
+					field(type, number: 1) => root::uint32;
+
+					field(value, number: 2) => root::bytes;
+
+					field(format_string, number: 3)
+					=> root::envoy::config::core::v3::SubstitutionFormatString;
+				};
+
+				def(TransportSocket) => message {
+					field(name, number: 1) => root::string;
+
+					oneof(typed_config, number: 3, group: "config_type") => root::google::protobuf::Any;
+				};
+
+				def(TypedExtensionConfig) => message {
+					field(name, number: 1) => root::string;
+
+					field(typed_config, number: 2) => root::google::protobuf::Any;
+				};
+
+				def(UpstreamHttpProtocolOptions) => message {
+					field(auto_sni, number: 1) => root::bool;
+
+					field(auto_san_validation, number: 2) => root::bool;
+
+					field(override_auto_sni_header, number: 3) => root::string;
+				};
+
+				def(WatchedDirectory) => message {
+					field(path, number: 1) => root::string;
+
+					field(watch_modify, number: 2) => root::bool;
+				};
+			};
+		};
+
+		namespace(endpoint) {
+			namespace(v3) {
+				def(ClusterLoadAssignment) => message {
+					field(cluster_name, number: 1) => root::string;
+
+					repeated(endpoints, number: 2)
+					=> root::envoy::config::endpoint::v3::LocalityLbEndpoints;
+
+					repeated(named_endpoints, number: 5)
+					=> root::envoy::config::endpoint::v3::ClusterLoadAssignment_NamedEndpointsEntry;
+
+					field(policy, number: 4)
+					=> root::envoy::config::endpoint::v3::ClusterLoadAssignment_Policy;
+				};
+
+				def(ClusterLoadAssignment_NamedEndpointsEntry) => message {
+					field(key, number: 1) => root::string;
+
+					field(value, number: 2) => root::envoy::config::endpoint::v3::Endpoint;
+				};
+
+				def(ClusterLoadAssignment_Policy) => message {
+					repeated(drop_overloads, number: 2)
+					=> root::envoy::config::endpoint::v3::ClusterLoadAssignment_Policy_DropOverload;
+
+					field(overprovisioning_factor, number: 3) => root::google::protobuf::UInt32Value;
+
+					field(endpoint_stale_after, number: 4) => root::google::protobuf::Duration;
+
+					field(weighted_priority_health, number: 6) => root::bool;
+				};
+
+				def(ClusterLoadAssignment_Policy_DropOverload) => message {
+					field(category, number: 1) => root::string;
+
+					field(drop_percentage, number: 2) => root::envoy::type::v3::FractionalPercent;
+				};
+
+				def(Endpoint) => message {
+					field(address, number: 1) => root::envoy::config::core::v3::Address;
+
+					field(health_check_config, number: 2)
+					=> root::envoy::config::endpoint::v3::Endpoint_HealthCheckConfig;
+
+					field(hostname, number: 3) => root::string;
+
+					repeated(additional_addresses, number: 4)
+					=> root::envoy::config::endpoint::v3::Endpoint_AdditionalAddress;
+
+					field(observability_name, number: 5) => root::string;
+				};
+
+				def(Endpoint_AdditionalAddress) => message {
+					field(address, number: 1) => root::envoy::config::core::v3::Address;
+				};
+
+				def(Endpoint_HealthCheckConfig) => message {
+					field(port_value, number: 1) => root::uint32;
+
+					field(hostname, number: 2) => root::string;
+
+					field(address, number: 3) => root::envoy::config::core::v3::Address;
+
+					field(disable_active_health_check, number: 4) => root::bool;
+				};
+
+				def(LbEndpoint) => message {
+					oneof(endpoint, number: 1, group: "host_identifier")
+					=> root::envoy::config::endpoint::v3::Endpoint;
+
+					oneof(endpoint_name, number: 5, group: "host_identifier") => root::string;
+
+					field(health_status, number: 2) => root::envoy::config::core::v3::HealthStatus;
+
+					field(metadata, number: 3) => root::envoy::config::core::v3::Metadata;
+
+					field(load_balancing_weight, number: 4) => root::google::protobuf::UInt32Value;
+				};
+
+				def(LedsClusterLocalityConfig) => message {
+					field(leds_config, number: 1) => root::envoy::config::core::v3::ConfigSource;
+
+					field(leds_collection_name, number: 2) => root::string;
+				};
+
+				def(LocalityLbEndpoints) => message {
+					field(locality, number: 1) => root::envoy::config::core::v3::Locality;
+
+					field(metadata, number: 9) => root::envoy::config::core::v3::Metadata;
+
+					repeated(lb_endpoints, number: 2) => root::envoy::config::endpoint::v3::LbEndpoint;
+
+					oneof(load_balancer_endpoints, number: 7, group: "lb_config")
+					=> root::envoy::config::endpoint::v3::LocalityLbEndpoints_LbEndpointList;
+
+					oneof(leds_cluster_locality_config, number: 8, group: "lb_config")
+					=> root::envoy::config::endpoint::v3::LedsClusterLocalityConfig;
+
+					field(load_balancing_weight, number: 3) => root::google::protobuf::UInt32Value;
+
+					field(priority, number: 5) => root::uint32;
+
+					field(proximity, number: 6) => root::google::protobuf::UInt32Value;
+				};
+
+				def(LocalityLbEndpoints_LbEndpointList) => message {
+					repeated(lb_endpoints, number: 1) => root::envoy::config::endpoint::v3::LbEndpoint;
+				};
+			};
+		};
+
+		namespace(metrics) {
+			namespace(v3) {
+				def(StatsMatcher) => message {
+					oneof(reject_all, number: 1, group: "stats_matcher") => root::bool;
+
+					oneof(exclusion_list, number: 2, group: "stats_matcher")
+					=> root::envoy::type::matcher::v3::ListStringMatcher;
+
+					oneof(inclusion_list, number: 3, group: "stats_matcher")
+					=> root::envoy::type::matcher::v3::ListStringMatcher;
+				};
+			};
+		};
+
+		namespace(route) {
+			namespace(v3) {
+				def(HeaderMatcher) => message {
+					field(name, number: 1) => root::string;
+
+					oneof(exact_match, number: 4, group: "header_match_specifier") => root::string;
+
+					oneof(safe_regex_match, number: 11, group: "header_match_specifier")
+					=> root::envoy::type::matcher::v3::RegexMatcher;
+
+					oneof(range_match, number: 6, group: "header_match_specifier")
+					=> root::envoy::type::v3::Int64Range;
+
+					oneof(present_match, number: 7, group: "header_match_specifier") => root::bool;
+
+					oneof(prefix_match, number: 9, group: "header_match_specifier") => root::string;
+
+					oneof(suffix_match, number: 10, group: "header_match_specifier") => root::string;
+
+					oneof(contains_match, number: 12, group: "header_match_specifier") => root::string;
+
+					oneof(string_match, number: 13, group: "header_match_specifier")
+					=> root::envoy::type::matcher::v3::StringMatcher;
+
+					field(invert_match, number: 8) => root::bool;
+
+					field(treat_missing_header_as_empty, number: 14) => root::bool;
+				};
+
+				def(RetryPolicy) => message {
+					field(retry_on, number: 1) => root::string;
+
+					field(num_retries, number: 2) => root::google::protobuf::UInt32Value;
+
+					field(per_try_timeout, number: 3) => root::google::protobuf::Duration;
+
+					field(per_try_idle_timeout, number: 13) => root::google::protobuf::Duration;
+
+					field(retry_priority, number: 4)
+					=> root::envoy::config::route::v3::RetryPolicy_RetryPriority;
+
+					repeated(retry_host_predicate, number: 5)
+					=> root::envoy::config::route::v3::RetryPolicy_RetryHostPredicate;
+
+					repeated(retry_options_predicates, number: 12)
+					=> root::envoy::config::core::v3::TypedExtensionConfig;
+
+					field(host_selection_retry_max_attempts, number: 6) => root::int64;
+
+					repeated(retriable_status_codes, number: 7) => root::uint32;
+
+					field(retry_back_off, number: 8)
+					=> root::envoy::config::route::v3::RetryPolicy_RetryBackOff;
+
+					field(rate_limited_retry_back_off, number: 11)
+					=> root::envoy::config::route::v3::RetryPolicy_RateLimitedRetryBackOff;
+
+					repeated(retriable_headers, number: 9)
+					=> root::envoy::config::route::v3::HeaderMatcher;
+
+					repeated(retriable_request_headers, number: 10)
+					=> root::envoy::config::route::v3::HeaderMatcher;
+
+					field(refresh_cluster_on_retry, number: 14) => root::bool;
+				};
+
+				def(RetryPolicy_RateLimitedRetryBackOff) => message {
+					repeated(reset_headers, number: 1)
+					=> root::envoy::config::route::v3::RetryPolicy_ResetHeader;
+
+					field(max_interval, number: 2) => root::google::protobuf::Duration;
+				};
+
+				def(RetryPolicy_ResetHeader) => message {
+					field(name, number: 1) => root::string;
+
+					field(format, number: 2)
+					=> root::envoy::config::route::v3::RetryPolicy_ResetHeaderFormat;
+				};
+
+				def(RetryPolicy_ResetHeaderFormat) => enum(Tag: root::int32) {
+					value(SECONDS, number: 0);
+
+					value(UNIX_TIMESTAMP, number: 1);
+				};
+
+				def(RetryPolicy_RetryBackOff) => message {
+					field(base_interval, number: 1) => root::google::protobuf::Duration;
+
+					field(max_interval, number: 2) => root::google::protobuf::Duration;
+				};
+
+				def(RetryPolicy_RetryHostPredicate) => message {
+					field(name, number: 1) => root::string;
+
+					oneof(typed_config, number: 3, group: "config_type") => root::google::protobuf::Any;
+				};
+
+				def(RetryPolicy_RetryPriority) => message {
+					field(name, number: 1) => root::string;
+
+					oneof(typed_config, number: 3, group: "config_type") => root::google::protobuf::Any;
+				};
+
+				def(RouteAction_HashPolicy) => message {
+					oneof(header, number: 1, group: "policy_specifier")
+					=> root::envoy::config::route::v3::RouteAction_HashPolicy_Header;
+
+					oneof(cookie, number: 2, group: "policy_specifier")
+					=> root::envoy::config::route::v3::RouteAction_HashPolicy_Cookie;
+
+					oneof(connection_properties, number: 3, group: "policy_specifier")
+					=> root::envoy::config::route::v3::RouteAction_HashPolicy_ConnectionProperties;
+
+					oneof(query_parameter, number: 5, group: "policy_specifier")
+					=> root::envoy::config::route::v3::RouteAction_HashPolicy_QueryParameter;
+
+					oneof(filter_state, number: 6, group: "policy_specifier")
+					=> root::envoy::config::route::v3::RouteAction_HashPolicy_FilterState;
+
+					field(terminal, number: 4) => root::bool;
+				};
+
+				def(RouteAction_HashPolicy_ConnectionProperties) => message {
+					field(source_ip, number: 1) => root::bool;
+				};
+
+				def(RouteAction_HashPolicy_Cookie) => message {
+					field(name, number: 1) => root::string;
+
+					field(ttl, number: 2) => root::google::protobuf::Duration;
+
+					field(path, number: 3) => root::string;
+
+					repeated(attributes, number: 4)
+					=> root::envoy::config::route::v3::RouteAction_HashPolicy_CookieAttribute;
+				};
+
+				def(RouteAction_HashPolicy_CookieAttribute) => message {
+					field(name, number: 1) => root::string;
+
+					field(value, number: 2) => root::string;
+				};
+
+				def(RouteAction_HashPolicy_FilterState) => message {
+					field(key, number: 1) => root::string;
+				};
+
+				def(RouteAction_HashPolicy_Header) => message {
+					field(header_name, number: 1) => root::string;
+
+					field(regex_rewrite, number: 2)
+					=> root::envoy::type::matcher::v3::RegexMatchAndSubstitute;
+				};
+
+				def(RouteAction_HashPolicy_QueryParameter) => message {
+					field(name, number: 1) => root::string;
+				};
+
+				def(RouteAction_RequestMirrorPolicy) => message {
+					field(cluster, number: 1) => root::string;
+
+					field(cluster_header, number: 5) => root::string;
+
+					field(runtime_fraction, number: 3)
+					=> root::envoy::config::core::v3::RuntimeFractionalPercent;
+
+					field(trace_sampled, number: 4) => root::google::protobuf::BoolValue;
+
+					field(disable_shadow_host_suffix_append, number: 6) => root::bool;
+
+					repeated(request_headers_mutations, number: 7)
+					=> root::envoy::config::common::mutation_rules::v3::HeaderMutation;
+
+					field(host_rewrite_literal, number: 8) => root::string;
+
+					field(stat_prefix, number: 9) => root::string;
+				};
+			};
+		};
+	};
+
+	namespace(extensions) {
+		namespace(filters) {
+			namespace(network) {
+				namespace(http_connection_manager) {
+					namespace(v3) {
+						def(HttpFilter) => message {
+							field(name, number: 1) => root::string;
+
+							oneof(typed_config, number: 4, group: "config_type")
+							=> root::google::protobuf::Any;
+
+							oneof(config_discovery, number: 5, group: "config_type")
+							=> root::envoy::config::core::v3::ExtensionConfigSource;
+
+							field(is_optional, number: 6) => root::bool;
+
+							field(disabled, number: 7) => root::bool;
+						};
+					};
+				};
+			};
+		};
+
+		namespace(upstreams) {
+			namespace(http) {
+				namespace(v3) {
+					def(HttpProtocolOptions) => message {
+						field(common_http_protocol_options, number: 1)
+						=> root::envoy::config::core::v3::HttpProtocolOptions;
+
+						field(upstream_http_protocol_options, number: 2)
+						=> root::envoy::config::core::v3::UpstreamHttpProtocolOptions;
+
+						oneof(explicit_http_config, number: 3, group: "upstream_protocol_options")
+						=> root::envoy::extensions::upstreams::http::v3::HttpProtocolOptions_ExplicitHttpConfig;
+
+						oneof(
+							use_downstream_protocol_config,
+							number: 4,
+							group: "upstream_protocol_options",
+						)
+						=> root::envoy::extensions::upstreams::http::v3::HttpProtocolOptions_UseDownstreamHttpConfig;
+
+						oneof(auto_config, number: 5, group: "upstream_protocol_options")
+						=> root::envoy::extensions::upstreams::http::v3::HttpProtocolOptions_AutoHttpConfig;
+
+						repeated(http_filters, number: 6)
+						=> root::envoy::extensions::filters::network::http_connection_manager::v3::HttpFilter;
+
+						field(header_validation_config, number: 7)
+						=> root::envoy::config::core::v3::TypedExtensionConfig;
+
+						field(outlier_detection, number: 8)
+						=> root::envoy::extensions::upstreams::http::v3::HttpProtocolOptions_OutlierDetection;
+
+						repeated(request_mirror_policies, number: 9)
+						=> root::envoy::config::route::v3::RouteAction_RequestMirrorPolicy;
+
+						repeated(hash_policy, number: 10)
+						=> root::envoy::config::route::v3::RouteAction_HashPolicy;
+
+						field(retry_policy, number: 11) => root::envoy::config::route::v3::RetryPolicy;
+					};
+
+					def(HttpProtocolOptions_AutoHttpConfig) => message {
+						field(http_protocol_options, number: 1)
+						=> root::envoy::config::core::v3::Http1ProtocolOptions;
+
+						field(http2_protocol_options, number: 2)
+						=> root::envoy::config::core::v3::Http2ProtocolOptions;
+
+						field(http3_protocol_options, number: 3)
+						=> root::envoy::config::core::v3::Http3ProtocolOptions;
+
+						field(alternate_protocols_cache_options, number: 4)
+						=> root::envoy::config::core::v3::AlternateProtocolsCacheOptions;
+					};
+
+					def(HttpProtocolOptions_ExplicitHttpConfig) => message {
+						oneof(http_protocol_options, number: 1, group: "protocol_config")
+						=> root::envoy::config::core::v3::Http1ProtocolOptions;
+
+						oneof(http2_protocol_options, number: 2, group: "protocol_config")
+						=> root::envoy::config::core::v3::Http2ProtocolOptions;
+
+						oneof(http3_protocol_options, number: 3, group: "protocol_config")
+						=> root::envoy::config::core::v3::Http3ProtocolOptions;
+					};
+
+					def(HttpProtocolOptions_OutlierDetection) => message {
+						field(error_matcher, number: 1)
+						=> root::envoy::config::common::matcher::v3::MatchPredicate;
+					};
+
+					def(HttpProtocolOptions_UseDownstreamHttpConfig) => message {
+						field(http_protocol_options, number: 1)
+						=> root::envoy::config::core::v3::Http1ProtocolOptions;
+
+						field(http2_protocol_options, number: 2)
+						=> root::envoy::config::core::v3::Http2ProtocolOptions;
+
+						field(http3_protocol_options, number: 3)
+						=> root::envoy::config::core::v3::Http3ProtocolOptions;
+					};
+				};
+			};
+		};
+	};
+
+	namespace(type) {
+		namespace(matcher) {
+			namespace(v3) {
+				def(DoubleMatcher) => message {
+					oneof(range, number: 1, group: "match_pattern")
+					=> root::envoy::type::v3::DoubleRange;
+
+					oneof(exact, number: 2, group: "match_pattern") => root::double;
+				};
+
+				def(ListMatcher) => message {
+					oneof(one_of, number: 1, group: "match_pattern")
+					=> root::envoy::type::matcher::v3::ValueMatcher;
+				};
+
+				def(ListStringMatcher) => message {
+					repeated(patterns, number: 1) => root::envoy::type::matcher::v3::StringMatcher;
+				};
+
+				def(MetadataMatcher) => message {
+					field(filter, number: 1) => root::string;
+
+					repeated(path, number: 2)
+					=> root::envoy::type::matcher::v3::MetadataMatcher_PathSegment;
+
+					field(value, number: 3) => root::envoy::type::matcher::v3::ValueMatcher;
+
+					field(invert, number: 4) => root::bool;
+				};
+
+				def(MetadataMatcher_PathSegment) => message {
+					oneof(key, number: 1, group: "segment") => root::string;
+				};
+
+				def(OrMatcher) => message {
+					repeated(value_matchers, number: 1) => root::envoy::type::matcher::v3::ValueMatcher;
+				};
+
+				def(RegexMatchAndSubstitute) => message {
+					field(pattern, number: 1) => root::envoy::type::matcher::v3::RegexMatcher;
+
+					field(substitution, number: 2) => root::string;
+				};
+
+				def(RegexMatcher) => message {
+					oneof(google_re2, number: 1, group: "engine_type")
+					=> root::envoy::type::matcher::v3::RegexMatcher_GoogleRE2;
+
+					field(regex, number: 2) => root::string;
+				};
+
+				def(RegexMatcher_GoogleRE2) => message {
+					field(max_program_size, number: 1) => root::google::protobuf::UInt32Value;
+				};
+
+				def(StringMatcher) => message {
+					oneof(exact, number: 1, group: "match_pattern") => root::string;
+
+					oneof(prefix, number: 2, group: "match_pattern") => root::string;
+
+					oneof(suffix, number: 3, group: "match_pattern") => root::string;
+
+					oneof(safe_regex, number: 5, group: "match_pattern")
+					=> root::envoy::type::matcher::v3::RegexMatcher;
+
+					oneof(contains, number: 7, group: "match_pattern") => root::string;
+
+					oneof(custom, number: 8, group: "match_pattern")
+					=> root::xds::core::v3::TypedExtensionConfig;
+
+					field(ignore_case, number: 6) => root::bool;
+				};
+
+				def(ValueMatcher) => message {
+					oneof(null_match, number: 1, group: "match_pattern")
+					=> root::envoy::type::matcher::v3::ValueMatcher_NullMatch;
+
+					oneof(double_match, number: 2, group: "match_pattern")
+					=> root::envoy::type::matcher::v3::DoubleMatcher;
+
+					oneof(string_match, number: 3, group: "match_pattern")
+					=> root::envoy::type::matcher::v3::StringMatcher;
+
+					oneof(bool_match, number: 4, group: "match_pattern") => root::bool;
+
+					oneof(present_match, number: 5, group: "match_pattern") => root::bool;
+
+					oneof(list_match, number: 6, group: "match_pattern")
+					=> root::envoy::type::matcher::v3::ListMatcher;
+
+					oneof(or_match, number: 7, group: "match_pattern")
+					=> root::envoy::type::matcher::v3::OrMatcher;
+				};
+
+				def(ValueMatcher_NullMatch) => message;
+			};
+		};
+
+		namespace(metadata) {
+			namespace(v3) {
+				def(MetadataKey) => message {
+					field(key, number: 1) => root::string;
+
+					repeated(path, number: 2)
+					=> root::envoy::type::metadata::v3::MetadataKey_PathSegment;
+				};
+
+				def(MetadataKey_PathSegment) => message {
+					oneof(key, number: 1, group: "segment") => root::string;
+
+					oneof(index, number: 2, group: "segment") => root::uint32;
+				};
+			};
+		};
+
+		namespace(v3) {
+			def(CodecClientType) => enum(Tag: root::int32) {
+				value(HTTP1, number: 0);
+
+				value(HTTP2, number: 1);
+
+				value(HTTP3, number: 2);
+			};
+
+			def(DoubleRange) => message {
+				field(start, number: 1) => root::double;
+
+				field(end, number: 2) => root::double;
+			};
+
+			def(FractionalPercent) => message {
+				field(numerator, number: 1) => root::uint32;
+
+				field(denominator, number: 2)
+				=> root::envoy::type::v3::FractionalPercent_DenominatorType;
+			};
+
+			def(FractionalPercent_DenominatorType) => enum(Tag: root::int32) {
+				value(HUNDRED, number: 0);
+
+				value(TEN_THOUSAND, number: 1);
+
+				value(MILLION, number: 2);
+			};
+
+			def(Int64Range) => message {
+				field(start, number: 1) => root::int64;
+
+				field(end, number: 2) => root::int64;
+			};
+
+			def(Percent) => message {
+				field(value, number: 1) => root::double;
+			};
+		};
+	};
+};
+
+namespace(google) {
+	namespace(protobuf) {
+		def(Any) => message {
+			field(type_url, number: 1) => root::string;
+
+			field(value, number: 2) => root::bytes;
+		};
+
+		def(BoolValue) => message {
+			field(value, number: 1) => root::bool;
+		};
+
+		def(DoubleValue) => message {
+			field(value, number: 1) => root::double;
+		};
+
+		def(Duration) => message {
+			field(seconds, number: 1) => root::int64;
+
+			field(nanos, number: 2) => root::int32;
+		};
+
+		def(Empty) => message;
+
+		def(ListValue) => message {
+			repeated(values, number: 1) => root::google::protobuf::Value;
+		};
+
+		def(NullValue) => enum(Tag: root::int32) {
+			value(NULL_VALUE, number: 0);
+		};
+
+		def(Struct) => message {
+			repeated(fields, number: 1) => root::google::protobuf::Struct_FieldsEntry;
+		};
+
+		def(Struct_FieldsEntry) => message {
+			field(key, number: 1) => root::string;
+
+			field(value, number: 2) => root::google::protobuf::Value;
+		};
+
+		def(UInt32Value) => message {
+			field(value, number: 1) => root::uint32;
+		};
+
+		def(UInt64Value) => message {
+			field(value, number: 1) => root::uint64;
+		};
+
+		def(Value) => message {
+			oneof(null_value, number: 1, group: "kind") => root::google::protobuf::NullValue;
+
+			oneof(number_value, number: 2, group: "kind") => root::double;
+
+			oneof(string_value, number: 3, group: "kind") => root::string;
+
+			oneof(bool_value, number: 4, group: "kind") => root::bool;
+
+			oneof(struct_value, number: 5, group: "kind") => root::google::protobuf::Struct;
+
+			oneof(list_value, number: 6, group: "kind") => root::google::protobuf::ListValue;
+		};
+	};
+};
+
+namespace(xds) {
+	namespace(core) {
+		namespace(v3) {
+			def(Authority) => message {
+				field(name, number: 1) => root::string;
+			};
+
+			def(CollectionEntry) => message {
+				oneof(locator, number: 1, group: "resource_specifier")
+				=> root::xds::core::v3::ResourceLocator;
+
+				oneof(inline_entry, number: 2, group: "resource_specifier")
+				=> root::xds::core::v3::CollectionEntry_InlineEntry;
+			};
+
+			def(CollectionEntry_InlineEntry) => message {
+				field(name, number: 1) => root::string;
+
+				field(version, number: 2) => root::string;
+
+				field(resource, number: 3) => root::google::protobuf::Any;
+			};
+
+			def(ContextParams) => message {
+				repeated(params, number: 1) => root::xds::core::v3::ContextParams_ParamsEntry;
+			};
+
+			def(ContextParams_ParamsEntry) => message {
+				field(key, number: 1) => root::string;
+
+				field(value, number: 2) => root::string;
+			};
+
+			def(ResourceLocator) => message {
+				field(scheme, number: 1) => root::xds::core::v3::ResourceLocator_Scheme;
+
+				field(id, number: 2) => root::string;
+
+				field(authority, number: 3) => root::string;
+
+				field(resource_type, number: 4) => root::string;
+
+				oneof(exact_context, number: 5, group: "context_param_specifier")
+				=> root::xds::core::v3::ContextParams;
+
+				repeated(directives, number: 6) => root::xds::core::v3::ResourceLocator_Directive;
+			};
+
+			def(ResourceLocator_Directive) => message {
+				oneof(alt, number: 1, group: "directive") => root::xds::core::v3::ResourceLocator;
+
+				oneof(entry, number: 2, group: "directive") => root::string;
+			};
+
+			def(ResourceLocator_Scheme) => enum(Tag: root::int32) {
+				value(XDSTP, number: 0);
+
+				value(HTTP, number: 1);
+
+				value(FILE, number: 2);
+			};
+
+			def(TypedExtensionConfig) => message {
+				field(name, number: 1) => root::string;
+
+				field(typed_config, number: 2) => root::google::protobuf::Any;
+			};
+		};
+	};
+
+	namespace(type) {
+		namespace(matcher) {
+			namespace(v3) {
+				def(Matcher) => message {
+					oneof(matcher_list, number: 1, group: "matcher_type")
+					=> root::xds::type::matcher::v3::Matcher_MatcherList;
+
+					oneof(matcher_tree, number: 2, group: "matcher_type")
+					=> root::xds::type::matcher::v3::Matcher_MatcherTree;
+
+					field(on_no_match, number: 3) => root::xds::type::matcher::v3::Matcher_OnMatch;
+				};
+
+				def(Matcher_MatcherList) => message {
+					repeated(matchers, number: 1)
+					=> root::xds::type::matcher::v3::Matcher_MatcherList_FieldMatcher;
+				};
+
+				def(Matcher_MatcherList_FieldMatcher) => message {
+					field(predicate, number: 1)
+					=> root::xds::type::matcher::v3::Matcher_MatcherList_Predicate;
+
+					field(on_match, number: 2) => root::xds::type::matcher::v3::Matcher_OnMatch;
+				};
+
+				def(Matcher_MatcherList_Predicate) => message {
+					oneof(single_predicate, number: 1, group: "match_type")
+					=> root::xds::type::matcher::v3::Matcher_MatcherList_Predicate_SinglePredicate;
+
+					oneof(or_matcher, number: 2, group: "match_type")
+					=> root::xds::type::matcher::v3::Matcher_MatcherList_Predicate_PredicateList;
+
+					oneof(and_matcher, number: 3, group: "match_type")
+					=> root::xds::type::matcher::v3::Matcher_MatcherList_Predicate_PredicateList;
+
+					oneof(not_matcher, number: 4, group: "match_type")
+					=> root::xds::type::matcher::v3::Matcher_MatcherList_Predicate;
+				};
+
+				def(Matcher_MatcherList_Predicate_PredicateList) => message {
+					repeated(predicate, number: 1)
+					=> root::xds::type::matcher::v3::Matcher_MatcherList_Predicate;
+				};
+
+				def(Matcher_MatcherList_Predicate_SinglePredicate) => message {
+					field(input, number: 1) => root::xds::core::v3::TypedExtensionConfig;
+
+					oneof(value_match, number: 2, group: "matcher")
+					=> root::xds::type::matcher::v3::StringMatcher;
+
+					oneof(custom_match, number: 3, group: "matcher")
+					=> root::xds::core::v3::TypedExtensionConfig;
+				};
+
+				def(Matcher_MatcherTree) => message {
+					field(input, number: 1) => root::xds::core::v3::TypedExtensionConfig;
+
+					oneof(exact_match_map, number: 2, group: "tree_type")
+					=> root::xds::type::matcher::v3::Matcher_MatcherTree_MatchMap;
+
+					oneof(prefix_match_map, number: 3, group: "tree_type")
+					=> root::xds::type::matcher::v3::Matcher_MatcherTree_MatchMap;
+
+					oneof(custom_match, number: 4, group: "tree_type")
+					=> root::xds::core::v3::TypedExtensionConfig;
+				};
+
+				def(Matcher_MatcherTree_MatchMap) => message {
+					repeated(map, number: 1)
+					=> root::xds::type::matcher::v3::Matcher_MatcherTree_MatchMap_MapEntry;
+				};
+
+				def(Matcher_MatcherTree_MatchMap_MapEntry) => message {
+					field(key, number: 1) => root::string;
+
+					field(value, number: 2) => root::xds::type::matcher::v3::Matcher_OnMatch;
+				};
+
+				def(Matcher_OnMatch) => message {
+					oneof(matcher, number: 1, group: "on_match")
+					=> root::xds::type::matcher::v3::Matcher;
+
+					oneof(action, number: 2, group: "on_match")
+					=> root::xds::core::v3::TypedExtensionConfig;
+
+					field(keep_matching, number: 3) => root::bool;
+				};
+
+				def(RegexMatcher) => message {
+					oneof(google_re2, number: 1, group: "engine_type")
+					=> root::xds::type::matcher::v3::RegexMatcher_GoogleRE2;
+
+					field(regex, number: 2) => root::string;
+				};
+
+				def(RegexMatcher_GoogleRE2) => message;
+
+				def(StringMatcher) => message {
+					oneof(exact, number: 1, group: "match_pattern") => root::string;
+
+					oneof(prefix, number: 2, group: "match_pattern") => root::string;
+
+					oneof(suffix, number: 3, group: "match_pattern") => root::string;
+
+					oneof(safe_regex, number: 5, group: "match_pattern")
+					=> root::xds::type::matcher::v3::RegexMatcher;
+
+					oneof(contains, number: 7, group: "match_pattern") => root::string;
+
+					oneof(custom, number: 8, group: "match_pattern")
+					=> root::xds::core::v3::TypedExtensionConfig;
+
+					field(ignore_case, number: 6) => root::bool;
+				};
+			};
+		};
+	};
+};

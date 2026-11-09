@@ -134,6 +134,7 @@ impl Visitor for Apply<'_> {
 			body,
 			const_args,
 			is_void: false,
+			scalar: None,
 		});
 		Ok(())
 	}

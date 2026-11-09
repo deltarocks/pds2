@@ -45,6 +45,7 @@ pub struct NativeType {
 	pub const_args: Vec<(Ident, crate::hir::Value)>,
 	// carries no data (the deduplicated canonical void)
 	pub is_void: bool,
+	pub scalar: Option<Ident>,
 }
 
 /// Where a union reads its discriminant from.

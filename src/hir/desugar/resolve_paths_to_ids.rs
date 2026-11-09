@@ -144,6 +144,7 @@ impl TypeKind {
 				body: _,
 				const_args: _,
 				is_void: _,
+				scalar: _,
 			}) => {
 				for (_, v) in specialization.iter_mut() {
 					v.resolve_paths_to_ids(paths)?;

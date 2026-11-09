@@ -23,4 +23,9 @@ tracing-subscriber = "0.3.23"
 trace = ["peg/trace"]
 
 [workspace]
-members = ["crates/minecraft-protocol"]
+members = [
+	"crates/minecraft-protocol",
+	"crates/minecraft-proxy",
+	"crates/nbt",
+	"crates/pds-runtime",
+]

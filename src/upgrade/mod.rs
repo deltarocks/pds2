@@ -5,6 +5,8 @@ use inflector::Inflector;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
+pub mod plan;
+
 enum ProtodefPathItem {
 	Down(Ident),
 	Arg(Ident),
@@ -66,6 +68,7 @@ pub struct NativeSig {
 	pub specializer: Option<String>,
 	/// the native carries no data (`is_void;`); all void types deduplicate to it
 	pub is_void: bool,
+	pub scalar: Option<String>,
 	pub default: NativeSigVariant,
 	pub variants: BTreeMap<String, NativeSigVariant>,
 }
@@ -75,7 +78,7 @@ pub struct NativeSig {
 /// pds references (explicit `../` counts).
 enum ScopeFrame {
 	/// a container with its field names
-	Container(BTreeSet<String>),
+	Container(BTreeSet<String>, BTreeSet<String>),
 	/// a native wrapper (option, array element, generic binding): consumes one
 	/// `../` level in pds scoping but holds no fields
 	Wrapper,
@@ -85,9 +88,52 @@ pub struct UpgradeCtx<'r> {
 	registry: &'r Registry,
 	natives: BTreeMap<String, NativeSig>,
 	scopes: Vec<ScopeFrame>,
+	type_scopes: Vec<Map<String, Value>>,
+}
+
+pub enum TagKind {
+	Mapper(Map<String, Value>),
+	Scalar,
+	Bool,
+	OptionScalar,
 }
 
 impl UpgradeCtx<'_> {
+	fn named_type(&self, name: &str) -> Option<&Value> {
+		self.type_scopes
+			.iter()
+			.rev()
+			.find_map(|types| types.get(name))
+	}
+	pub fn classify_tag(&self, t: &Value) -> Option<TagKind> {
+		self.classify_tag_at(t, 0)
+	}
+	fn classify_tag_at(&self, t: &Value, depth: usize) -> Option<TagKind> {
+		if depth > 16 {
+			return None;
+		}
+		match t {
+			Value::String(name) => match self.named_type(name)? {
+				Value::String(s) if s == "native" => {
+					if name == "bool" {
+						return Some(TagKind::Bool);
+					}
+					let sig = self.registry.upgrade.get(name.as_str())?.sig();
+					sig.scalar.is_some().then_some(TagKind::Scalar)
+				}
+				def => self.classify_tag_at(&def.clone(), depth + 1),
+			},
+			Value::Array(_) => match plan::head(t)? {
+				"mapper" => plan::arg(t)?.as_object().cloned().map(TagKind::Mapper),
+				"option" => match self.classify_tag_at(plan::arg(t)?, depth + 1)? {
+					TagKind::Scalar => Some(TagKind::OptionScalar),
+					_ => None,
+				},
+				_ => None,
+			},
+			_ => None,
+		}
+	}
 	pub fn upgrade_type(&mut self, value: Value) -> Result<Vec<ast::Value>> {
 		upgrade_type(value, self)
 	}
@@ -109,12 +155,28 @@ impl UpgradeCtx<'_> {
 	pub fn in_container<T>(
 		&mut self,
 		fields: BTreeSet<String>,
+		switch_valued: BTreeSet<String>,
 		f: impl FnOnce(&mut Self) -> Result<T>,
 	) -> Result<T> {
-		self.scopes.push(ScopeFrame::Container(fields));
+		self.scopes
+			.push(ScopeFrame::Container(fields, switch_valued));
 		let r = f(self);
 		self.scopes.pop();
 		r
+	}
+	fn switch_valued(&self, r: &str) -> bool {
+		let dots = r.matches("../").count();
+		let head = plan::ref_head(r);
+		self.scopes
+			.iter()
+			.rev()
+			.filter_map(|f| match f {
+				ScopeFrame::Container(fields, switches) => Some((fields, switches)),
+				ScopeFrame::Wrapper => None,
+			})
+			.skip(dots)
+			.find(|(fields, _)| fields.contains(head))
+			.is_some_and(|(_, switches)| switches.contains(head))
 	}
 	/// Convert a protodef reference to a pds one. Protodef resolves bare names by
 	/// searching enclosing containers lexically (`../` skips one container); pds
@@ -133,7 +195,7 @@ impl UpgradeCtx<'_> {
 		for frame in self.scopes.iter().rev() {
 			match frame {
 				ScopeFrame::Wrapper => up += 1,
-				ScopeFrame::Container(fields) => {
+				ScopeFrame::Container(fields, _) => {
 					if skipped < dots {
 						skipped += 1;
 						up += 1;
@@ -231,11 +293,24 @@ fn sanitize_ident(key: &str) -> String {
 	out
 }
 
-/// `match:` value for a variant — a number when the key is numeric, a bare
+// https://github.com/ProtoDef-io/node-protodef/blob/master/src/datatypes/compiler-conditional.js#L14
+fn key_int(key: &str) -> Option<i128> {
+	if let Ok(n) = key.parse::<i128>() {
+		return Some(n);
+	}
+	let (neg, rest) = match key.strip_prefix('-') {
+		Some(r) => (true, r),
+		None => (false, key),
+	};
+	let n = i128::from_str_radix(rest.strip_prefix("0x")?, 16).ok()?;
+	Some(if neg { -n } else { n })
+}
+
+/// `match:` value for a variant -- a number when the key is numeric, a bare
 /// `true`/`false` item when the key is a boolean literal (so HIR maps it to
 /// `Value::Bool` rather than a string discriminator), otherwise a discriminator string.
 fn match_value(key: &str) -> ast::Value {
-	if let Ok(n) = key.parse::<i128>() {
+	if let Some(n) = key_int(key) {
 		ast::Value::Int(n)
 	} else if key == "true" || key == "false" {
 		ast::Value::new_simple_item(key)
@@ -244,39 +319,78 @@ fn match_value(key: &str) -> ast::Value {
 	}
 }
 
-/// protodef `switch`/`mapper` -> pds `union`.
-fn upgrade_switch(obj: &Map<String, Value>, ctx: &mut UpgradeCtx) -> Result<Vec<ast::Value>> {
-	let compare_to = obj
-		.get("compareTo")
-		.and_then(Value::as_str)
-		.ok_or_else(|| anyhow!("switch missing compareTo"))?;
+fn switch_fields(obj: &Map<String, Value>) -> Result<&Map<String, Value>> {
 	let fields = obj
 		.get("fields")
 		.and_then(Value::as_object)
 		.ok_or_else(|| anyhow!("switch missing fields"))?;
+	if let Some(key) = fields.keys().find(|k| k.starts_with('/')) {
+		bail!("switch key {key:?} compares against a root context variable, which pds has no equivalent for");
+	}
+	Ok(fields)
+}
+
+fn bool_exhaustive(fields: &Map<String, Value>) -> bool {
+	fields.contains_key("true") && fields.contains_key("false")
+}
+
+fn variant_stmt(name: &str, key: ast::Value, payload: Option<Vec<ast::Value>>) -> Statement {
+	let variant = Item::simple_builder("variant").argsb(
+		ItemArgs::builder()
+			.arg(ast::Value::new_simple_item(sanitize_ident(name).as_str()))
+			.named("match", key),
+	);
+	simple_stmt(match payload {
+		Some(ty) => variant.then(ty),
+		None => variant.build_values(),
+	})
+}
+
+// https://github.com/ProtoDef-io/node-protodef/blob/master/src/datatypes/compiler-conditional.js#L17
+fn default_stmt(
+	obj: &Map<String, Value>,
+	exhaustive: bool,
+	ctx: &mut UpgradeCtx,
+) -> Result<Option<Statement>> {
+	Ok(match obj.get("default") {
+		Some(default) => {
+			let ty = ctx
+				.wrapped(|ctx| ctx.upgrade_type(default.clone()))
+				.context("union default value")?;
+			Some(simple_stmt(Item::simple_builder("default").then(ty)))
+		}
+		None if exhaustive => None,
+		None => Some(simple_stmt(Item::simple_builder("default").build_values())),
+	})
+}
+
+fn upgrade_arm(ty: &Value, ctx: &mut UpgradeCtx) -> Result<Vec<ast::Value>> {
+	ctx.wrapped(|ctx| ctx.upgrade_type(ty.clone()))
+		.context("union variant value")
+}
+
+/// protodef `switch`/`mapper` -> pds `union`.
+pub fn upgrade_switch(obj: &Map<String, Value>, ctx: &mut UpgradeCtx) -> Result<Vec<ast::Value>> {
+	let compare_to = obj
+		.get("compareTo")
+		.and_then(Value::as_str)
+		.ok_or_else(|| anyhow!("switch missing compareTo (compareToValue is not supported)"))?;
+	ensure!(
+		!ctx.switch_valued(compare_to),
+		"switch compares {compare_to:?}, the value of another switch; protodef compares that \
+		 payload, a pds union tag would compare its discriminant"
+	);
+	let fields = switch_fields(obj)?;
 
 	let mut statements = Vec::new();
 	for (key, ty) in fields {
-		// arm values live at the union's enclosing scope: no new frame
-		let ty = ctx
-			.upgrade_type(ty.clone())
-			.context("union variant value")?;
-		statements.push(simple_stmt(
-			Item::simple_builder("variant")
-				.argsb(
-					ItemArgs::builder()
-						.arg(ast::Value::new_simple_item(sanitize_ident(key).as_str()))
-						.named("match", match_value(key)),
-				)
-				.then(ty),
+		statements.push(variant_stmt(
+			key,
+			match_value(key),
+			Some(upgrade_arm(ty, ctx)?),
 		));
 	}
-	if let Some(default) = obj.get("default") {
-		let ty = ctx
-			.upgrade_type(default.clone())
-			.context("union default value")?;
-		statements.push(simple_stmt(Item::simple_builder("default").then(ty)));
-	}
+	statements.extend(default_stmt(obj, bool_exhaustive(fields), ctx)?);
 
 	Ok(Item::simple_builder("union")
 		.argsb(ItemArgs::builder().named("tag", ast::Value::FieldRef(ctx.reference(compare_to)?)))
@@ -313,6 +427,7 @@ fn upgrade_mapper(obj: &Map<String, Value>, ctx: &mut UpgradeCtx) -> Result<Vec<
 				.build_values(),
 		));
 	}
+	statements.push(simple_stmt(Item::simple_builder("default").build_values()));
 
 	Ok(Item::simple_builder("union")
 		.argsb(ItemArgs::builder().named("tagType", upgrade_type_single(ty, ctx)?))
@@ -341,41 +456,46 @@ pub fn merge_mapper_switch(
 		.get("mappings")
 		.and_then(Value::as_object)
 		.ok_or_else(|| anyhow!("mapper missing mappings"))?;
-	let fields = switch
-		.get("fields")
-		.and_then(Value::as_object)
-		.ok_or_else(|| anyhow!("switch missing fields"))?;
+	let fields = switch_fields(switch)?;
 	let tag_ty = upgrade_type_single(tag_ty, ctx)?;
 
 	let mut statements = Vec::new();
+	let mut names = BTreeSet::new();
+	let mut values = BTreeSet::new();
 	for (val, name) in mappings {
 		let name = name
 			.as_str()
 			.ok_or_else(|| anyhow!("mapper mapping value should be string"))?;
+		let value = key_int(val).ok_or_else(|| anyhow!("mapper key {val:?} is not a number"))?;
+		values.insert(value);
+		let mut variant = sanitize_ident(name);
+		while !names.insert(variant.clone()) {
+			variant.push('_');
+		}
 		// payload from the switch, or a void arm when the switch maps this tag to nothing
-		let payload = match fields.get(name) {
-			Some(p) => Some(
-				ctx.upgrade_type(p.clone())
-					.context("merged union variant value")?,
-			),
+		let payload = match fields.get(name).or_else(|| switch.get("default")) {
+			Some(p) => Some(upgrade_arm(p, ctx)?),
 			None => None,
 		};
-		let variant = Item::simple_builder("variant").argsb(
-			ItemArgs::builder()
-				.arg(ast::Value::new_simple_item(sanitize_ident(name).as_str()))
-				.named("match", match_value(val)),
-		);
-		statements.push(simple_stmt(match payload {
-			Some(ty) => variant.then(ty),
-			None => variant.build_values(),
-		}));
+		statements.push(variant_stmt(&variant, ast::Value::Int(value), payload));
 	}
-	if let Some(default) = switch.get("default") {
-		let ty = ctx
-			.upgrade_type(default.clone())
-			.context("merged union default value")?;
-		statements.push(simple_stmt(Item::simple_builder("default").then(ty)));
+	for (key, payload) in fields {
+		let Some(value) = key_int(key) else {
+			continue;
+		};
+		if values.insert(value) {
+			let mut variant = sanitize_ident(key);
+			while !names.insert(variant.clone()) {
+				variant.push('_');
+			}
+			statements.push(variant_stmt(
+				&variant,
+				ast::Value::Int(value),
+				Some(upgrade_arm(payload, ctx)?),
+			));
+		}
 	}
+	statements.extend(default_stmt(switch, false, ctx)?);
 
 	Ok(Item::simple_builder("union")
 		.argsb(ItemArgs::builder().named("tagType", tag_ty))
@@ -385,6 +505,48 @@ pub fn merge_mapper_switch(
 			root: false,
 		})
 		.build_values())
+}
+
+pub fn merge_scalar_switch(
+	tag: &Value,
+	switch: &Map<String, Value>,
+	ctx: &mut UpgradeCtx,
+) -> Result<Vec<ast::Value>> {
+	let fields = switch_fields(switch)?;
+	let tag_ty = upgrade_type_single(tag, ctx)?;
+	let mut statements = Vec::new();
+	for (key, ty) in fields {
+		statements.push(variant_stmt(
+			key,
+			match_value(key),
+			Some(upgrade_arm(ty, ctx)?),
+		));
+	}
+	statements.extend(default_stmt(switch, bool_exhaustive(fields), ctx)?);
+	Ok(Item::simple_builder("union")
+		.argsb(ItemArgs::builder().named("tagType", tag_ty))
+		.block(Block {
+			attributes: Default::default(),
+			statements,
+			root: false,
+		})
+		.build_values())
+}
+
+pub fn keys_fit(kind: &TagKind, switch: &Map<String, Value>) -> bool {
+	let Some(fields) = switch.get("fields").and_then(Value::as_object) else {
+		return false;
+	};
+	fields.keys().all(|k| match kind {
+		TagKind::Scalar | TagKind::OptionScalar => key_int(k).is_some(),
+		TagKind::Bool => k == "true" || k == "false",
+		TagKind::Mapper(m) => {
+			key_int(k).is_some()
+				|| m.get("mappings")
+					.and_then(Value::as_object)
+					.is_some_and(|ms| ms.values().any(|v| v.as_str() == Some(k)))
+		}
+	})
 }
 
 pub fn upgrade_type_generic(
@@ -539,8 +701,20 @@ fn native_block(sig: &NativeSig) -> Block {
 }
 
 fn upgrade_namespace(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::Block> {
-	let mut statements = Vec::new();
 	ensure!(value.is_object(), "namespace should be object");
+	let types = value
+		.get("types")
+		.and_then(Value::as_object)
+		.cloned()
+		.unwrap_or_default();
+	ctx.type_scopes.push(types);
+	let block = upgrade_namespace_inner(value, ctx);
+	ctx.type_scopes.pop();
+	block
+}
+
+fn upgrade_namespace_inner(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::Block> {
+	let mut statements = Vec::new();
 	if let Some(types) = value.get("types") {
 		for (k, v) in types.as_object().unwrap() {
 			if v == "native" {
@@ -565,6 +739,12 @@ fn upgrade_namespace(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::Block> 
 					attributes.insert(
 						Ident::new("specializer"),
 						vec![ast::Value::new_simple_item(spec.as_str())],
+					);
+				}
+				if let Some(scalar) = &sig.scalar {
+					attributes.insert(
+						Ident::new("scalar"),
+						vec![ast::Value::new_simple_item(scalar.as_str())],
 					);
 				}
 				statements.push(Statement {
@@ -603,9 +783,149 @@ pub fn upgrade(value: Value, registry: &Registry) -> Result<ast::Block> {
 		registry,
 		natives: BTreeMap::new(),
 		scopes: Vec::new(),
+		type_scopes: Vec::new(),
 	};
 
 	let mut block = upgrade_namespace(&value, &mut ctx)?;
 	block.root = true;
 	Ok(block)
+}
+
+#[cfg(test)]
+mod tests {
+	use serde_json::{json, Value};
+
+	use crate::specializer::{register_protodef_types, Registry};
+
+	fn upgrade(types: Value) -> anyhow::Result<String> {
+		let mut reg = Registry::default();
+		register_protodef_types(&mut reg);
+		let mut all = json!({
+			"varint": "native", "u8": "native", "i8": "native", "bool": "native",
+			"void": "native", "container": "native", "switch": "native",
+			"mapper": "native", "option": "native", "array": "native"
+		});
+		all.as_object_mut()
+			.unwrap()
+			.extend(types.as_object().unwrap().clone());
+		let block = super::upgrade(json!({ "types": all }), &reg)?;
+		let out = crate::ast::format(&block);
+		crate::ast::parse(&out).map_err(|e| anyhow::anyhow!("{e}"))?;
+		Ok(squash(&out))
+	}
+
+	fn squash(s: &str) -> String {
+		s.split_whitespace().collect::<Vec<_>>().join(" ")
+	}
+
+	fn assert_has(out: &str, expected: &str) {
+		assert!(out.contains(&squash(expected)), "{expected}\nnot in\n{out}");
+	}
+
+	#[test]
+	fn adjacent_scalar_tag_becomes_inline_union() {
+		let out = upgrade(json!({ "p": ["container", [
+			{ "name": "id", "type": "varint" },
+			{ "name": "data", "type": ["switch", { "compareTo": "id", "fields": { "0": "u8" } }] }
+		]] }))
+		.unwrap();
+		assert_has(
+			&out,
+			"def(p) => union(tagType: varint) { variant(v0, match: 0) => u8; default; };",
+		);
+	}
+
+	#[test]
+	fn exhaustive_bool_switch_has_no_default() {
+		let out = upgrade(json!({ "p": ["container", [
+			{ "name": "has", "type": "bool" },
+			{ "name": "v", "type": ["switch", { "compareTo": "has", "fields": { "true": "u8", "false": "void" } }] }
+		]] }))
+		.unwrap();
+		assert_has(&out, "def(p) => union(tagType: bool) { variant(false, match: false) => void; variant(true, match: true) => u8; };");
+	}
+
+	#[test]
+	fn switch_on_switch_value_is_rejected() {
+		let err = upgrade(json!({ "p": ["container", [
+			{ "name": "a", "type": "u8" },
+			{ "name": "b", "type": ["switch", { "compareTo": "a", "fields": { "1": "varint" } }] },
+			{ "name": "x", "type": "u8" },
+			{ "name": "c", "type": ["switch", { "compareTo": "b", "fields": { "2": "u8" } }] }
+		]] }))
+		.unwrap_err();
+		assert!(
+			format!("{err:#}").contains("the value of another switch"),
+			"{err:#}"
+		);
+	}
+
+	#[test]
+	fn sibling_switches_on_one_tag_become_one_union() {
+		let out = upgrade(json!({ "p": ["container", [
+			{ "name": "m", "type": "varint" },
+			{ "name": "x", "type": ["switch", { "compareTo": "m", "fields": { "2": "u8" } }] },
+			{ "name": "y", "type": ["switch", { "compareTo": "m", "fields": { "0": "varint", "2": "u8" } }] }
+		]] }))
+		.unwrap();
+		assert_has(&out, "def(p) => union(tagType: varint) { variant(v0, match: 0) => varint; variant(v2, match: 2) => container { field(x) => u8; field(y) => u8; }; default; };");
+	}
+
+	#[test]
+	fn switch_in_default_on_same_tag_is_fused() {
+		let out = upgrade(json!({ "p": ["container", [
+			{ "name": "t", "type": "varint" },
+			{ "name": "d", "type": ["switch", {
+				"compareTo": "t",
+				"fields": { "0": "void" },
+				"default": ["container", [{ "name": "payload", "type": ["option", ["switch", { "compareTo": "t", "fields": { "1": "u8" } }]] }]]
+			}] }
+		]] }))
+		.unwrap();
+		assert_has(&out, "variant(v1, match: 1) => option => u8;");
+		assert_has(&out, "default => option => void;");
+	}
+
+	#[test]
+	fn anonymous_containers_are_flattened() {
+		let out = upgrade(json!({ "p": ["container", [
+			{ "name": "a", "type": "varint" },
+			{ "anon": true, "type": ["container", [
+				{ "name": "b", "type": ["switch", { "compareTo": "a", "fields": { "1": "u8" } }] }
+			]] }
+		]] }))
+		.unwrap();
+		assert_has(
+			&out,
+			"def(p) => union(tagType: varint) { variant(v1, match: 1) => u8; default; };",
+		);
+	}
+
+	#[test]
+	fn hex_and_negative_keys_are_numbers() {
+		let out = upgrade(json!({
+			"e": ["mapper", { "type": "varint", "mappings": { "0x0a": "ten" } }],
+			"p": ["container", [
+				{ "name": "t", "type": "i8" },
+				{ "name": "v", "type": ["switch", { "compareTo": "t", "fields": { "-1": "u8" } }] }
+			]]
+		}))
+		.unwrap();
+		assert_has(&out, "variant(ten, match: 10); default;");
+		assert_has(&out, "variant(_1, match: -1) => u8;");
+	}
+
+	#[test]
+	fn union_arms_are_a_scope_level() {
+		let out = upgrade(json!({ "p": ["container", [
+			{ "name": "len", "type": "varint" },
+			{ "name": "k", "type": "u8" },
+			{ "name": "v", "type": ["switch", { "compareTo": "k", "fields": { "1": ["array", { "count": "len", "type": "u8" }] } }] }
+		]] }))
+		.unwrap();
+		assert_has(
+			&out,
+			"variant(v1, match: 1) => array(count: ../../len) => u8;",
+		);
+	}
 }

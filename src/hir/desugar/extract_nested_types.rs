@@ -76,14 +76,7 @@ impl Visitor for TypeReceiver {
 				return Ok(());
 			}
 		}
-		let mut collector = ReferenceCollector {
-			// A union is transparent: refs in its arms (tag args, arm-reference
-			// arguments) are scoped to the *enclosing* container even at up=0, so
-			// extracting the union must rewire them into params too. A container
-			// owns its up=0 refs (they point at its own fields).
-			include_local: matches!(ty, TypeKind::Union(_)),
-			..ReferenceCollector::default()
-		};
+		let mut collector = ReferenceCollector::default();
 		ty.traverse(&mut collector, TraverseSkip::empty(), reg)?;
 
 		let vty = mem::replace(ty, TypeKind::Void);
@@ -113,13 +106,10 @@ impl Visitor for TypeReceiver {
 struct ReferenceCollector {
 	args: Vec<(Ident, FieldRef)>,
 	params: Vec<Ident>,
-	/// rewire up=0 refs too (the extracted kind does not own its local scope, e.g. a
-	/// union whose arm refs are scoped to the enclosing container)
-	include_local: bool,
 }
 impl Visitor for ReferenceCollector {
 	fn visit_field_ref(&mut self, r: &mut FieldRef) -> Result<()> {
-		if r.up == 0 && !self.include_local {
+		if r.up == 0 {
 			return Ok(());
 		}
 		if matches!(r.path.0.first(), Some(FieldRefSegment::Arg(_))) {

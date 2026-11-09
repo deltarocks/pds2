@@ -11,19 +11,23 @@ use crate::hir::TypeId;
 use crate::mir::FieldOrConst;
 use crate::mir::{self, Field, Type, TypeKind, TypeMap, Value};
 
+use super::boxing::{self, Boxed};
+use super::common::{self, eq_target, sanitize, scalar_of, EqKind, TagRepr};
 use super::GeneratorOutput;
-use crate::specializer::{NativeCodegenCtx, Registry, RustNames};
+use crate::specializer::{Names, NativeCodegenCtx, Registry, Scalar};
 use anyhow::{Context as _, Result};
+use genco::lang::Rust;
 
 #[derive(Clone)]
 struct RustMeta<'a> {
 	raw_names: Rc<BTreeMap<TypeId, String>>,
 	types: &'a TypeMap,
 	reg: &'a Registry,
+	boxed: Rc<Boxed>,
 	inlining: Rc<RefCell<BTreeSet<TypeId>>>,
 }
 impl<'a> RustMeta<'a> {
-	fn new(source: &'a TypeMap, reg: &'a Registry) -> Self {
+	fn new(source: &'a TypeMap, reg: &'a Registry, boxed: Boxed) -> Self {
 		let mut raw_names = BTreeMap::new();
 		for (id, ty) in source.0.iter() {
 			raw_names.insert(*id, ty.name.readable_name());
@@ -32,6 +36,7 @@ impl<'a> RustMeta<'a> {
 			raw_names: Rc::new(raw_names),
 			types: source,
 			reg,
+			boxed: Rc::new(boxed),
 			inlining: Rc::default(),
 		}
 	}
@@ -40,11 +45,11 @@ impl<'a> RustMeta<'a> {
 			return None;
 		};
 		let (specializer, _) = native.specializer.as_ref()?;
-		let codegen = self.reg.codegen::<Tokens>(specializer.as_str())?;
+		let codegen = self.reg.codegen::<Rust>(specializer.as_str())?;
 		if !self.inlining.borrow_mut().insert(type_id) {
 			return None;
 		}
-		let ty = codegen.inline_ty(native, self);
+		let ty = codegen.inline_ty(type_id, native, self);
 		self.inlining.borrow_mut().remove(&type_id);
 		ty
 	}
@@ -94,18 +99,39 @@ impl<'a> RustMeta<'a> {
 	}
 }
 
-impl RustNames for RustMeta<'_> {
+impl Names<Rust> for RustMeta<'_> {
 	fn ty(&self, id: TypeId) -> Tokens {
 		RustMeta::ty(self, id)
 	}
-	fn serialize(&self, id: TypeId) -> Import {
-		RustMeta::serialize(self, id)
+	fn serialize(&self, id: TypeId) -> Tokens {
+		quote!($(RustMeta::serialize(self, id)))
 	}
-	fn deserialize(&self, id: TypeId) -> Import {
-		RustMeta::deserialize(self, id)
+	fn deserialize(&self, id: TypeId) -> Tokens {
+		quote!($(RustMeta::deserialize(self, id)))
 	}
-	fn size_of(&self, id: TypeId) -> Import {
-		RustMeta::size_of(self, id)
+	fn size_of(&self, id: TypeId) -> Tokens {
+		quote!($(RustMeta::size_of(self, id)))
+	}
+	fn boxed(&self, owner: TypeId, slot: &Ident) -> bool {
+		self.boxed.contains(&(owner, slot.clone()))
+	}
+	fn slot_ty(&self, owner: TypeId, slot: &Ident, target: TypeId) -> Tokens {
+		let ty = RustMeta::ty(self, target);
+		if Names::boxed(self, owner, slot) {
+			quote!(Box<$ty>)
+		} else {
+			ty
+		}
+	}
+	fn slot_new(&self, owner: TypeId, slot: &Ident, value: Tokens) -> Tokens {
+		if Names::boxed(self, owner, slot) {
+			quote!(Box::new($value))
+		} else {
+			value
+		}
+	}
+	fn scalar(&self, id: TypeId) -> Option<Scalar> {
+		scalar_of(self.types, id)
 	}
 }
 
@@ -126,166 +152,6 @@ fn rname(i: &Ident) -> Tokens {
 	}
 }
 
-/// Sanitize an arbitrary string (`minecraft:foo`) into an identifier, mirroring the
-/// upgrade-side variant naming.
-fn sanitize(key: &str) -> String {
-	let mut out: String = key
-		.chars()
-		.map(|c| {
-			if c.is_ascii_alphanumeric() || c == '_' {
-				c
-			} else {
-				'_'
-			}
-		})
-		.collect();
-	if out.is_empty() {
-		out.push('_');
-	}
-	if out
-		.chars()
-		.next()
-		.map(|c| c.is_ascii_digit())
-		.unwrap_or(false)
-	{
-		out.insert(0, 'v');
-	}
-	out
-}
-
-/// How a tag type's generated `is_equal_{b}(a: &Ty, b: &b::Ty)` compares an arm
-/// value against the runtime tag. The function lives on the *tag* type's module
-/// so the union codegen stays closed over the set of tag kinds.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum EqKind {
-	/// `a == b` — tag and arm value share the type (requires `PartialEq`); used by
-	/// scalar leaves (int/bool), strings, and value-less tag enums.
-	SelfEq,
-	/// `&virtual_tag(a) == b` — a union tag matched by its wire scalar.
-	VirtualTag,
-	/// `a.as_deref() == Some(b)` — an `option` tag matched by its inner value.
-	OptionInner,
-	/// `a == b` against a bool literal; emitted as `is_equal_bool(a: &Ty, b: &bool)`,
-	/// named by value kind rather than tag type id so the codegen carries no
-	/// bool-special-case lookup.
-	Bool,
-}
-
-/// The inner value type of an `option` native, if `id` is one.
-fn option_inner(input: &TypeMap, id: TypeId) -> Option<TypeId> {
-	if let TypeKind::Native(nt) = &input[id].kind {
-		if matches!(&nt.specializer, Some((s, _)) if s.as_str() == "option") {
-			return nt
-				.specialization
-				.iter()
-				.find(|(n, _)| n.as_str() == "Value")
-				.map(|(_, t)| t.target);
-		}
-	}
-	None
-}
-
-/// Follow `delegate_all` wrappers down to the type that actually distinguishes a
-/// union's arms (mapper unions sit inside a virtual wrapper struct).
-fn resolve_tag_inner(input: &TypeMap, tag_type: TypeId) -> TypeId {
-	let mut t = tag_type;
-	while let TypeKind::Container {
-		fields,
-		delegate_all: Some(d),
-		..
-	} = &input[t].kind
-	{
-		t = fields
-			.iter()
-			.find(|f| &f.name == d)
-			.expect("delegate target exists")
-			.ty
-			.target;
-	}
-	t
-}
-
-/// The `(b type id, comparison kind)` an arm `value` needs from `tag_inner`'s
-/// module, or `None` when the value can never match this tag type (the arm is
-/// dead) — the union codegen falls back to a discriminant check or a literal
-/// `false` in that case.
-fn eq_target(input: &TypeMap, tag_inner: TypeId, value: &Value) -> Option<(TypeId, EqKind)> {
-	let kind = &input[tag_inner].kind;
-	match value {
-		Value::Signed(_) | Value::Unsigned(_) => {
-			if let TypeKind::Union { tag_type, .. } = kind {
-				Some((*tag_type, EqKind::VirtualTag))
-			} else if let Some(inner) = option_inner(input, tag_inner) {
-				Some((inner, EqKind::OptionInner))
-			} else {
-				Some((tag_inner, EqKind::SelfEq))
-			}
-		}
-		Value::Bool(_) => Some((tag_inner, EqKind::Bool)),
-		Value::String(_) => None,
-		Value::UnionDescriminator(id) => {
-			if let TypeKind::Union { matches, .. } = kind {
-				// only a value-less arm can be compared by constructing the variant
-				let void = matches.iter().any(|(_, n, vt)| {
-					sanitize(n.as_str()) == sanitize(id.as_str()) && input.is_void(vt.target)
-				});
-				void.then_some((tag_inner, EqKind::SelfEq))
-			} else {
-				None
-			}
-		}
-	}
-}
-
-/// Types embedded *by value* in `id`'s generated representation (no heap
-/// indirection). Used to decide which union arms must be boxed to break a cycle.
-/// `array` (Vec), `option` (Option<Box>), `buffer`/`pstring` (leaves) do not embed
-/// their element by value, so their specialization types are not edges here.
-fn value_edges(types: &TypeMap, id: TypeId) -> Vec<TypeId> {
-	match &types[id].kind {
-		TypeKind::Container { fields, .. } => fields
-			.iter()
-			.filter(|f| f.load_from.is_none())
-			.map(|f| f.ty.target)
-			.collect(),
-		TypeKind::Union {
-			matches, default, ..
-		} => matches
-			.iter()
-			.map(|(_, _, t)| t.target)
-			.chain(default.iter().map(|(_, t)| t.target))
-			.collect(),
-		TypeKind::Alias(t) => vec![t.target],
-		// bitfield/bitflags/registryEntryHolder store their `fields` by value; native
-		// generics live behind Vec/Box/leaves and are not by-value edges.
-		TypeKind::Native(n) => n.fields.iter().map(|(_, t)| t.target).collect(),
-		TypeKind::Void => vec![],
-	}
-}
-
-/// Whether `target` is reachable from `from` purely via by-value containment. A union
-/// arm with payload `from` belonging to union `target` must be boxed exactly when this
-/// holds (the arm closes a value cycle), and need not be boxed otherwise.
-fn value_reaches(types: &TypeMap, from: TypeId, target: TypeId) -> bool {
-	fn go(
-		types: &TypeMap,
-		cur: TypeId,
-		target: TypeId,
-		seen: &mut std::collections::HashSet<TypeId>,
-	) -> bool {
-		if cur == target {
-			return true;
-		}
-		if !seen.insert(cur) {
-			return false;
-		}
-		value_edges(types, cur)
-			.into_iter()
-			.any(|n| go(types, n, target, seen))
-	}
-	go(types, from, target, &mut std::collections::HashSet::new())
-}
-
 fn generate_read_or_const_reference(
 	types: &RustMeta,
 	from_locals: bool,
@@ -297,7 +163,16 @@ fn generate_read_or_const_reference(
 		FieldOrConst::Const(mir::Value::Signed(n)) => {
 			return quote!(&($(n.to_string())).try_into().expect("constant fits"))
 		}
-		FieldOrConst::Const(_) => return quote!(Into::<$target>::into(todo!("const"))),
+		FieldOrConst::Const(mir::Value::Unsigned(n)) => {
+			return quote!(&($(n.to_string())).try_into().expect("constant fits"))
+		}
+		FieldOrConst::Const(mir::Value::Bool(b)) => return quote!(&$(b.to_string())),
+		FieldOrConst::Const(mir::Value::String(s)) => {
+			return quote!(&$(quoted(s.as_str())).to_owned())
+		}
+		FieldOrConst::Const(mir::Value::UnionDescriminator(id)) => {
+			unreachable!("union discriminator constant {id:?} as an argument")
+		}
 	};
 	generate_read_reference(types, from_locals, input, target)
 }
@@ -308,6 +183,10 @@ fn generate_read_reference(
 	target: Option<&Tokens>,
 ) -> Tokens {
 	let mut indexing = vec![];
+	let computed = input
+		.0
+		.iter()
+		.any(|f| matches!(f.segment, FieldRefSegment::Virtual(_)));
 	for (i, field) in input.0.iter().enumerate() {
 		indexing.push(match &field.segment {
 			FieldRefSegment::Arg(name) => {
@@ -326,16 +205,24 @@ fn generate_read_reference(
 				}
 			}
 			FieldRefSegment::Virtual(name) => {
-				quote!(let _0: &$(types.ty(field.to.get())) = &$(types.virt(field.from.get(), name.clone()))(_0);)
+				let local = format!("__v{i}");
+				quote! {
+					let $(&local): $(types.ty(field.to.get())) = $(types.virt(field.from.get(), name.clone()))(_0);
+					let _0 = &$(&local);
+				}
 			}
 		})
 	}
 	if let Some(target) = target {
 		indexing.push(quote!(Into::<$target>::into(*_0)));
+		quote!({$(for i in indexing => $i)})
+	} else if computed {
+		indexing.push(quote!(_0.clone()));
+		quote!(&{$(for i in indexing => $i)})
 	} else {
-		indexing.push(quote!(_0))
+		indexing.push(quote!(_0));
+		quote!({$(for i in indexing => $i)})
 	}
-	quote!({$(for i in indexing => $i)})
 }
 
 fn generate_args_passing(types: &RustMeta, input: &Type) -> Tokens {
@@ -353,52 +240,19 @@ fn generate_args_passing(types: &RustMeta, input: &Type) -> Tokens {
 }
 
 pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Registry) -> Result<()> {
-	let meta = RustMeta::new(input, reg);
+	let boxed = boxing::analyze(input, reg)?;
+	let meta = RustMeta::new(input, reg, boxed);
 
 	// Unions referenced as another union's discriminant must expose `virtual_tag`
 	// even when they are external-tagged (the referencing union calls it to compute
 	// the discriminant). Inline-tag unions always expose it (for their own serialize).
-	let mut unions_as_tag: std::collections::HashSet<TypeId> = std::collections::HashSet::new();
-	for def in input.0.values() {
-		if let TypeKind::Union { tag_type, .. } = &def.kind {
-			let mut inner = *tag_type;
-			while let TypeKind::Container {
-				fields,
-				delegate_all: Some(d),
-				..
-			} = &input[inner].kind
-			{
-				inner = fields
-					.iter()
-					.find(|f| &f.name == d)
-					.expect("delegate target exists")
-					.ty
-					.target;
-			}
-			if matches!(input[inner].kind, TypeKind::Union { .. }) {
-				unions_as_tag.insert(inner);
-			}
-		}
-	}
+	let unions_as_tag = common::unions_as_tag(input);
+	let tag_referenced = common::tag_referenced(input);
 
 	// For every union arm, record which `is_equal_{b}` helpers its tag type must
 	// expose. Each tag-capable module emits these from its own entry; the union
 	// codegen calls them instead of inlining tag-kind-specific comparisons.
-	let mut eq_impls: BTreeMap<TypeId, std::collections::BTreeSet<(TypeId, EqKind)>> =
-		BTreeMap::new();
-	for def in input.0.values() {
-			if let TypeKind::Union {
-			tag_type, matches, ..
-		} = &def.kind
-		{
-			let inner = resolve_tag_inner(input, *tag_type);
-			for (value, _, _) in matches {
-				if let Some(t) = eq_target(input, inner, value) {
-					eq_impls.entry(inner).or_default().insert(t);
-				}
-			}
-		}
-	}
+	let eq_impls = common::eq_impls(input);
 
 	let mut out_module = vec![];
 
@@ -436,7 +290,9 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 		};
 		// For a container field that is an external-tag union, a debug-build check that
 		// the union variant agrees with the tag field it is keyed on.
-		let assert_tag_call = |field: &mir::ContainerField| -> Tokens {
+		let assert_tag_call = |siblings: &[mir::ContainerField],
+		                       field: &mir::ContainerField|
+		 -> Tokens {
 			if field.load_from.is_some() {
 				return quote!();
 			}
@@ -463,11 +319,16 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 			// bitflags field passed down through an array) is not available in
 			// serialize, so skip the check there.
 			if let FieldOrConst::Field(f) = val {
-				if matches!(
-					f.0.first().map(|i| &i.segment),
-					Some(FieldRefSegment::Arg(_))
-				) {
-					return quote!();
+				match f.0.first().map(|i| &i.segment) {
+					Some(FieldRefSegment::Arg(_)) => return quote!(),
+					Some(FieldRefSegment::Down { to, .. })
+						if siblings
+							.iter()
+							.any(|s| &s.name == to && s.load_from.is_some()) =>
+					{
+						return quote!()
+					}
+					_ => {}
 				}
 			}
 			quote! {
@@ -482,10 +343,11 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 				TypeKind::Container { fields, .. } => {
 					quote! {
 						$args_struct
+						#[derive(Debug, Clone, PartialEq)]
 						pub struct Ty {
 							$(for field in fields.iter() join($['\r']) =>
 								$(if field.load_from.is_none() {
-									pub $(rname(&field.name)): $(meta.ty(field.ty.target)),
+									pub $(rname(&field.name)): $(meta.slot_ty(*id, &field.name, field.ty.target)),
 								} else {
 									$("// ") $(&field.name) $("- virtual field")
 								})
@@ -493,7 +355,7 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 						}
 						pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
 							$(for field in fields.iter() join($['\r']) =>
-								$(assert_tag_call(field))
+								$(assert_tag_call(fields, field))
 								$(meta.serialize(field.ty.target))(
 									$(if field.load_from.is_none() {
 										&_0.$(rname(&field.name))
@@ -520,7 +382,7 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 							)
 							Ok(Ty {
 								$(for field in fields.iter().filter(|f| f.load_from.is_none()) join(,) =>
-									$(rname(&field.name)): $(format!("f_{}", field.name.as_str()))
+									$(rname(&field.name)): $(meta.slot_new(*id, &field.name, quote!($(format!("f_{}", field.name.as_str())))))
 								)
 							})
 						}
@@ -601,14 +463,6 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 						tag_inner = f.ty.target;
 					}
 					let tag_access = &tag_access;
-					let tag_is_union = matches!(input[tag_inner].kind, TypeKind::Union { .. });
-					let tag_is_option = matches!(
-						&input[tag_inner].kind,
-						TypeKind::Native(mir::NativeType {
-							specializer: Some((s, _)),
-							..
-						}) if s.as_str() == "option"
-					);
 					// Arm match condition, routed through the tag type's `is_equal_{b}`.
 					let cond = |value: &Value| -> Tokens {
 						if let Some((b_id, eq_kind)) = eq_target(input, tag_inner, value) {
@@ -638,14 +492,23 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 					};
 					// the tag value an arm corresponds to, for virtual_tag
 					let tag_value = |value: &Value| -> Tokens {
-						match value {
-							Value::Signed(n) => quote!($(n.to_string())),
-							Value::Unsigned(n) => quote!($(n.to_string())),
-							Value::Bool(b) => quote!($(b.to_string())),
-							Value::String(s) => quote!($(quoted(s.as_str())).into()),
-							Value::UnionDescriminator(_) => {
-								quote!(todo!("constructing a non-scalar tag"))
+						let literal = || -> Tokens {
+							match value {
+								Value::Signed(n) => quote!($(n.to_string())),
+								Value::Unsigned(n) => quote!($(n.to_string())),
+								Value::Bool(b) => quote!($(b.to_string())),
+								Value::String(s) => quote!($(quoted(s.as_str())).into()),
+								Value::UnionDescriminator(_) => quote!(unreachable!()),
 							}
+						};
+						match common::tag_repr(input, tag_ty, value) {
+							Some(TagRepr::Literal) => literal(),
+							Some(TagRepr::OptionSome(opt)) => {
+								let inner = meta.slot_new(opt, &Ident::new("Value"), literal());
+								quote!(Some($inner))
+							}
+							Some(TagRepr::Variant(u, n)) => quote!($(meta.ty(u))::$(rname(&n))),
+							None => quote!(todo!("reconstructing a non-scalar tag")),
 						}
 					};
 					// Build per-arm tokens. A void-typed arm (the deduplicated canonical
@@ -654,7 +517,7 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 					let void_of = |t: TypeId| input.is_void(t);
 					// Box an arm payload only when it can reach this union by value
 					// (closes a cycle); otherwise hold it inline.
-					let boxed_of = |t: TypeId| value_reaches(input, t, *id);
+					let boxed_of = |name: &Ident| meta.boxed(*id, name);
 					let payload_ty = |t: TypeId, boxed: bool| -> Tokens {
 						if boxed {
 							quote!(Box<$(meta.ty(t))>)
@@ -688,7 +551,7 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 							assert_arms.push(quote!(Ty::$(&v) => $(cond(value)),));
 							de_branches.push(quote!(if $(cond(value)) { return Ok(Ty::$(&v)); }));
 						} else {
-							let boxed = boxed_of(vty.target);
+							let boxed = boxed_of(variant);
 							variants_decl.push(quote!($(&v)($(payload_ty(vty.target, boxed))),));
 							ser_arms.push(
 								quote!(Ty::$(&v)(__v) => $(meta.serialize(vty.target))(__v, output),),
@@ -707,54 +570,33 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 					let de_default: Tokens = if let Some((dname, dty)) = default.as_ref() {
 						let d = rname(dname);
 						let void = void_of(dty.target);
-						let boxed = boxed_of(dty.target);
+						let boxed = boxed_of(dname);
 						let dpay = de_value(dty.target, dty, boxed);
-						match (is_inline, void) {
-							(true, true) => {
-								variants_decl.push(quote!($(&d)($(meta.ty(tag_ty))),));
-								ser_arms.push(quote!(Ty::$(&d)(_) => Ok(()),));
-								size_arms.push(quote!(Ty::$(&d)(_) => 0,));
-								vtag_arms.push(quote!(Ty::$(&d)(__t) => __t.clone(),));
-								quote!(Ok(Ty::$(&d)(__tagv)))
-							}
-							(true, false) => {
-								variants_decl.push(
-									quote!($(&d)($(meta.ty(tag_ty)), $(payload_ty(dty.target, boxed))),),
-								);
-								ser_arms.push(
-									quote!(Ty::$(&d)(_, __v) => $(meta.serialize(dty.target))(__v, output),),
-								);
-								size_arms.push(
-									quote!(Ty::$(&d)(_, __v) => $(meta.size_of(dty.target))(__v),),
-								);
-								vtag_arms.push(quote!(Ty::$(&d)(__t, _) => __t.clone(),));
-								quote!(Ok(Ty::$(&d)(__tagv, $dpay)))
-							}
-							(false, true) => {
-								variants_decl.push(quote!($(&d),));
-								ser_arms.push(quote!(Ty::$(&d) => Ok(()),));
-								size_arms.push(quote!(Ty::$(&d) => 0,));
-								vtag_arms.push(
-									quote!(Ty::$(&d) => todo!("tag of the external default arm"),),
-								);
-								assert_arms.push(quote!(Ty::$(&d) => true,));
-								quote!(Ok(Ty::$(&d)))
-							}
-							(false, false) => {
-								variants_decl
-									.push(quote!($(&d)($(payload_ty(dty.target, boxed))),));
-								ser_arms.push(
-									quote!(Ty::$(&d)(__v) => $(meta.serialize(dty.target))(__v, output),),
-								);
-								size_arms.push(
-									quote!(Ty::$(&d)(__v) => $(meta.size_of(dty.target))(__v),),
-								);
-								vtag_arms.push(
-									quote!(Ty::$(&d)(_) => todo!("tag of the external default arm"),),
-								);
-								assert_arms.push(quote!(Ty::$(&d)(_) => true,));
-								quote!(Ok(Ty::$(&d)($dpay)))
-							}
+						let tag_owned = if is_inline {
+							quote!(__tagv)
+						} else {
+							quote!(__tag.clone())
+						};
+						if void {
+							variants_decl.push(quote!($(&d)($(meta.ty(tag_ty))),));
+							ser_arms.push(quote!(Ty::$(&d)(_) => Ok(()),));
+							size_arms.push(quote!(Ty::$(&d)(_) => 0,));
+							vtag_arms.push(quote!(Ty::$(&d)(__t) => __t.clone(),));
+							assert_arms.push(quote!(Ty::$(&d)(_) => true,));
+							quote!(Ok(Ty::$(&d)($tag_owned)))
+						} else {
+							variants_decl.push(
+								quote!($(&d)($(meta.ty(tag_ty)), $(payload_ty(dty.target, boxed))),),
+							);
+							ser_arms.push(
+								quote!(Ty::$(&d)(_, __v) => $(meta.serialize(dty.target))(__v, output),),
+							);
+							size_arms.push(
+								quote!(Ty::$(&d)(_, __v) => $(meta.size_of(dty.target))(__v),),
+							);
+							vtag_arms.push(quote!(Ty::$(&d)(__t, _) => __t.clone(),));
+							assert_arms.push(quote!(Ty::$(&d)(..) => true,));
+							quote!(Ok(Ty::$(&d)($tag_owned, $dpay)))
 						}
 					} else {
 						quote!(Err($(import("crate::pds", "Error"))::InvalidValue))
@@ -771,18 +613,7 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 					// `is_equal_{b}` helpers this union's module must expose because it is used
 					// as another union's discriminant (see `eq_impls`).
 					let my_eq = eq_impls.get(id).cloned().unwrap_or_default();
-					let derive_eq = my_eq.iter().any(|(_, k)| *k == EqKind::SelfEq);
-					let all_void = matches.iter().all(|(_, _, vt)| void_of(vt.target))
-						&& default.as_ref().is_none_or(|(_, dt)| void_of(dt.target));
-					let derive_attr = if derive_eq {
-						if all_void {
-							quote!(#[derive(PartialEq, Eq)])
-						} else {
-							quote!(#[derive(PartialEq)])
-						}
-					} else {
-						quote!()
-					};
+					let derive_attr = quote!(#[derive(Debug, Clone, PartialEq)]);
 					let eq_fns: Vec<Tokens> = my_eq
 						.iter()
 						.map(|(b, kind)| match kind {
@@ -838,17 +669,13 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 								);
 							}
 						)
-						$(if is_inline || unions_as_tag.contains(id) =>
+						$(if is_inline || unions_as_tag.contains(id) || tag_referenced.contains(id) =>
 							pub fn virtual_tag(_0: &Ty) -> $(meta.ty(tag_ty)) {
 								$(if is_empty => match *_0 {})
 								$(if !is_empty {
-									$(if tag_is_union || tag_is_option {
-										todo!("reconstructing a non-scalar tag")
-									} else {
-										$match_head {
-											$(for a in &vtag_arms join($['\r']) => $a)
-										}
-									})
+									$match_head {
+										$(for a in &vtag_arms join($['\r']) => $a)
+									}
 								})
 							}
 						)
@@ -914,7 +741,7 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 							.find(|(_, v)| v.as_str() == n)
 							.map(|(k, _)| *k)
 					};
-					let Some(codegen) = reg.codegen::<Tokens>(specializer.as_str()) else {
+					let Some(codegen) = reg.codegen::<Rust>(specializer.as_str()) else {
 						anyhow::bail!("no rust codegen for specializer {specializer:?}");
 					};
 					let args_struct_gen = || args_struct.clone();
@@ -928,10 +755,11 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 					let pass_args = |u: &Type| args_of(u.target, u);
 					codegen
 						.generate(&NativeCodegenCtx {
+							id: *id,
 							variant,
 							native,
 							params: &ty.params,
-							rust: &meta,
+							names: &meta,
 							resolve: &resolve,
 							args_struct: &args_struct_gen,
 							args_param: &args_param,

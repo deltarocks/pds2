@@ -1,0 +1,24 @@
+{
+  "name": "@deltarocks/pds-bytes-runtime",
+  "version": "0.1.0",
+  "description": "Byte-oriented runtime for pds2 generated TypeScript codecs",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./mod.d.ts",
+      "default": "./mod.js"
+    },
+    "./protobuf": {
+      "types": "./protobuf.d.ts",
+      "default": "./protobuf.js"
+    }
+  },
+  "files": [
+    "mod.d.ts",
+    "mod.js",
+    "mod.js.map",
+    "protobuf.d.ts",
+    "protobuf.js",
+    "protobuf.js.map"
+  ]
+}

@@ -8,12 +8,15 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use genco::lang::rust;
+use genco::lang::{rust, JavaScript, Lang, Rust};
 use genco::prelude::*;
+use genco::Tokens;
 use tracing::info;
 
+mod typescript;
+
 use crate::ast::{self, Ident, Statement};
-use crate::upgrade::{NativeSig, NativeSigVariant, UpgradeCtx};
+use crate::upgrade::{keys_fit, plan, NativeSig, NativeSigVariant, TagKind, UpgradeCtx};
 
 use crate::hir::{self, HirSpecializerCtx, TypeId};
 use crate::mir;
@@ -29,52 +32,119 @@ pub enum GeneratorKind {
 	Typescript,
 }
 
-/// Name resolution for generated Rust: genco imports for another pds type's items,
-/// so cross-module `use` statements are collected and deduplicated by genco.
-pub trait RustNames {
-	fn ty(&self, id: TypeId) -> rust::Tokens;
-	fn serialize(&self, id: TypeId) -> rust::Import;
-	fn deserialize(&self, id: TypeId) -> rust::Import;
-	fn size_of(&self, id: TypeId) -> rust::Import;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scalar {
+	I8,
+	U8,
+	I16,
+	U16,
+	I32,
+	U32,
+	I64,
+	U64,
+	F32,
+	F64,
+}
+impl Scalar {
+	pub fn parse(s: &str) -> Option<Self> {
+		Some(match s {
+			"i8" => Self::I8,
+			"u8" => Self::U8,
+			"i16" => Self::I16,
+			"u16" => Self::U16,
+			"i32" => Self::I32,
+			"u32" => Self::U32,
+			"i64" => Self::I64,
+			"u64" => Self::U64,
+			"f32" => Self::F32,
+			"f64" => Self::F64,
+			_ => return None,
+		})
+	}
+}
+
+/// Name resolution for generated code: genco imports for another pds type's items,
+/// so cross-module imports are collected and deduplicated by genco.
+pub trait Names<L: Lang> {
+	fn ty(&self, id: TypeId) -> Tokens<L>;
+	fn serialize(&self, id: TypeId) -> Tokens<L>;
+	fn deserialize(&self, id: TypeId) -> Tokens<L>;
+	fn size_of(&self, id: TypeId) -> Tokens<L>;
+	fn boxed(&self, owner: TypeId, slot: &Ident) -> bool;
+	fn slot_ty(&self, owner: TypeId, slot: &Ident, target: TypeId) -> Tokens<L>;
+	fn slot_new(&self, owner: TypeId, slot: &Ident, value: Tokens<L>) -> Tokens<L>;
+	fn scalar(&self, id: TypeId) -> Option<Scalar>;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BoxCost {
+	Low,
+	High,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Embed {
+	Indirect,
+	Fixed,
+	Boxable(BoxCost),
+}
+
+pub trait SlotVisitor {
+	fn slot(&mut self, name: &Ident, target: TypeId, embed: Embed);
+}
+
+pub trait NativeLayout {
+	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor);
 }
 
 /// Everything a native codegen needs to emit the module contents for one concrete
 /// (monomorphized) native instance.
-pub struct NativeCodegenCtx<'a> {
+pub struct NativeCodegenCtx<'a, L: Lang> {
+	pub id: TypeId,
 	/// the selected def_native overload
 	pub variant: &'a Ident,
 	pub native: &'a mir::NativeType,
 	/// value params of the def (`argument(size)` + closure-converted captures), with
 	/// resolved types
 	pub params: &'a [(Ident, TypeId)],
-	pub rust: &'a dyn RustNames,
+	pub names: &'a dyn Names<L>,
 	/// resolve a top-level type by name (e.g. `u8` for raw byte IO)
 	pub resolve: &'a dyn Fn(&str) -> Option<TypeId>,
 	/// the `pub struct Args<'a> { ... }` declaration for this def's params (empty
 	/// tokens when there are none)
-	pub args_struct: &'a dyn Fn() -> rust::Tokens,
+	pub args_struct: &'a dyn Fn() -> Tokens<L>,
 	/// extra `deserialize` parameter (`args: Args<'_>,`) when the def has params
-	pub args_param: &'a dyn Fn() -> rust::Tokens,
+	pub args_param: &'a dyn Fn() -> Tokens<L>,
 	/// the `Args { ... },` to pass when calling `deserialize` of the given type-use
 	/// (empty tokens when the target takes no params); arg refs resolve against this
 	/// def's own `args`
-	pub pass_args: &'a dyn Fn(&mir::Type) -> rust::Tokens,
+	pub pass_args: &'a dyn Fn(&mir::Type) -> Tokens<L>,
 	/// types this native is compared against when used as a union discriminant; a
 	/// tag-capable native (e.g. `option`) emits an `is_equal_{t}` helper per entry.
 	pub eq_targets: &'a [TypeId],
 }
 
-impl NativeCodegenCtx<'_> {
+impl<L: Lang> NativeCodegenCtx<'_, L> {
 	pub fn specialization_use(&self, name: &str) -> Result<&mir::Type> {
-		specialization_use(self.native, name).ok_or_else(|| anyhow!("generic {name:?} is not bound"))
+		specialization_use(self.native, name)
+			.ok_or_else(|| anyhow!("generic {name:?} is not bound"))
 	}
 	pub fn specialization(&self, name: &str) -> Result<TypeId> {
 		Ok(self.specialization_use(name)?.target)
 	}
+	pub fn boxed(&self, slot: &Ident) -> bool {
+		self.names.boxed(self.id, slot)
+	}
+	pub fn slot_ty(&self, slot: &Ident, target: TypeId) -> Tokens<L> {
+		self.names.slot_ty(self.id, slot, target)
+	}
+	pub fn slot_new(&self, slot: &Ident, value: Tokens<L>) -> Tokens<L> {
+		self.names.slot_new(self.id, slot, value)
+	}
 	/// a full `deserialize(input, args...)` call expression for a type-use,
 	/// threading the use's bound arguments (assumes `input`/`args` in scope)
-	pub fn deserialize_call(&self, u: &mir::Type) -> rust::Tokens {
-		let de = self.rust.deserialize(u.target);
+	pub fn deserialize_call(&self, u: &mir::Type) -> Tokens<L> {
+		let de = self.names.deserialize(u.target);
 		let pass = (self.pass_args)(u);
 		quote!($de(input, $pass))
 	}
@@ -91,12 +161,12 @@ impl NativeCodegenCtx<'_> {
 /// A token type a generator produces, tied to its dedicated codegen storage in
 /// [`Registry`] (one field per language: trait objects of different `T` can't share
 /// a map).
-pub trait LanguageTokens: Sized {
+pub trait LanguageTokens: Lang + Sized {
 	fn language() -> GeneratorKind;
 	fn storage(reg: &Registry) -> &HashMap<String, Box<dyn NativeCodegen<Self>>>;
 	fn storage_mut(reg: &mut Registry) -> &mut HashMap<String, Box<dyn NativeCodegen<Self>>>;
 }
-impl LanguageTokens for rust::Tokens {
+impl LanguageTokens for Rust {
 	fn language() -> GeneratorKind {
 		GeneratorKind::Rust
 	}
@@ -107,15 +177,33 @@ impl LanguageTokens for rust::Tokens {
 		&mut reg.codegen_rust
 	}
 }
+impl LanguageTokens for JavaScript {
+	fn language() -> GeneratorKind {
+		GeneratorKind::Typescript
+	}
+	fn storage(reg: &Registry) -> &HashMap<String, Box<dyn NativeCodegen<Self>>> {
+		&reg.codegen_ts
+	}
+	fn storage_mut(reg: &mut Registry) -> &mut HashMap<String, Box<dyn NativeCodegen<Self>>> {
+		&mut reg.codegen_ts
+	}
+}
 
-/// Object-safe per token type: registered per specializer, produces the module
+/// Object-safe per language: registered per specializer, produces the module
 /// contents for a concrete native instance in the generator's language.
-pub trait NativeCodegen<T> {
-	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<T>;
-	fn inline_ty(&self, _native: &mir::NativeType, _rust: &dyn RustNames) -> Option<T> {
+pub trait NativeCodegen<L: Lang> {
+	fn generate(&self, ctx: &NativeCodegenCtx<L>) -> Result<Tokens<L>>;
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		_names: &dyn Names<L>,
+	) -> Option<Tokens<L>> {
 		None
 	}
 }
+
+const VALUE: &str = "Value";
 
 fn specialization_use<'n>(native: &'n mir::NativeType, name: &str) -> Option<&'n mir::Type> {
 	native
@@ -125,9 +213,30 @@ fn specialization_use<'n>(native: &'n mir::NativeType, name: &str) -> Option<&'n
 		.map(|(_, t)| t)
 }
 
-fn vec_of_value(native: &mir::NativeType, rust: &dyn RustNames) -> Option<rust::Tokens> {
-	let value = specialization_use(native, "Value")?.target;
-	Some(quote!(Vec<$(rust.ty(value))>))
+fn visit_specialization(
+	native: &mir::NativeType,
+	name: &str,
+	embed: Embed,
+	v: &mut dyn SlotVisitor,
+) {
+	if let Some((n, t)) = native
+		.specialization
+		.iter()
+		.find(|(n, _)| n.as_str() == name)
+	{
+		v.slot(n, t.target, embed);
+	}
+}
+
+fn visit_fields(native: &mir::NativeType, embed: Embed, v: &mut dyn SlotVisitor) {
+	for (n, t) in &native.fields {
+		v.slot(n, t.target, embed);
+	}
+}
+
+fn vec_of_value(native: &mir::NativeType, names: &dyn Names<Rust>) -> Option<rust::Tokens> {
+	let value = specialization_use(native, VALUE)?.target;
+	Some(quote!(Vec<$(names.ty(value))>))
 }
 
 pub trait Upgrade {
@@ -147,12 +256,20 @@ pub trait Upgrade {
 pub struct Registry {
 	pub(crate) asthir: HashMap<String, Box<dyn AstHir>>,
 	pub(crate) upgrade: HashMap<String, Box<dyn Upgrade>>,
-	pub(crate) codegen_rust: HashMap<String, Box<dyn NativeCodegen<rust::Tokens>>>,
+	pub(crate) layout: HashMap<String, Box<dyn NativeLayout>>,
+	pub(crate) codegen_rust: HashMap<String, Box<dyn NativeCodegen<Rust>>>,
+	pub(crate) codegen_ts: HashMap<String, Box<dyn NativeCodegen<JavaScript>>>,
 }
 
 impl Registry {
 	pub fn register_asthir(&mut self, name: &str, specializer: impl AstHir + 'static) {
 		self.asthir.insert(name.to_owned(), Box::new(specializer));
+	}
+	pub fn register_layout(&mut self, name: &str, layout: impl NativeLayout + 'static) {
+		self.layout.insert(name.to_owned(), Box::new(layout));
+	}
+	pub fn layout(&self, name: &str) -> Option<&dyn NativeLayout> {
+		self.layout.get(name).map(|b| b.as_ref())
 	}
 	pub fn register_upgrade(&mut self, specializer: impl Upgrade + 'static) {
 		let spec = Box::new(specializer);
@@ -176,17 +293,34 @@ pub fn register_protodef_types(reg: &mut Registry) {
 	reg.register_asthir("array", Array);
 	reg.register_asthir("registryEntryHolder", RegistryEntryHolder);
 	reg.register_asthir("registryEntryHolderSet", RegistryEntryHolderSet);
+	reg.register_asthir("entityMetadataLoop", EntityMetadataLoop);
+	reg.register_asthir("terminated", EntityMetadataLoop);
 
-	reg.register_codegen::<rust::Tokens>("bitfield", Bitfield);
-	reg.register_codegen::<rust::Tokens>("bitflags", Bitflags);
-	reg.register_codegen::<rust::Tokens>("array", Array);
-	reg.register_codegen::<rust::Tokens>("option", OptionP);
-	reg.register_codegen::<rust::Tokens>("buffer", Buffer);
-	reg.register_codegen::<rust::Tokens>("pstring", PString);
-	reg.register_codegen::<rust::Tokens>("entityMetadataLoop", EntityMetadataLoop);
-	reg.register_codegen::<rust::Tokens>("topBitSetTerminatedArray", TopBitSetTerminatedArray);
-	reg.register_codegen::<rust::Tokens>("registryEntryHolder", RegistryEntryHolder);
-	reg.register_codegen::<rust::Tokens>("registryEntryHolderSet", RegistryEntryHolderSet);
+	reg.register_layout("bitfield", Bitfield);
+	reg.register_layout("bitflags", Bitflags);
+	reg.register_layout("array", Array);
+	reg.register_layout("option", OptionP);
+	reg.register_layout("buffer", Buffer);
+	reg.register_layout("pstring", PString);
+	reg.register_layout("entityMetadataLoop", EntityMetadataLoop);
+	reg.register_layout("terminated", EntityMetadataLoop);
+	reg.register_layout("topBitSetTerminatedArray", TopBitSetTerminatedArray);
+	reg.register_layout("registryEntryHolder", RegistryEntryHolder);
+	reg.register_layout("registryEntryHolderSet", RegistryEntryHolderSet);
+
+	reg.register_codegen::<Rust>("bitfield", Bitfield);
+	reg.register_codegen::<Rust>("bitflags", Bitflags);
+	reg.register_codegen::<Rust>("array", Array);
+	reg.register_codegen::<Rust>("option", OptionP);
+	reg.register_codegen::<Rust>("buffer", Buffer);
+	reg.register_codegen::<Rust>("pstring", PString);
+	reg.register_codegen::<Rust>("entityMetadataLoop", EntityMetadataLoop);
+	reg.register_codegen::<Rust>("terminated", EntityMetadataLoop);
+	reg.register_codegen::<Rust>("topBitSetTerminatedArray", TopBitSetTerminatedArray);
+	reg.register_codegen::<Rust>("registryEntryHolder", RegistryEntryHolder);
+	reg.register_codegen::<Rust>("registryEntryHolderSet", RegistryEntryHolderSet);
+
+	typescript::register(reg);
 
 	reg.register_upgrade(Bitfield);
 	reg.register_upgrade(Bitflags);
@@ -231,6 +365,20 @@ macro_rules! trivial_upgrade {
 			}
 		}
 	};
+	($struct:ident => $name:literal, scalar: $scalar:literal) => {
+		struct $struct;
+		impl Upgrade for $struct {
+			fn name(&self) -> String {
+				$name.to_owned()
+			}
+			fn sig(&self) -> NativeSig {
+				NativeSig {
+					scalar: Some($scalar.to_owned()),
+					..Default::default()
+				}
+			}
+		}
+	};
 }
 struct Void;
 impl Upgrade for Void {
@@ -245,40 +393,83 @@ impl Upgrade for Void {
 	}
 }
 
-trivial_upgrade!(U8P => "u8");
-trivial_upgrade!(U16P => "u16");
-trivial_upgrade!(U32P => "u32");
-trivial_upgrade!(U64P => "u64");
-trivial_upgrade!(Varlong => "varlong");
+trivial_upgrade!(U8P => "u8", scalar: "u8");
+trivial_upgrade!(U16P => "u16", scalar: "u16");
+trivial_upgrade!(U32P => "u32", scalar: "u32");
+trivial_upgrade!(U64P => "u64", scalar: "u64");
+trivial_upgrade!(I8P => "i8", scalar: "i8");
+trivial_upgrade!(I16P => "i16", scalar: "i16");
+trivial_upgrade!(I32P => "i32", scalar: "i32");
+trivial_upgrade!(I64P => "i64", scalar: "i64");
+trivial_upgrade!(F32P => "f32", scalar: "f32");
+trivial_upgrade!(F64P => "f64", scalar: "f64");
+trivial_upgrade!(Varint => "varint", scalar: "i32");
+trivial_upgrade!(Varlong => "varlong", scalar: "i64");
 
 struct TopBitSetTerminatedArray;
-impl NativeCodegen<rust::Tokens> for TopBitSetTerminatedArray {
-	fn inline_ty(&self, native: &mir::NativeType, rust: &dyn RustNames) -> Option<rust::Tokens> {
-		vec_of_value(native, rust)
+impl NativeLayout for TopBitSetTerminatedArray {
+	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor) {
+		visit_specialization(native, VALUE, Embed::Indirect, v);
 	}
-	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
-		let value = ctx
-			.specialization("Value")
+}
+impl NativeCodegen<Rust> for TopBitSetTerminatedArray {
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		native: &mir::NativeType,
+		names: &dyn Names<Rust>,
+	) -> Option<rust::Tokens> {
+		vec_of_value(native, names)
+	}
+	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
+		let value_use = ctx
+			.specialization_use("Value")
 			.context("topBitSetTerminatedArray value")?;
+		let value = value_use.target;
 		let ty = self
-			.inline_ty(ctx.native, ctx.rust)
+			.inline_ty(ctx.id, ctx.native, ctx.names)
 			.context("topBitSetTerminatedArray type")?;
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let perror = &rust::import("crate::pds", "Error");
 		Ok(quote! {
 			$((ctx.args_struct)())
 			pub type Ty = $ty;
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
-				let _ = (_0, output);
-				todo!("topBitSetTerminatedArray serialization needs byte patching")
+				if _0.is_empty() {
+					return Err($perror::InvalidValue);
+				}
+				for (i, e) in _0.iter().enumerate() {
+					let mut item = $poutput::new();
+					$(ctx.names.serialize(value))(e, &mut item)?;
+					let mut item = item.into_inner();
+					let Some(first) = item.first_mut() else {
+						return Err($perror::InvalidValue);
+					};
+					if *first & 0x80 != 0 {
+						return Err($perror::InvalidValue);
+					}
+					if i + 1 < _0.len() {
+						*first |= 0x80;
+					}
+					output.write(&item);
+				}
+				Ok(())
 			}
 			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
-				let _ = input;
-				todo!("topBitSetTerminatedArray deserialization needs input peeking")
+				let mut out = Vec::new();
+				loop {
+					let more = input.peek()? & 0x80 != 0;
+					input.mask_next(0x7f);
+					out.push($(ctx.deserialize_call(value_use))?);
+					if !more {
+						return Ok(out);
+					}
+				}
 			}
 			pub fn size_of(_0: &Ty) -> usize {
 				let mut n = 0;
-				for e in _0.iter() { n += $(ctx.rust.size_of(value))(e); }
+				for e in _0.iter() { n += $(ctx.names.size_of(value))(e); }
 				n
 			}
 		})
@@ -357,8 +548,13 @@ impl AstHir for Bitfield {
 	}
 }
 
-impl NativeCodegen<rust::Tokens> for Bitfield {
-	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+impl NativeLayout for Bitfield {
+	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor) {
+		visit_fields(native, Embed::Fixed, v);
+	}
+}
+impl NativeCodegen<Rust> for Bitfield {
+	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let entries = bitfield_entries(&ctx.native.body)?;
 		let total: u32 = entries.iter().map(|e| e.size).sum();
 		ensure!(
@@ -393,9 +589,10 @@ impl NativeCodegen<rust::Tokens> for Bitfield {
 
 		Ok(quote! {
 			$((ctx.args_struct)())
+			#[derive(Debug, Clone, PartialEq)]
 			pub struct Ty {
 				$(for (e, (_, ty)) in entries.iter().zip(ctx.native.fields.iter()) join($['\r']) =>
-					pub $(&e.name): $(ctx.rust.ty(ty.target)),
+					pub $(&e.name): $(ctx.names.ty(ty.target)),
 				)
 			}
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
@@ -404,14 +601,14 @@ impl NativeCodegen<rust::Tokens> for Bitfield {
 					acc = (acc << $(e.size.to_string())) | ((_0.$(&e.name) as u128) & $(format!("{:#x}", (1u128 << e.size) - 1)));
 				)
 				for i in (0..$(bytes.to_string())u32).rev() {
-					$(ctx.rust.serialize(u8id))(&(((acc >> (i * 8)) & 0xff) as u8), output)?;
+					$(ctx.names.serialize(u8id))(&(((acc >> (i * 8)) & 0xff) as u8), output)?;
 				}
 				Ok(())
 			}
 			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
 				let mut acc: u128 = 0;
 				for _ in 0..$(bytes.to_string())u32 {
-					acc = (acc << 8) | ($(ctx.rust.deserialize(u8id))(input)? as u128);
+					acc = (acc << 8) | ($(ctx.names.deserialize(u8id))(input)? as u128);
 				}
 				$(for t in extract join($['\r']) => $t)
 				Ok(Ty {
@@ -427,9 +624,9 @@ impl NativeCodegen<rust::Tokens> for Bitfield {
 
 /// A def param type for generated Args structs: uninferred (const-only usage) params
 /// fall back to a plain integer.
-fn param_ty(ctx: &NativeCodegenCtx, id: TypeId) -> rust::Tokens {
+fn param_ty(ctx: &NativeCodegenCtx<Rust>, id: TypeId) -> rust::Tokens {
 	if id.is_valid() {
-		quote!($(ctx.rust.ty(id)))
+		quote!($(ctx.names.ty(id)))
 	} else {
 		quote!(usize)
 	}
@@ -515,8 +712,13 @@ impl AstHir for Bitflags {
 	}
 }
 
-impl NativeCodegen<rust::Tokens> for Bitflags {
-	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+impl NativeLayout for Bitflags {
+	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor) {
+		visit_fields(native, Embed::Fixed, v);
+	}
+}
+impl NativeCodegen<Rust> for Bitflags {
+	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let value = ctx.specialization("Value")?;
 		// flag bit i = 1 << i, in declaration order
 		let bit = |i: usize| format!("{:#x}", 1u64 << i);
@@ -525,9 +727,10 @@ impl NativeCodegen<rust::Tokens> for Bitflags {
 
 		Ok(quote! {
 			$((ctx.args_struct)())
+			#[derive(Debug, Clone, PartialEq)]
 			pub struct Ty {
 				$(for (name, ty) in ctx.native.fields.iter() join($['\r']) =>
-					pub $name: $(ctx.rust.ty(ty.target)),
+					pub $name: $(ctx.names.ty(ty.target)),
 				)
 			}
 			fn pack(_0: &Ty) -> u64 {
@@ -538,10 +741,10 @@ impl NativeCodegen<rust::Tokens> for Bitflags {
 				acc
 			}
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
-				$(ctx.rust.serialize(value))(&pack(_0).try_into().expect("bitflags value"), output)
+				$(ctx.names.serialize(value))(&(pack(_0) as $(ctx.names.ty(value))), output)
 			}
 			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
-				let acc: u64 = $(ctx.rust.deserialize(value))(input)?.try_into().expect("bitflags value");
+				let acc = $(ctx.names.deserialize(value))(input)? as u64;
 				Ok(Ty {
 					$(for (i, (name, _)) in ctx.native.fields.iter().enumerate() join($['\r']) =>
 						$name: acc & $(bit(i)) != 0,
@@ -549,7 +752,7 @@ impl NativeCodegen<rust::Tokens> for Bitflags {
 				})
 			}
 			pub fn size_of(_0: &Ty) -> usize {
-				$(ctx.rust.size_of(value))(&pack(_0).try_into().expect("bitflags value"))
+				$(ctx.names.size_of(value))(&(pack(_0) as $(ctx.names.ty(value))))
 			}
 		})
 	}
@@ -658,8 +861,15 @@ impl AstHir for RegistryEntryHolder {
 		body_fields(ctx)
 	}
 }
-impl NativeCodegen<rust::Tokens> for RegistryEntryHolder {
-	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+impl NativeLayout for RegistryEntryHolder {
+	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor) {
+		if let Some((name, ty)) = native.fields.first() {
+			v.slot(name, ty.target, Embed::Boxable(BoxCost::Low));
+		}
+	}
+}
+impl NativeCodegen<Rust> for RegistryEntryHolder {
+	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let varint = (ctx.resolve)("varint")
 			.ok_or_else(|| anyhow!("registryEntryHolder needs the `varint` native"))?;
 		let (pinput, poutput, presult) = pds_io();
@@ -668,35 +878,36 @@ impl NativeCodegen<rust::Tokens> for RegistryEntryHolder {
 		let Some((iname, ity_use)) = ctx.native.fields.first() else {
 			bail!("registryEntryHolder needs an inline field from its body");
 		};
-		let _ = iname;
 		let ity = ity_use.target;
+		let read_inline = ctx.slot_new(iname, quote!($(ctx.deserialize_call(ity_use))?));
 		Ok(quote! {
 			$((ctx.args_struct)())
+			#[derive(Debug, Clone, PartialEq)]
 			pub enum Ty {
-				Id($(ctx.rust.ty(varint))),
-				Inline($(ctx.rust.ty(ity))),
+				Id($(ctx.names.ty(varint))),
+				Inline($(ctx.slot_ty(iname, ity))),
 			}
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
 				match _0 {
-					Ty::Id(id) => $(ctx.rust.serialize(varint))(&(id + 1), output),
+					Ty::Id(id) => $(ctx.names.serialize(varint))(&(id + 1), output),
 					Ty::Inline(v) => {
-						$(ctx.rust.serialize(varint))(&0, output)?;
-						$(ctx.rust.serialize(ity))(v, output)
+						$(ctx.names.serialize(varint))(&0, output)?;
+						$(ctx.names.serialize(ity))(v, output)
 					}
 				}
 			}
 			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
-				let n = $(ctx.rust.deserialize(varint))(input)?;
+				let n = $(ctx.names.deserialize(varint))(input)?;
 				Ok(if n == 0 {
-					Ty::Inline($(ctx.deserialize_call(ity_use))?)
+					Ty::Inline($read_inline)
 				} else {
 					Ty::Id(n - 1)
 				})
 			}
 			pub fn size_of(_0: &Ty) -> usize {
 				match _0 {
-					Ty::Id(id) => $(ctx.rust.size_of(varint))(&(id + 1)),
-					Ty::Inline(v) => $(ctx.rust.size_of(varint))(&0) + $(ctx.rust.size_of(ity))(v),
+					Ty::Id(id) => $(ctx.names.size_of(varint))(&(id + 1)),
+					Ty::Inline(v) => $(ctx.names.size_of(varint))(&0) + $(ctx.names.size_of(ity))(v),
 				}
 			}
 		})
@@ -733,8 +944,15 @@ impl AstHir for RegistryEntryHolderSet {
 		body_fields(ctx)
 	}
 }
-impl NativeCodegen<rust::Tokens> for RegistryEntryHolderSet {
-	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+impl NativeLayout for RegistryEntryHolderSet {
+	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor) {
+		if let Some((name, ty)) = native.fields.first() {
+			v.slot(name, ty.target, Embed::Boxable(BoxCost::Low));
+		}
+	}
+}
+impl NativeCodegen<Rust> for RegistryEntryHolderSet {
+	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let varint = (ctx.resolve)("varint")
 			.ok_or_else(|| anyhow!("registryEntryHolderSet needs the `varint` native"))?;
 		let (pinput, poutput, presult) = pds_io();
@@ -742,47 +960,48 @@ impl NativeCodegen<rust::Tokens> for RegistryEntryHolderSet {
 		let Some((nname, nty_use)) = ctx.native.fields.first() else {
 			bail!("registryEntryHolderSet needs a named field from its body");
 		};
-		let _ = nname;
 		let nty = nty_use.target;
+		let read_named = ctx.slot_new(nname, quote!($(ctx.deserialize_call(nty_use))?));
 		Ok(quote! {
 			$((ctx.args_struct)())
+			#[derive(Debug, Clone, PartialEq)]
 			pub enum Ty {
-				Named($(ctx.rust.ty(nty))),
-				Ids(Vec<$(ctx.rust.ty(varint))>),
+				Named($(ctx.slot_ty(nname, nty))),
+				Ids(Vec<$(ctx.names.ty(varint))>),
 			}
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
 				match _0 {
 					Ty::Named(v) => {
-						$(ctx.rust.serialize(varint))(&0, output)?;
-						$(ctx.rust.serialize(nty))(v, output)
+						$(ctx.names.serialize(varint))(&0, output)?;
+						$(ctx.names.serialize(nty))(v, output)
 					}
 					Ty::Ids(ids) => {
-						$(ctx.rust.serialize(varint))(&(ids.len() + 1).try_into().expect("id set length"), output)?;
+						$(ctx.names.serialize(varint))(&(ids.len() + 1).try_into().map_err(|_| $(rust::import("crate::pds", "Error"))::InvalidValue)?, output)?;
 						for id in ids.iter() {
-							$(ctx.rust.serialize(varint))(id, output)?;
+							$(ctx.names.serialize(varint))(id, output)?;
 						}
 						Ok(())
 					}
 				}
 			}
 			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
-				let n: usize = $(ctx.rust.deserialize(varint))(input)?.try_into().expect("id set length");
+				let n: usize = $(ctx.names.deserialize(varint))(input)?.try_into().map_err(|_| $(rust::import("crate::pds", "Error"))::InvalidValue)?;
 				Ok(if n == 0 {
-					Ty::Named($(ctx.deserialize_call(nty_use))?)
+					Ty::Named($read_named)
 				} else {
-					let mut ids = Vec::with_capacity(n - 1);
+					let mut ids = Vec::with_capacity((n - 1).min(input.remaining()));
 					for _ in 0..n - 1 {
-						ids.push($(ctx.rust.deserialize(varint))(input)?);
+						ids.push($(ctx.names.deserialize(varint))(input)?);
 					}
 					Ty::Ids(ids)
 				})
 			}
 			pub fn size_of(_0: &Ty) -> usize {
 				match _0 {
-					Ty::Named(v) => 1 + $(ctx.rust.size_of(nty))(v),
+					Ty::Named(v) => 1 + $(ctx.names.size_of(nty))(v),
 					Ty::Ids(ids) => {
-						let mut n = $(ctx.rust.size_of(varint))(&(ids.len() + 1).try_into().expect("id set length"));
-						for id in ids.iter() { n += $(ctx.rust.size_of(varint))(id); }
+						let mut n = $(ctx.names.size_of(varint))(&(ids.len() + 1).try_into().unwrap_or_default());
+						for id in ids.iter() { n += $(ctx.names.size_of(varint))(id); }
 						n
 					}
 				}
@@ -816,19 +1035,32 @@ impl Upgrade for RegistryEntryHolderSet {
 }
 
 struct Array;
-impl NativeCodegen<rust::Tokens> for Array {
-	fn inline_ty(&self, native: &mir::NativeType, rust: &dyn RustNames) -> Option<rust::Tokens> {
-		vec_of_value(native, rust)
+impl NativeLayout for Array {
+	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor) {
+		visit_specialization(native, VALUE, Embed::Indirect, v);
 	}
-	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+}
+impl NativeCodegen<Rust> for Array {
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		native: &mir::NativeType,
+		names: &dyn Names<Rust>,
+	) -> Option<rust::Tokens> {
+		vec_of_value(native, names)
+	}
+	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let value_use = ctx
 			.specialization_use("Value")
 			.context("array element type")?;
 		let value = value_use.target;
-		let ty = self.inline_ty(ctx.native, ctx.rust).context("array type")?;
-		let de_value = |ctx: &NativeCodegenCtx| ctx.deserialize_call(value_use);
+		let ty = self
+			.inline_ty(ctx.id, ctx.native, ctx.names)
+			.context("array type")?;
+		let de_value = |ctx: &NativeCodegenCtx<Rust>| ctx.deserialize_call(value_use);
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let perror = &rust::import("crate::pds", "Error");
 
 		let main = match ctx.variant.as_str() {
 			// length prefix read inline, as the `Count` type
@@ -836,23 +1068,23 @@ impl NativeCodegen<rust::Tokens> for Array {
 				let count = ctx.specialization("Count").context("array count type")?;
 				quote! {
 					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
-						$(ctx.rust.serialize(count))(&_0.len().try_into().expect("array length"), output)?;
+						$(ctx.names.serialize(count))(&_0.len().try_into().map_err(|_| $perror::InvalidValue)?, output)?;
 						for e in _0.iter() {
-							$(ctx.rust.serialize(value))(e, output)?;
+							$(ctx.names.serialize(value))(e, output)?;
 						}
 						Ok(())
 					}
 					pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
-						let count: usize = $(ctx.rust.deserialize(count))(input)?.try_into().expect("array length");
-						let mut out = Vec::with_capacity(count);
+						let count: usize = $(ctx.names.deserialize(count))(input)?.try_into().map_err(|_| $perror::InvalidValue)?;
+						let mut out = Vec::with_capacity(count.min(input.remaining()));
 						for _ in 0..count {
 							out.push($(de_value(ctx))?);
 						}
 						Ok(out)
 					}
 					pub fn size_of(_0: &Ty) -> usize {
-						let mut n = $(ctx.rust.size_of(count))(&_0.len().try_into().expect("array length"));
-						for e in _0.iter() { n += $(ctx.rust.size_of(value))(e); }
+						let mut n = $(ctx.names.size_of(count))(&_0.len().try_into().unwrap_or_default());
+						for e in _0.iter() { n += $(ctx.names.size_of(value))(e); }
 						n
 					}
 				}
@@ -866,13 +1098,13 @@ impl NativeCodegen<rust::Tokens> for Array {
 				quote! {
 					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
 						for e in _0.iter() {
-							$(ctx.rust.serialize(value))(e, output)?;
+							$(ctx.names.serialize(value))(e, output)?;
 						}
 						Ok(())
 					}
 					pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
-						let count: usize = (*args.count).try_into().expect("array length");
-						let mut out = Vec::with_capacity(count);
+						let count: usize = (*args.count).try_into().map_err(|_| $perror::InvalidValue)?;
+						let mut out = Vec::with_capacity(count.min(input.remaining()));
 						for _ in 0..count {
 							out.push($(de_value(ctx))?);
 						}
@@ -880,7 +1112,7 @@ impl NativeCodegen<rust::Tokens> for Array {
 					}
 					pub fn size_of(_0: &Ty) -> usize {
 						let mut n = 0;
-						for e in _0.iter() { n += $(ctx.rust.size_of(value))(e); }
+						for e in _0.iter() { n += $(ctx.names.size_of(value))(e); }
 						n
 					}
 				}
@@ -891,7 +1123,7 @@ impl NativeCodegen<rust::Tokens> for Array {
 		// the runtime length, referencable as `@size` (e.g. by a virtual length field)
 		let virtual_size = match ctx.virtual_field("size") {
 			Some(virt) => quote! {
-				pub fn virtual_size(_0: &Ty) -> $(ctx.rust.ty(virt)) {
+				pub fn virtual_size(_0: &Ty) -> $(ctx.names.ty(virt)) {
 					_0.len().try_into().expect("array length")
 				}
 			},
@@ -940,6 +1172,7 @@ impl Upgrade for Array {
 		NativeSig {
 			specializer: Some("array".to_owned()),
 			is_void: false,
+			scalar: None,
 			default: NativeSigVariant {
 				value_generic: true,
 				..Default::default()
@@ -964,25 +1197,39 @@ impl Upgrade for Array {
 	}
 }
 struct Buffer;
-impl NativeCodegen<rust::Tokens> for Buffer {
-	fn inline_ty(&self, _native: &mir::NativeType, _rust: &dyn RustNames) -> Option<rust::Tokens> {
+impl NativeLayout for Buffer {
+	fn visit(&self, _native: &mir::NativeType, _v: &mut dyn SlotVisitor) {}
+}
+impl NativeCodegen<Rust> for Buffer {
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		_names: &dyn Names<Rust>,
+	) -> Option<rust::Tokens> {
 		Some(quote!(Vec<u8>))
 	}
-	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
-		let ty = self.inline_ty(ctx.native, ctx.rust).context("buffer type")?;
+	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
+		let ty = self
+			.inline_ty(ctx.id, ctx.native, ctx.names)
+			.context("buffer type")?;
 		let u8id = (ctx.resolve)("u8").ok_or_else(|| anyhow!("buffer needs the `u8` native"))?;
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let perror = &rust::import("crate::pds", "Error");
 		let read_bytes = quote! {
+			if count > input.remaining() {
+				return Err($perror::NotEnoughData);
+			}
 			let mut out = Vec::with_capacity(count);
 			for _ in 0..count {
-				out.push($(ctx.rust.deserialize(u8id))(input)?);
+				out.push($(ctx.names.deserialize(u8id))(input)?);
 			}
 			Ok(out)
 		};
 		let write_bytes = quote! {
 			for b in _0.iter() {
-				$(ctx.rust.serialize(u8id))(b, output)?;
+				$(ctx.names.serialize(u8id))(b, output)?;
 			}
 		};
 		let main = match ctx.variant.as_str() {
@@ -990,16 +1237,16 @@ impl NativeCodegen<rust::Tokens> for Buffer {
 				let count = ctx.specialization("Count").context("buffer count type")?;
 				quote! {
 					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
-						$(ctx.rust.serialize(count))(&_0.len().try_into().expect("buffer length"), output)?;
+						$(ctx.names.serialize(count))(&_0.len().try_into().map_err(|_| $perror::InvalidValue)?, output)?;
 						$write_bytes
 						Ok(())
 					}
 					pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
-						let count: usize = $(ctx.rust.deserialize(count))(input)?.try_into().expect("buffer length");
+						let count: usize = $(ctx.names.deserialize(count))(input)?.try_into().map_err(|_| $perror::InvalidValue)?;
 						$read_bytes
 					}
 					pub fn size_of(_0: &Ty) -> usize {
-						$(ctx.rust.size_of(count))(&_0.len().try_into().expect("buffer length")) + _0.len()
+						$(ctx.names.size_of(count))(&_0.len().try_into().unwrap_or_default()) + _0.len()
 					}
 				}
 			}
@@ -1010,7 +1257,7 @@ impl NativeCodegen<rust::Tokens> for Buffer {
 						Ok(())
 					}
 					pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
-						let count: usize = (*args.count).try_into().expect("buffer length");
+						let count: usize = (*args.count).try_into().map_err(|_| $perror::InvalidValue)?;
 						$read_bytes
 					}
 					pub fn size_of(_0: &Ty) -> usize {
@@ -1056,36 +1303,83 @@ impl Upgrade for Buffer {
 }
 
 struct EntityMetadataLoop;
-impl NativeCodegen<rust::Tokens> for EntityMetadataLoop {
-	fn inline_ty(&self, native: &mir::NativeType, rust: &dyn RustNames) -> Option<rust::Tokens> {
-		vec_of_value(native, rust)
+impl NativeLayout for EntityMetadataLoop {
+	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor) {
+		visit_specialization(native, VALUE, Embed::Indirect, v);
 	}
-	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
-		let value = ctx
-			.specialization("Value")
-			.context("entityMetadataLoop value")?;
+}
+impl NativeCodegen<Rust> for EntityMetadataLoop {
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		native: &mir::NativeType,
+		names: &dyn Names<Rust>,
+	) -> Option<rust::Tokens> {
+		vec_of_value(native, names)
+	}
+	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
+		let value_use = ctx
+			.specialization_use("Value")
+			.context("terminated array value")?;
+		let value = value_use.target;
 		let ty = self
-			.inline_ty(ctx.native, ctx.rust)
-			.context("entityMetadataLoop type")?;
+			.inline_ty(ctx.id, ctx.native, ctx.names)
+			.context("terminated array type")?;
+		let end = match ctx
+			.native
+			.const_args
+			.iter()
+			.find(|(n, _)| n.as_str() == "end")
+		{
+			Some((_, hir::Value::Number(n))) => {
+				u8::try_from(*n).map_err(|_| anyhow!("terminator {n} does not fit a byte"))?
+			}
+			other => bail!("terminated array needs a constant byte `end`, got {other:?}"),
+		};
+		let end = end.to_string();
+		let u8id =
+			(ctx.resolve)("u8").ok_or_else(|| anyhow!("terminated array needs the `u8` native"))?;
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 		Ok(quote! {
 			$((ctx.args_struct)())
 			pub type Ty = $ty;
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
-				let _ = (_0, output);
-				todo!("entityMetadataLoop serialization needs the terminator key")
+				for e in _0.iter() {
+					$(ctx.names.serialize(value))(e, output)?;
+				}
+				$(ctx.names.serialize(u8id))(&$(&end), output)
 			}
 			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
-				let _ = input;
-				todo!("entityMetadataLoop deserialization needs input peeking")
+				let mut out = Vec::new();
+				loop {
+					if input.peek()? == $(&end) {
+						input.skip();
+						return Ok(out);
+					}
+					out.push($(ctx.deserialize_call(value_use))?);
+				}
 			}
 			pub fn size_of(_0: &Ty) -> usize {
 				let mut n = 1;
-				for e in _0.iter() { n += $(ctx.rust.size_of(value))(e); }
+				for e in _0.iter() { n += $(ctx.names.size_of(value))(e); }
 				n
 			}
 		})
+	}
+}
+impl AstHir for EntityMetadataLoop {
+	fn fields(&self, ctx: &HirSpecializerCtx) -> Result<Vec<(Ident, hir::TypeKind)>> {
+		ensure!(
+			ctx.body.is_empty(),
+			"terminated array does not accept a body, got {:?}",
+			ctx.body
+		);
+		ensure!(
+			ctx.args.iter().any(|(n, _)| n.as_str() == "end"),
+			"terminated array needs an `end:` argument"
+		);
+		Ok(vec![])
 	}
 }
 impl Upgrade for EntityMetadataLoop {
@@ -1097,6 +1391,7 @@ impl Upgrade for EntityMetadataLoop {
 			specializer: Some("entityMetadataLoop".to_owned()),
 			default: NativeSigVariant {
 				value_generic: true,
+				accepts_body: true,
 				args: BTreeSet::from_iter(["end".to_owned()]),
 				..Default::default()
 			},
@@ -1105,17 +1400,36 @@ impl Upgrade for EntityMetadataLoop {
 	}
 }
 struct OptionP;
-impl NativeCodegen<rust::Tokens> for OptionP {
-	fn inline_ty(&self, native: &mir::NativeType, rust: &dyn RustNames) -> Option<rust::Tokens> {
-		let value = specialization_use(native, "Value")?.target;
-		Some(quote!(Option<Box<$(rust.ty(value))>>))
+impl NativeLayout for OptionP {
+	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor) {
+		visit_specialization(native, VALUE, Embed::Boxable(BoxCost::Low), v);
 	}
-	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+}
+impl NativeCodegen<Rust> for OptionP {
+	fn inline_ty(
+		&self,
+		id: TypeId,
+		native: &mir::NativeType,
+		names: &dyn Names<Rust>,
+	) -> Option<rust::Tokens> {
+		let value = specialization_use(native, VALUE)?.target;
+		Some(quote!(Option<$(names.slot_ty(id, &Ident::new(VALUE), value))>))
+	}
+	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let value_use = ctx
 			.specialization_use("Value")
 			.context("option value type")?;
 		let value = value_use.target;
-		let ty = self.inline_ty(ctx.native, ctx.rust).context("option type")?;
+		let ty = self
+			.inline_ty(ctx.id, ctx.native, ctx.names)
+			.context("option type")?;
+		let value_slot = Ident::new(VALUE);
+		let read_value = ctx.slot_new(&value_slot, quote!($(ctx.deserialize_call(value_use))?));
+		let as_ref = if ctx.boxed(&value_slot) {
+			quote!(as_deref)
+		} else {
+			quote!(as_ref)
+		};
 		let boolean =
 			(ctx.resolve)("bool").ok_or_else(|| anyhow!("option needs the `bool` native"))?;
 		let (pinput, poutput, presult) = pds_io();
@@ -1124,29 +1438,29 @@ impl NativeCodegen<rust::Tokens> for OptionP {
 			$((ctx.args_struct)())
 			pub type Ty = $ty;
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
-				$(ctx.rust.serialize(boolean))(&_0.is_some(), output)?;
+				$(ctx.names.serialize(boolean))(&_0.is_some(), output)?;
 				if let Some(v) = _0 {
-					$(ctx.rust.serialize(value))(v, output)?;
+					$(ctx.names.serialize(value))(v, output)?;
 				}
 				Ok(())
 			}
 			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
-				Ok(if $(ctx.rust.deserialize(boolean))(input)? {
-					Some(Box::new($(ctx.deserialize_call(value_use))?))
+				Ok(if $(ctx.names.deserialize(boolean))(input)? {
+					Some($read_value)
 				} else {
 					None
 				})
 			}
 			pub fn size_of(_0: &Ty) -> usize {
-				let mut n = $(ctx.rust.size_of(boolean))(&_0.is_some());
-				if let Some(v) = _0 { n += $(ctx.rust.size_of(value))(v); }
+				let mut n = $(ctx.names.size_of(boolean))(&_0.is_some());
+				if let Some(v) = _0 { n += $(ctx.names.size_of(value))(v); }
 				n
 			}
 			// Union arm matching when an `option` is used as a discriminant: each
 			// target is the inner value type; the present value is compared to it.
 			$(for t in ctx.eq_targets join($['\r']) =>
-				pub fn $(format!("is_equal_{}", t.raw()))(a: &Ty, b: &$(ctx.rust.ty(*t))) -> bool {
-					a.as_deref() == Some(b)
+				pub fn $(format!("is_equal_{}", t.raw()))(a: &Ty, b: &$(ctx.names.ty(*t))) -> bool {
+					a.$(&as_ref)() == Some(b)
 				}
 			)
 		})
@@ -1192,48 +1506,6 @@ impl Upgrade for BoolP {
 		"bool".to_owned()
 	}
 }
-struct I8P;
-impl Upgrade for I8P {
-	fn name(&self) -> String {
-		"i8".to_owned()
-	}
-}
-struct I16P;
-impl Upgrade for I16P {
-	fn name(&self) -> String {
-		"i16".to_owned()
-	}
-}
-struct I32P;
-impl Upgrade for I32P {
-	fn name(&self) -> String {
-		"i32".to_owned()
-	}
-}
-struct I64P;
-impl Upgrade for I64P {
-	fn name(&self) -> String {
-		"i64".to_owned()
-	}
-}
-struct F32P;
-impl Upgrade for F32P {
-	fn name(&self) -> String {
-		"f32".to_owned()
-	}
-}
-struct F64P;
-impl Upgrade for F64P {
-	fn name(&self) -> String {
-		"f64".to_owned()
-	}
-}
-struct Varint;
-impl Upgrade for Varint {
-	fn name(&self) -> String {
-		"varint".to_owned()
-	}
-}
 struct LpVec3;
 impl Upgrade for LpVec3 {
 	fn name(&self) -> String {
@@ -1241,36 +1513,50 @@ impl Upgrade for LpVec3 {
 	}
 }
 struct PString;
-impl NativeCodegen<rust::Tokens> for PString {
-	fn inline_ty(&self, _native: &mir::NativeType, _rust: &dyn RustNames) -> Option<rust::Tokens> {
+impl NativeLayout for PString {
+	fn visit(&self, _native: &mir::NativeType, _v: &mut dyn SlotVisitor) {}
+}
+impl NativeCodegen<Rust> for PString {
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		_names: &dyn Names<Rust>,
+	) -> Option<rust::Tokens> {
 		Some(quote!(String))
 	}
-	fn generate(&self, ctx: &NativeCodegenCtx) -> Result<rust::Tokens> {
+	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let count = ctx.specialization("Count").context("pstring count type")?;
-		let ty = self.inline_ty(ctx.native, ctx.rust).context("pstring type")?;
+		let ty = self
+			.inline_ty(ctx.id, ctx.native, ctx.names)
+			.context("pstring type")?;
 		let u8id = (ctx.resolve)("u8").ok_or_else(|| anyhow!("pstring needs the `u8` native"))?;
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let perror = &rust::import("crate::pds", "Error");
 		Ok(quote! {
 			$((ctx.args_struct)())
 			pub type Ty = $ty;
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
-				$(ctx.rust.serialize(count))(&_0.len().try_into().expect("string length"), output)?;
+				$(ctx.names.serialize(count))(&_0.len().try_into().map_err(|_| $perror::InvalidValue)?, output)?;
 				for b in _0.as_bytes() {
-					$(ctx.rust.serialize(u8id))(b, output)?;
+					$(ctx.names.serialize(u8id))(b, output)?;
 				}
 				Ok(())
 			}
 			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
-				let count: usize = $(ctx.rust.deserialize(count))(input)?.try_into().expect("string length");
+				let count: usize = $(ctx.names.deserialize(count))(input)?.try_into().map_err(|_| $perror::InvalidValue)?;
+				if count > input.remaining() {
+					return Err($perror::NotEnoughData);
+				}
 				let mut out = Vec::with_capacity(count);
 				for _ in 0..count {
-					out.push($(ctx.rust.deserialize(u8id))(input)?);
+					out.push($(ctx.names.deserialize(u8id))(input)?);
 				}
-				Ok(String::from_utf8(out).expect("utf8 string"))
+				String::from_utf8(out).map_err(|_| $perror::InvalidValue)
 			}
 			pub fn size_of(_0: &Ty) -> usize {
-				$(ctx.rust.size_of(count))(&_0.len().try_into().expect("string length")) + _0.len()
+				$(ctx.names.size_of(count))(&_0.len().try_into().unwrap_or_default()) + _0.len()
 			}
 		})
 	}
@@ -1318,142 +1604,172 @@ impl Upgrade for Container {
 		let data = data[0]
 			.as_array()
 			.ok_or_else(|| anyhow!("expected container data to be array"))?;
-		fn field_name(item: &serde_json::Map<String, serde_json::Value>) -> Result<&str> {
-			Ok(if item.contains_key("anon") {
-				"ANON"
-			} else {
-				item.get("name")
-					.ok_or_else(|| anyhow!("missing name"))?
-					.as_str()
-					.ok_or_else(|| anyhow!("expected name to be string"))?
-			})
-		}
-		let mut names = BTreeSet::new();
-		for item in data {
-			if let Some(item) = item.as_object() {
-				names.insert(field_name(item)?.to_owned());
-			}
-		}
+		let fields = plan::inline_fields(data);
+		let scope = plan::scope_names(&fields);
+		let names: BTreeSet<String> = fields.iter().map(|(n, _)| n.clone()).collect();
 
 		// protodef `mapper` (discriminant) + `switch(compareTo: mapper)` is a pds
 		// inline-tag union; merge them when the mapper feeds exactly one switch and
 		// nothing else refers to it.
-		fn typed<'a>(
-			item: &'a serde_json::Value,
-			head: &str,
-		) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
-			let arr = item.get("type")?.as_array()?;
-			if arr.first()?.as_str()? != head {
-				return None;
-			}
-			arr.get(1)?.as_object()
+		type JsonMap = serde_json::Map<String, serde_json::Value>;
+		enum Plan {
+			Keep,
+			Absorbed,
+			Inline(TagKind, JsonMap, serde_json::Value, String),
+			External(JsonMap),
+			Virtual(String),
 		}
-		fn count_refs(data: &[serde_json::Value], name: &str) -> usize {
-			fn scan(v: &serde_json::Value, name: &str, acc: &mut usize) {
-				match v {
-					serde_json::Value::Object(m) => {
-						for (k, val) in m {
-							if (k == "compareTo" || k == "count" || k.ends_with("To"))
-								&& val.as_str() == Some(name)
-							{
-								*acc += 1;
-							}
-							scan(val, name, acc);
-						}
-					}
-					serde_json::Value::Array(a) => a.iter().for_each(|e| scan(e, name, acc)),
-					_ => {}
+		let mut plans: Vec<Plan> = fields.iter().map(|_| Plan::Keep).collect();
+		for (i, (tag, tag_field)) in fields.iter().enumerate() {
+			if tag_field.get("name").is_none() || !matches!(plans[i], Plan::Keep) {
+				continue;
+			}
+			let refs = plan::count_refs(&fields, tag);
+			if refs == 0 {
+				continue;
+			}
+			let switch_of = |j: usize| -> Option<&JsonMap> {
+				let ty = fields[j].1.get("type")?;
+				(plan::head(ty)? == "switch").then_some(())?;
+				plan::arg(ty)?.as_object()
+			};
+			let keyed = |j: usize| {
+				switch_of(j)
+					.and_then(|s| s.get("compareTo"))
+					.and_then(serde_json::Value::as_str)
+					== Some(tag.as_str())
+			};
+			let run: Vec<usize> = (i + 1..fields.len()).take_while(|&j| keyed(j)).collect();
+			if run.len() >= 2 {
+				if refs != run.len() || run.iter().any(|&j| !matches!(plans[j], Plan::Keep)) {
+					continue;
 				}
+				let switches: Vec<&serde_json::Value> = run.iter().map(|&j| &fields[j].1).collect();
+				let Some(product) = plan::product(tag, &switches, &scope) else {
+					continue;
+				};
+				let Some(tag_ty) = tag_field.get("type") else {
+					continue;
+				};
+				let Some(kind) = ctx.classify_tag(tag_ty) else {
+					continue;
+				};
+				if matches!(kind, TagKind::OptionScalar) || !keys_fit(&kind, &product) {
+					continue;
+				}
+				plans[i] = Plan::Absorbed;
+				for &j in &run[1..] {
+					plans[j] = Plan::Absorbed;
+				}
+				plans[run[0]] = Plan::Inline(kind, product, tag_ty.clone(), tag.clone());
+				continue;
 			}
-			let mut acc = 0;
-			for f in data {
-				scan(f, name, &mut acc);
+			if refs > 2 {
+				continue;
 			}
-			acc
-		}
-		// switch field name -> the mapper spec it absorbs
-		let mut merge: std::collections::HashMap<
-			&str,
-			&serde_json::Map<String, serde_json::Value>,
-		> = std::collections::HashMap::new();
-		let mut absorbed: BTreeSet<&str> = BTreeSet::new();
-		for item in data {
-			let Some(sw) = typed(item, "switch") else {
+			let Some(j) = (i + 1..fields.len()).find(|&j| keyed(j)) else {
 				continue;
 			};
-			let Some(ct) = sw.get("compareTo").and_then(serde_json::Value::as_str) else {
+			let Some(switch) = switch_of(j).filter(|_| matches!(plans[j], Plan::Keep)) else {
 				continue;
 			};
-			let mapper = data
-				.iter()
-				.find(|m| m.get("name").and_then(serde_json::Value::as_str) == Some(ct))
-				.and_then(|m| typed(m, "mapper"));
-			if let Some(mapper) = mapper {
-				if count_refs(data, ct) == 1 {
-					let sw_name = item
-						.as_object()
-						.map(field_name)
-						.transpose()?
-						.unwrap_or("ANON");
-					merge.insert(sw_name, mapper);
-					absorbed.insert(ct);
+			let switch = if refs == 1 {
+				switch.clone()
+			} else {
+				match plan::fuse(switch, &scope, tag) {
+					Some(fused) => fused,
+					None => continue,
 				}
+			};
+			let Some(tag_ty) = tag_field.get("type") else {
+				continue;
+			};
+			let Some(kind) = ctx.classify_tag(tag_ty) else {
+				continue;
+			};
+			if !keys_fit(&kind, &switch) {
+				continue;
+			}
+			if j == i + 1 && !matches!(kind, TagKind::OptionScalar) {
+				plans[i] = Plan::Absorbed;
+				plans[j] = Plan::Inline(kind, switch, tag_ty.clone(), fields[j].0.clone());
+			} else {
+				plans[i] = Plan::Virtual(fields[j].0.clone());
+				plans[j] = Plan::External(switch);
 			}
 		}
 
-		let upgrade_one = |ctx: &mut UpgradeCtx,
-		                   item: &serde_json::Value,
-		                   name: &str,
-		                   framed: bool|
-		 -> Result<Vec<ast::Value>> {
-			let go = |ctx: &mut UpgradeCtx| -> Result<Vec<ast::Value>> {
-				if let Some(mapper) = merge.get(name).copied() {
-					let switch = typed(item, "switch").expect("switch located during planning");
+		let emit = |ctx: &mut UpgradeCtx, i: usize| -> Result<Vec<ast::Value>> {
+			let (name, field) = &fields[i];
+			match &plans[i] {
+				Plan::Inline(TagKind::Mapper(mapper), switch, _, _) => {
 					info!("container field {name} looks like legacy protodef mapper+switch, it will be replaced with union");
 					crate::upgrade::merge_mapper_switch(mapper, switch, ctx)
-				} else {
-					let ty = item.get("type").ok_or_else(|| anyhow!("missing type"))?;
+				}
+				Plan::Inline(_, switch, tag, _) => {
+					crate::upgrade::merge_scalar_switch(tag, switch, ctx)
+				}
+				Plan::External(switch) => crate::upgrade::upgrade_switch(switch, ctx),
+				Plan::Keep | Plan::Virtual(_) | Plan::Absorbed => {
+					let ty = field.get("type").ok_or_else(|| anyhow!("missing type"))?;
 					ctx.upgrade_type(ty.clone())
 				}
-			};
-			if framed {
-				ctx.in_container(names.clone(), go)
-			} else {
-				go(ctx)
 			}
 		};
 
+		let name_of = |i: usize| match &plans[i] {
+			Plan::Inline(_, _, _, name) => name.clone(),
+			_ => fields[i].0.clone(),
+		};
 		// effective = fields surviving the mapper merge
-		let mut effective: Vec<&serde_json::Value> = Vec::new();
-		for item in data {
-			let obj = item
-				.as_object()
-				.ok_or_else(|| anyhow!("object field should be object"))?;
-			if !absorbed.contains(field_name(obj)?) {
-				effective.push(item);
-			}
-		}
+		let effective: Vec<usize> = (0..fields.len())
+			.filter(|&i| !matches!(plans[i], Plan::Absorbed))
+			.collect();
+		let switch_valued: BTreeSet<String> = effective
+			.iter()
+			.filter(|&&i| match &plans[i] {
+				Plan::Inline(..) | Plan::External(_) => true,
+				Plan::Keep => fields[i].1.get("type").and_then(plan::head) == Some("switch"),
+				_ => false,
+			})
+			.map(|&i| name_of(i))
+			.collect();
 		// A container left with a single field is a transparent wrapper: emit that
 		// field's type directly (e.g. a packet *is* its body union, not a struct
 		// wrapping it). Unframed so the inner type's references account for the missing
 		// container level.
 		if let [only] = effective.as_slice() {
-			let name = field_name(only.as_object().unwrap())?.to_owned();
-			return upgrade_one(ctx, only, &name, false)
-				.with_context(|| format!("transparent container <{name}>"));
+			let name = name_of(*only);
+			return emit(ctx, *only).with_context(|| format!("transparent container <{name}>"));
 		}
 
 		let mut statements = Vec::new();
-		for item in effective {
-			let obj = item.as_object().unwrap();
-			let name = field_name(obj)?;
-			let ty = upgrade_one(ctx, item, name, true)
+		for i in effective {
+			let name = name_of(i);
+			let name = name.as_str();
+			let ty = ctx
+				.in_container(names.clone(), switch_valued.clone(), |ctx| emit(ctx, i))
 				.with_context(|| format!("container field <{name}> value"))?;
-			statements.push(Statement::simple(
-				ast::Item::simple_builder("field")
-					.argsb(ast::ItemArgs::builder().arg(ast::Value::new_simple_item(name)))
-					.then(ty),
-			));
+			let args = ast::ItemArgs::builder().arg(ast::Value::new_simple_item(name));
+			let item = match &plans[i] {
+				Plan::Virtual(union) => {
+					ast::Item::simple_builder("virtual_field").argsb(args.named(
+						"value",
+						ast::Value::FieldRef(ast::FieldRef {
+							up: 0,
+							path: ast::BaseFieldRef(vec![
+								ast::FieldRefSegment::Down {
+									to: Ident::new(union),
+									ignore_delegation: false,
+								},
+								ast::FieldRefSegment::Virtual(Ident::new("tag")),
+							]),
+						}),
+					))
+				}
+				_ => ast::Item::simple_builder("field").argsb(args),
+			};
+			statements.push(Statement::simple(item.then(ty)));
 		}
 		Ok(ast::Item::simple_builder("container")
 			.block(ast::Block {

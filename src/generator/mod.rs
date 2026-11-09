@@ -5,8 +5,10 @@ use std::{collections::HashMap, path::PathBuf, str::FromStr};
 use crate::mir;
 use crate::specializer::Registry;
 
+mod boxing;
+mod common;
 mod rust;
-// mod typescript;
+mod typescript;
 
 pub type GeneratorOutput = HashMap<PathBuf, String>;
 pub type Generator =
@@ -15,14 +17,14 @@ pub type Generator =
 #[derive(Debug, ValueEnum, Clone)]
 pub enum GeneratorTypes {
 	Rust,
-	// Typescript,
+	Typescript,
 }
 
 impl GeneratorTypes {
 	pub fn generator(&self) -> Generator {
 		match self {
 			GeneratorTypes::Rust => rust::generator,
-			// GeneratorTypes::Typescript => typescript::generator,
+			GeneratorTypes::Typescript => typescript::generator,
 		}
 	}
 }

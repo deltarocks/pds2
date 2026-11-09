@@ -365,6 +365,17 @@ impl Namespace {
 					} else {
 						None
 					};
+					let scalar = if let Some(scalars) = attrs.get(&Ident::new("scalar")) {
+						ensure!(scalars.len() == 1, "only one scalar is allowed");
+						let scalar = Ident::parse(scalars[0].clone())?;
+						ensure!(
+							crate::specializer::Scalar::parse(scalar.as_str()).is_some(),
+							"unknown scalar {scalar:?}"
+						);
+						Some(scalar)
+					} else {
+						None
+					};
 
 					enum NativeStmt {
 						Param(Ident),
@@ -484,7 +495,12 @@ impl Namespace {
 						}
 						/// A native's generics/params live on the surrounding [`Type`] like
 						/// any generic def, so the generic-type machinery covers natives.
-						fn into_type(self, specializer: Option<Ident>, variant: Ident) -> Type {
+						fn into_type(
+							self,
+							specializer: Option<Ident>,
+							scalar: Option<Ident>,
+							variant: Ident,
+						) -> Type {
 							let specialization = self
 								.types
 								.iter()
@@ -514,6 +530,7 @@ impl Namespace {
 									body: vec![],
 									const_args: vec![],
 									is_void: self.is_void,
+									scalar,
 								}),
 								types: self.types,
 								params: self.params,
@@ -573,7 +590,7 @@ impl Namespace {
 						(
 							name,
 							NamespaceItem::Type(
-								default.into_type(specializer, Ident::new("default")),
+								default.into_type(specializer, scalar, Ident::new("default")),
 							),
 						)
 					} else {
@@ -590,7 +607,11 @@ impl Namespace {
 							parts.extend(&default);
 							items.insert(
 								vname.clone(),
-								NamespaceItem::Type(parts.into_type(specializer.clone(), vname)),
+								NamespaceItem::Type(parts.into_type(
+									specializer.clone(),
+									scalar.clone(),
+									vname,
+								)),
 							);
 						}
 						(name, NamespaceItem::Inner(Namespace { items }))
