@@ -2,7 +2,8 @@ use crate::ast::{FieldRef, Ident, Path};
 use crate::specializer::Registry;
 use std::{cell::Cell, collections::BTreeMap};
 mod from_ast;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
+use std::collections::BTreeSet;
 pub use from_ast::parse_ast;
 mod desugar;
 pub use to_ast::to_ast;
@@ -254,7 +255,7 @@ pub struct NativeType {
 	pub virtual_fields: Vec<(Ident, TypeKind)>,
 	pub fields: Vec<(Ident, TypeKind)>,
 	/// whether use-sites may carry a `{ ... }` body for the specializer to process
-	pub accepts_body: bool,
+	pub accepts_body: Option<BodyDecl>,
 	/// generic bindings of this native: monomorphization substitutes them like any
 	/// generic def's; unbound generics are pruned (absent entry = unbound)
 	pub specialization: Vec<(Ident, TypeKind)>,
@@ -277,7 +278,7 @@ impl NativeType {
 	/// def, so the generic-type machinery covers them.) Natives with only value
 	/// `argument(..)`s are real wire types and survive to MIR with params.
 	pub fn is_template(&self) -> bool {
-		self.accepts_body
+		self.accepts_body.is_some()
 	}
 }
 
@@ -299,6 +300,18 @@ impl Traverse for NativeType {
 		for (n, t) in self.specialization.iter_mut() {
 			t.traverse(visitor, skip, reg)
 				.with_context(|| format!("type({n:?})"))?;
+		}
+		for f in self.body.iter_mut() {
+			for (n, a) in f.args.iter_mut() {
+				a.traverse(visitor, skip, reg)
+					.with_context(|| format!("body item argument {n:?}"))?;
+			}
+		}
+		if let Some(decl) = &mut self.accepts_body {
+			for t in decl.default_types_mut() {
+				t.traverse(visitor, skip, reg)
+					.context("body item default type")?;
+			}
 		}
 		Ok(())
 	}
@@ -373,20 +386,105 @@ impl Traverse for FieldRefOrConst {
 /// A single statement of a specializer body (`field(x, size: 26)`, `flag(add_player)`),
 /// captured verbatim at the use-site of a body-accepting native type.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum BodyArg {
-	Int(i128),
-	Bool(bool),
-	Str(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BodyField {
 	/// the statement head (`field`, `flag`, ...), interpreted by the specializer
 	pub kind: Ident,
-	pub name: Ident,
-	pub args: BTreeMap<Ident, BodyArg>,
+	pub name: Option<Ident>,
+	pub args: BTreeMap<Ident, FieldRefOrConst>,
 	/// chained element type, if the body item carries one (`field(x) => u8`)
 	pub ty: Option<TypeKind>,
+}
+impl BodyField {
+	pub fn expect_name(&self) -> Result<&Ident> {
+		self.name
+			.as_ref()
+			.ok_or_else(|| anyhow!("body item {:?} needs a name", self.kind))
+	}
+	pub fn constant(&self, name: &str) -> Option<&Value> {
+		match self.args.get(&Ident::new(name))? {
+			FieldRefOrConst::Const(v) => Some(v),
+			FieldRefOrConst::FieldRef(_) => None,
+		}
+	}
+}
+impl Traverse for BodyField {
+	fn traverse(
+		&mut self,
+		visitor: &mut impl Visitor,
+		skip: TraverseSkip,
+		reg: &Registry,
+	) -> Result<()> {
+		for (n, a) in self.args.iter_mut() {
+			a.traverse(visitor, skip, reg)
+				.with_context(|| format!("body item argument {n:?}"))?;
+		}
+		if let Some(ty) = &mut self.ty {
+			ty.traverse(visitor, skip, reg)
+				.context("reference body field")?;
+		}
+		Ok(())
+	}
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BodyItemDecl {
+	pub anonymous: bool,
+	pub args: Vec<(Ident, Option<Value>)>,
+	pub value: Option<Option<TypeKind>>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BodyDecl(pub Vec<(Ident, BodyItemDecl)>);
+impl BodyDecl {
+	pub fn item(&self, kind: &Ident) -> Option<&BodyItemDecl> {
+		self.0.iter().find(|(k, _)| k == kind).map(|(_, d)| d)
+	}
+	pub fn default_types_mut(&mut self) -> impl Iterator<Item = &mut TypeKind> {
+		self.0
+			.iter_mut()
+			.filter_map(|(_, d)| d.value.as_mut().and_then(Option::as_mut))
+	}
+	pub fn check(&self, body: &mut [BodyField]) -> Result<()> {
+		let mut names = BTreeSet::new();
+		let mut anonymous = BTreeSet::new();
+		for f in body.iter_mut() {
+			let kind = f.kind.clone();
+			let decl = self.item(&kind).ok_or_else(|| {
+				anyhow!(
+					"unknown body item {kind:?}, expected one of {:?}",
+					self.0.iter().map(|(k, _)| k).collect::<Vec<_>>()
+				)
+			})?;
+			match (&f.name, decl.anonymous) {
+				(Some(n), false) => ensure!(names.insert(n.clone()), "duplicate body item name {n:?}"),
+				(None, true) => ensure!(anonymous.insert(kind.clone()), "{kind:?} given twice"),
+				(None, false) => bail!("{kind:?} needs a name"),
+				(Some(n), true) => bail!("{kind:?} takes no name, got {n:?}"),
+			}
+			for n in f.args.keys() {
+				ensure!(
+					decl.args.iter().any(|(a, _)| a == n),
+					"{kind:?} has no argument {n:?}"
+				);
+			}
+			for (a, default) in &decl.args {
+				if f.args.contains_key(a) {
+					continue;
+				}
+				let default = default
+					.clone()
+					.ok_or_else(|| anyhow!("{kind:?} needs argument {a:?}"))?;
+				f.args.insert(a.clone(), FieldRefOrConst::Const(default));
+			}
+			match (&decl.value, &mut f.ty) {
+				(None, Some(_)) => bail!("{kind:?} takes no `=> type`"),
+				(Some(None), None) => bail!("{kind:?} needs `=> type`"),
+				(Some(Some(default)), ty @ None) => *ty = Some(default.clone()),
+				_ => {}
+			}
+		}
+		Ok(())
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -419,10 +517,7 @@ impl Traverse for Reference {
 				.with_context(|| format!("<ref> {{{t:?}: <here>}}"))?
 		}
 		for f in self.body.iter_mut() {
-			if let Some(ty) = &mut f.ty {
-				ty.traverse(visitor, skip, reg)
-					.context("reference body field")?;
-			}
+			f.traverse(visitor, skip, reg)?;
 		}
 
 		if skip.contains(TraverseSkip::DFS) {

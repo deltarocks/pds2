@@ -29,7 +29,7 @@ struct VariantSig {
 	id: TypeId,
 	params: BTreeSet<Ident>,
 	types: BTreeSet<Ident>,
-	accepts_body: bool,
+	body_items: Option<BTreeSet<Ident>>,
 }
 impl VariantSig {
 	fn new(t: &Type, n: &NativeType) -> Self {
@@ -38,7 +38,10 @@ impl VariantSig {
 			id: t.id(),
 			params: t.params.iter().cloned().collect(),
 			types: t.types.keys().cloned().collect(),
-			accepts_body: n.accepts_body,
+			body_items: n
+				.accepts_body
+				.as_ref()
+				.map(|d| d.0.iter().map(|(k, _)| k.clone()).collect()),
 		}
 	}
 }
@@ -62,7 +65,11 @@ fn select<'s>(r: &Reference, variants: &'s [VariantSig]) -> Result<&'s VariantSi
 	for v in variants {
 		let args_ok = provided_args.iter().all(|n| v.params.contains(*n));
 		let types_ok = provided_types.iter().all(|n| v.types.contains(*n));
-		let body_ok = !has_body || v.accepts_body;
+		let body_ok = !has_body
+			|| v
+				.body_items
+				.as_ref()
+				.is_some_and(|items| r.body.iter().all(|f| items.contains(&f.kind)));
 		if args_ok && types_ok && body_ok {
 			// More declared names matched => more specific => preferred.
 			candidates.push((v, provided_args.len() + provided_types.len()));
@@ -139,13 +146,18 @@ impl TypeKind {
 				variant: _,
 				virtual_fields,
 				fields,
-				accepts_body: _,
+				accepts_body,
 				specialization,
 				body: _,
 				const_args: _,
 				is_void: _,
 				scalar: _,
 			}) => {
+				if let Some(decl) = accepts_body {
+					for t in decl.default_types_mut() {
+						t.resolve_paths_to_ids(paths)?;
+					}
+				}
 				for (_, v) in specialization.iter_mut() {
 					v.resolve_paths_to_ids(paths)?;
 				}

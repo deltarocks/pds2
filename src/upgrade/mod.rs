@@ -59,7 +59,7 @@ pub struct NativeSigVariant {
 	/// whether the native receives a chained `=> T` element type (the `Value` generic)
 	pub value_generic: bool,
 	/// whether use-sites carry a `{ ... }` body (declared via `body;`)
-	pub accepts_body: bool,
+	pub accepts_body: Option<&'static str>,
 }
 /// Discovered/declared signature of a native type, used to emit `def_native` blocks.
 #[derive(Default, Clone)]
@@ -669,8 +669,12 @@ fn native_variant(sig: &NativeSigVariant) -> Vec<Statement> {
 				.build_values(),
 		));
 	}
-	if sig.accepts_body {
-		statements.push(simple_stmt(Item::simple_builder("body").build_values()));
+	if let Some(decl) = sig.accepts_body {
+		let mut block = ast::parse(decl).expect("specializer body declaration should parse");
+		block.root = false;
+		statements.push(simple_stmt(
+			Item::simple_builder("body").block(block).build_values(),
+		));
 	}
 	statements
 }
@@ -833,6 +837,20 @@ mod tests {
 			&out,
 			"def(p) => union(tagType: varint) { variant(v0, match: 0) => u8; default; };",
 		);
+	}
+
+	#[test]
+	fn body_natives_declare_their_items() {
+		let out = upgrade(json!({
+			"bitfield": "native",
+			"p": ["bitfield", [{ "name": "x", "size": 8, "signed": true }]]
+		}))
+		.unwrap();
+		assert_has(
+			&out,
+			"@specializer bitfield def_native(bitfield) { body { item(field) { argument(size); argument(signed) => false; }; }; };",
+		);
+		assert_has(&out, "def(p) => bitfield { field(x, signed: true, size: 8); };");
 	}
 
 	#[test]

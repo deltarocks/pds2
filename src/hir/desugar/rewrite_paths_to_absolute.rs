@@ -99,6 +99,11 @@ impl TypeKind {
 				for (_, ty) in native.fields.iter_mut() {
 					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
+				if let Some(decl) = &mut native.accepts_body {
+					for ty in decl.default_types_mut() {
+						ty.rewrite_paths_to_absolute(current_ns, generics, paths)
+					}
+				}
 			}
 		}
 	}

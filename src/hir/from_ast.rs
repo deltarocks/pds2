@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::{
 	ast::{Block, FieldRef, Ident, Item, ParseValue, Statement, Value},
 	hir::{
-		BodyArg, BodyField, Container, ContainerFieldType, FieldRefOrConst, NamespaceItem,
+		BodyDecl, BodyField, BodyItemDecl, Container, ContainerFieldType, FieldRefOrConst, NamespaceItem,
 		NativeType, Reference, ReferenceKind, Union, UnionTag, Value as HirValue,
 	},
 	specializer::Registry,
@@ -17,13 +17,24 @@ fn parse_specializer_body(block: &Block) -> Result<Vec<BodyField>> {
 	for stmt in &block.statements {
 		let (_attrs, item, mut items) = stmt.clone().pop_item()?;
 		let kind = item.name.expect_simple_name()?;
-		let name: Ident = item.args.arg(0, "body field name")?;
+		let name: Option<Ident> = item.args.arg(0, "body field name")?;
 		let mut args = BTreeMap::new();
 		for n in item.args.named_names().cloned().collect::<Vec<_>>() {
+			ensure!(
+				!n.is_type_arg(),
+				"body item {kind:?} takes its type as `=> type`, not as argument {n:?}"
+			);
 			let value: Value = item.args.named(n.clone())?;
-			args.insert(n, body_arg(value)?);
+			args.insert(
+				n.clone(),
+				arg_value(value).with_context(|| format!("body item {kind:?} argument {n:?}"))?,
+			);
 		}
 		item.args.verify_unused()?;
+		ensure!(
+			item.block.is_empty(),
+			"body item {kind:?} can't have a block"
+		);
 		let ty = if items.is_empty() {
 			None
 		} else {
@@ -43,18 +54,104 @@ fn parse_specializer_body(block: &Block) -> Result<Vec<BodyField>> {
 	Ok(out)
 }
 
-fn body_arg(value: Value) -> Result<BodyArg> {
+fn const_value(value: Value) -> Result<HirValue> {
 	Ok(match value {
-		Value::Int(i) => BodyArg::Int(i),
-		Value::String { string, .. } => BodyArg::Str(string),
-		Value::Item(item) => match item.simple_name().map(|i| i.as_str().to_owned()).as_deref() {
-			Some("true") => BodyArg::Bool(true),
-			Some("false") => BodyArg::Bool(false),
-			Some(other) => BodyArg::Str(other.to_owned()),
-			None => bail!("unsupported body argument: {item:?}"),
+		Value::Int(i) => HirValue::Number(i),
+		Value::String { string, .. } => HirValue::String(string),
+		Value::Item(item) => match item.simple_name().as_ref().map(Ident::as_str) {
+			Some("true") => HirValue::Bool(true),
+			Some("false") => HirValue::Bool(false),
+			_ => bail!("expected a constant, got {item:?}"),
 		},
-		other => bail!("unsupported body argument: {other:?}"),
+		other => bail!("expected a constant, got {other:?}"),
 	})
+}
+
+fn arg_value(value: Value) -> Result<FieldRefOrConst> {
+	Ok(match value {
+		Value::FieldRef(r) => FieldRefOrConst::FieldRef(r),
+		v => FieldRefOrConst::Const(const_value(v).context(
+			"reference argument should be either field reference or constant",
+		)?),
+	})
+}
+
+impl BodyDecl {
+	fn from_ast(block: Block) -> Result<Self> {
+		let mut out = BodyDecl::default();
+		for stmt in block.statements {
+			let (_attrs, item, items) = stmt.pop_item()?;
+			ensure!(
+				items.is_empty() && item.name.expect_simple_name()?.as_str() == "item",
+				"expected `item(kind) {{ ... }}` in body declaration"
+			);
+			let kind: Ident = item.args.arg(0, "body item kind")?;
+			item.args.verify_unused()?;
+			let decl =
+				BodyItemDecl::from_ast(item.block).with_context(|| format!("item({kind:?})"))?;
+			ensure!(
+				out.item(&kind).is_none(),
+				"body item {kind:?} declared twice"
+			);
+			out.0.push((kind, decl));
+		}
+		Ok(out)
+	}
+}
+
+impl BodyItemDecl {
+	fn from_ast(block: Block) -> Result<Self> {
+		let mut out = BodyItemDecl::default();
+		for stmt in block.statements {
+			let (_attrs, item, mut items) = stmt.pop_item()?;
+			match item.name.expect_simple_name()?.as_str() {
+				"anonymous" => {
+					ensure!(items.is_empty(), "anonymous has no items");
+					item.args.verify_unused()?;
+					out.anonymous = true;
+				}
+				"argument" => {
+					let name: Ident = item.args.arg(0, "argument name")?;
+					item.args.verify_unused()?;
+					ensure!(
+						!name.is_type_arg(),
+						"body item types are declared with `type(Value)`, got argument {name:?}"
+					);
+					let default = match items.len() {
+						0 => None,
+						1 => Some(const_value(items.remove(0)).context("argument default")?),
+						_ => bail!("argument {name:?} takes one default value"),
+					};
+					ensure!(
+						out.args.iter().all(|(n, _)| n != &name),
+						"argument {name:?} declared twice"
+					);
+					out.args.push((name, default));
+				}
+				"type" => {
+					let name: Ident = item.args.arg(0, "type name")?;
+					item.args.verify_unused()?;
+					ensure!(
+						name.as_str() == "Value",
+						"body items only take the chained `Value` type, got {name:?}"
+					);
+					let default = if items.is_empty() {
+						None
+					} else {
+						let type_item = items
+							.remove(0)
+							.into_item()
+							.ok_or_else(|| anyhow!("default type should be item"))?;
+						Some(TypeKind::from_ast(type_item, items)?)
+					};
+					ensure!(out.value.is_none(), "type(Value) declared twice");
+					out.value = Some(default);
+				}
+				n => bail!("unknown body item declaration statement: {n:?}"),
+			}
+		}
+		Ok(out)
+	}
 }
 
 pub fn parse_ast(ast: Block, reg: &Registry) -> Result<Namespace> {
@@ -294,15 +391,7 @@ impl TypeKind {
 								.args
 								.named(name.clone())
 								.context("parsing value argument")?;
-							args.push((
-								name.clone(),
-								match value {
-									Value::FieldRef(field_ref) => FieldRefOrConst::FieldRef(field_ref),
-									Value::Int(i) => FieldRefOrConst::Const(HirValue::Number(i)),
-									Value::String{string, is_block: _} => FieldRefOrConst::Const(HirValue::String(string)),
-									_ => bail!("reference argument should be either field reference or constant, got {value:?}"),
-								},
-							));
+							args.push((name.clone(), arg_value(value)?));
 						}
 					}
 					value.args.verify_unused()?;
@@ -382,7 +471,7 @@ impl Namespace {
 						VirtualField(Ident, TypeKind),
 						Field(Ident, TypeKind),
 						Type(Ident, Option<TypeKind>),
-						Body,
+						Body(BodyDecl),
 						IsVoid,
 
 						Variant(Ident, Vec<NativeStmt>),
@@ -416,7 +505,7 @@ impl Namespace {
 								"body" => {
 									ensure!(items.is_empty(), "body has no items");
 									item.args.verify_unused()?;
-									Self::Body
+									Self::Body(BodyDecl::from_ast(item.block).context("body")?)
 								}
 								"is_void" => {
 									ensure!(items.is_empty(), "is_void has no items");
@@ -479,19 +568,26 @@ impl Namespace {
 						virtual_fields: Vec<(Ident, TypeKind)>,
 						fields: Vec<(Ident, TypeKind)>,
 						types: BTreeMap<Ident, Option<TypeKind>>,
-						accepts_body: bool,
+						accepts_body: Option<BodyDecl>,
 						is_void: bool,
 					}
 					impl NativeParts {
-						fn extend(&mut self, from: &Self) {
+						fn extend(&mut self, from: &Self) -> Result<()> {
 							self.params.extend(from.params.iter().cloned());
 							self.virtual_fields
 								.extend(from.virtual_fields.iter().cloned());
 							self.fields.extend(from.fields.iter().cloned());
 							self.types
 								.extend(from.types.iter().map(|(k, v)| (k.clone(), v.clone())));
-							self.accepts_body |= from.accepts_body;
+							if let Some(decl) = &from.accepts_body {
+								ensure!(
+									self.accepts_body.is_none(),
+									"body declared both on the native and its variant"
+								);
+								self.accepts_body = Some(decl.clone());
+							}
 							self.is_void |= from.is_void;
+							Ok(())
 						}
 						/// A native's generics/params live on the surrounding [`Type`] like
 						/// any generic def, so the generic-type machinery covers natives.
@@ -555,7 +651,10 @@ impl Namespace {
 									parts.types.insert(ty.clone(), default).is_none(),
 									"generic set twice: {ty:?}"
 								),
-								NativeStmt::Body => parts.accepts_body = true,
+								NativeStmt::Body(decl) => {
+									ensure!(parts.accepts_body.is_none(), "body declared twice");
+									parts.accepts_body = Some(decl);
+								}
 								NativeStmt::IsVoid => parts.is_void = true,
 								NativeStmt::Variant(name, v) => {
 									let (var, vars) = native_type_statements(v)?;
@@ -576,8 +675,8 @@ impl Namespace {
 
 					let has_types =
 						!default.types.is_empty() || variants.values().any(|v| !v.types.is_empty());
-					let accepts_body =
-						default.accepts_body || variants.values().any(|v| v.accepts_body);
+					let accepts_body = default.accepts_body.is_some()
+						|| variants.values().any(|v| v.accepts_body.is_some());
 
 					let name: Ident = item.args.arg(0, "native name")?;
 					ensure!(
@@ -604,7 +703,9 @@ impl Namespace {
 						);
 						let mut items = BTreeMap::new();
 						for (vname, mut parts) in variants {
-							parts.extend(&default);
+							parts
+								.extend(&default)
+								.with_context(|| format!("variant {vname:?}"))?;
 							items.insert(
 								vname.clone(),
 								NamespaceItem::Type(parts.into_type(

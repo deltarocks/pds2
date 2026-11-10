@@ -511,26 +511,27 @@ impl BitfieldEntry {
 fn bitfield_entries(body: &[hir::BodyField]) -> Result<Vec<BitfieldEntry>> {
 	let mut out = Vec::new();
 	for f in body {
-		let size = match f.args.get(&Ident::new("size")) {
-			Some(hir::BodyArg::Int(n)) if *n > 0 => *n,
-			_ => bail!(
-				"bitfield field {:?} needs a positive integer `size`",
-				f.name
-			),
+		let name = f.expect_name()?;
+		let size = match f.constant("size") {
+			Some(hir::Value::Number(n)) if *n > 0 => *n,
+			_ => bail!("bitfield field {name:?} needs a positive integer `size`"),
 		};
-		let signed = matches!(
-			f.args.get(&Ident::new("signed")),
-			Some(hir::BodyArg::Bool(true))
-		);
+		let signed = match f.constant("signed") {
+			Some(hir::Value::Bool(b)) => *b,
+			None => false,
+			Some(other) => {
+				bail!("bitfield field {name:?}: `signed` should be a boolean, got {other:?}")
+			}
+		};
 		let bits = match size {
 			0..=8 => 8,
 			9..=16 => 16,
 			17..=32 => 32,
 			33..=64 => 64,
-			_ => bail!("bitfield field {:?} larger than 64 bits", f.name),
+			_ => bail!("bitfield field {name:?} larger than 64 bits"),
 		};
 		out.push(BitfieldEntry {
-			name: f.name.clone(),
+			name: name.clone(),
 			size: size as u32,
 			signed,
 			bits,
@@ -648,7 +649,7 @@ impl Upgrade for Bitfield {
 		NativeSig {
 			specializer: Some("bitfield".to_owned()),
 			default: NativeSigVariant {
-				accepts_body: true,
+				accepts_body: Some("item(field) { argument(size); argument(signed) => false; };"),
 				..Default::default()
 			},
 			..Default::default()
@@ -707,7 +708,7 @@ impl AstHir for Bitflags {
 		let bool_ty = ctx.native("bool")?;
 		ctx.body
 			.iter()
-			.map(|f| Ok((f.name.clone(), bool_ty.clone())))
+			.map(|f| Ok((f.expect_name()?.clone(), bool_ty.clone())))
 			.collect()
 	}
 }
@@ -765,7 +766,7 @@ impl Upgrade for Bitflags {
 		NativeSig {
 			specializer: Some("bitflags".to_owned()),
 			default: NativeSigVariant {
-				accepts_body: true,
+				accepts_body: Some("item(flag);"),
 				value_generic: true,
 				..Default::default()
 			},
@@ -847,10 +848,11 @@ fn body_fields(ctx: &HirSpecializerCtx) -> Result<Vec<(Ident, hir::TypeKind)>> {
 			"unexpected body statement {:?}",
 			f.kind
 		);
+		let name = f.expect_name()?;
 		let ty =
 			f.ty.clone()
-				.ok_or_else(|| anyhow!("body field {:?} needs a type", f.name))?;
-		out.push((f.name.clone(), ty));
+				.ok_or_else(|| anyhow!("body field {name:?} needs a type"))?;
+		out.push((name.clone(), ty));
 	}
 	Ok(out)
 }
@@ -923,7 +925,7 @@ impl Upgrade for RegistryEntryHolder {
 			specializer: Some("registryEntryHolder".to_owned()),
 			default: NativeSigVariant {
 				args: BTreeSet::from_iter(["baseName".to_owned()]),
-				accepts_body: true,
+				accepts_body: Some("item(field) { type(Value); };"),
 				..Default::default()
 			},
 			..Default::default()
@@ -1018,7 +1020,7 @@ impl Upgrade for RegistryEntryHolderSet {
 			specializer: Some("registryEntryHolderSet".to_owned()),
 			default: NativeSigVariant {
 				args: BTreeSet::from_iter(["baseName".to_owned()]),
-				accepts_body: true,
+				accepts_body: Some("item(field) { type(Value); };"),
 				..Default::default()
 			},
 			..Default::default()
@@ -1391,7 +1393,7 @@ impl Upgrade for EntityMetadataLoop {
 			specializer: Some("entityMetadataLoop".to_owned()),
 			default: NativeSigVariant {
 				value_generic: true,
-				accepts_body: true,
+				accepts_body: Some(""),
 				args: BTreeSet::from_iter(["end".to_owned()]),
 				..Default::default()
 			},
@@ -1594,7 +1596,9 @@ impl Upgrade for Container {
 				args: BTreeSet::new(),
 				generics: BTreeSet::new(),
 				value_generic: false,
-				accepts_body: true,
+				accepts_body: Some(
+					"item(field) { type(Value); }; item(virtual_field) { argument(value); type(Value); };",
+				),
 			},
 			..Default::default()
 		}
