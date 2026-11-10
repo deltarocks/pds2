@@ -295,6 +295,35 @@ impl Debug for FieldRef {
 	}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BinOp {
+	Add,
+	Sub,
+	Mul,
+}
+impl BinOp {
+	pub fn symbol(self) -> &'static str {
+		match self {
+			BinOp::Add => "+",
+			BinOp::Sub => "-",
+			BinOp::Mul => "*",
+		}
+	}
+	pub fn precedence(self) -> u8 {
+		match self {
+			BinOp::Add | BinOp::Sub => 1,
+			BinOp::Mul => 2,
+		}
+	}
+	pub fn eval(self, a: i128, b: i128) -> Option<i128> {
+		match self {
+			BinOp::Add => a.checked_add(b),
+			BinOp::Sub => a.checked_sub(b),
+			BinOp::Mul => a.checked_mul(b),
+		}
+	}
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
 	String { string: String, is_block: bool },
@@ -302,6 +331,7 @@ pub enum Value {
 	FunctionCall(Ident, ItemArgs),
 	Int(i128),
 	Item(Item),
+	Binary(BinOp, Box<Value>, Box<Value>),
 	Internal(String),
 	Unset,
 }
@@ -340,6 +370,9 @@ impl ItemArgs {
 	}
 	pub fn is_empty(&self) -> bool {
 		self.unnamed.is_empty() && self.named.is_empty()
+	}
+	pub fn positional_count(&self) -> usize {
+		self.unnamed.len()
 	}
 	pub fn arg<T: ParseValue>(&self, id: usize, name: &str) -> Result<T> {
 		if self.unnamed.len() > id {

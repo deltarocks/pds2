@@ -4,11 +4,11 @@ use genco::prelude::*;
 
 use super::{
 	bitfield_entries, specialization_use, Array, Bitfield, Bitflags, Buffer, EntityMetadataLoop,
-	LowerCx, Names, NativeCodegen, NativeCodegenCtx, OptionP, PString, Registry,
+	terminator, LowerCx, Names, NativeCodegen, NativeCodegenCtx, OptionP, PString, Registry,
 	RegistryEntryHolder, RegistryEntryHolderSet, Scalar, TopBitSetTerminatedArray, VALUE,
 };
 use crate::ast::Ident;
-use crate::hir::{self, TypeId};
+use crate::hir::TypeId;
 use crate::mir;
 
 type Tokens = js::Tokens;
@@ -573,20 +573,12 @@ impl NativeCodegen<JavaScript> for EntityMetadataLoop {
 		let ty = self
 			.inline_ty(ctx.id, ctx.native, ctx.names)
 			.context("terminated array type")?;
-		let end = match ctx
-			.native
-			.const_args
-			.iter()
-			.find(|(n, _)| n.as_str() == "end")
-		{
-			Some((_, hir::Value::Number(n))) => {
-				u8::try_from(*n).map_err(|_| anyhow!("terminator {n} does not fit a byte"))?
-			}
-			other => bail!("terminated array needs a constant byte `end`, got {other:?}"),
+		let (end_ty, end) = terminator(ctx)?;
+		let is_end = if ctx.names.scalar(end_ty).is_some() {
+			quote!(($(ctx.names.deserialize(end_ty))(input) === $(&end)))
+		} else {
+			quote!($(pds("equal"))($(ctx.names.deserialize(end_ty))(input), $(&end)))
 		};
-		let end = end.to_string();
-		let u8id =
-			(ctx.resolve)("u8").ok_or_else(|| anyhow!("terminated array needs the `u8` native"))?;
 		let (pinput, poutput) = (&pds("Input"), &pds("Output"));
 		Ok(quote! {
 			$((ctx.args_struct)())
@@ -595,18 +587,22 @@ impl NativeCodegen<JavaScript> for EntityMetadataLoop {
 				for (const e of _0) {
 					$(ctx.names.serialize(value))(e, output);
 				}
-				$(ctx.names.serialize(u8id))($(&end), output);
+				$(ctx.names.serialize(end_ty))($(&end), output);
 			}
 			export function deserialize(input: $pinput$(if !ctx.params.is_empty() => , $((ctx.args_param)()))): Ty {
 				const out: Array<$(ctx.names.ty(value))> = [];
-				while (input.peek() !== $(&end)) {
+				for (;;) {
+					const at = input.offset;
+					if ($is_end) {
+						break;
+					}
+					input.rewind(at);
 					out.push($(ctx.deserialize_call(value_use)));
 				}
-				input.skip();
 				return $(from_list(ctx, value));
 			}
 			export function size_of(_0: Ty): number {
-				let n = 1;
+				let n = $(ctx.names.size_of(end_ty))($(&end));
 				for (const e of _0) {
 					n += $(ctx.names.size_of(value))(e);
 				}

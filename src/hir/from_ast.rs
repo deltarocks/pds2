@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use crate::{
-	ast::{Block, Ident, Item, ParseValue, Statement, Value},
+	ast::{Block, Ident, Item, ItemArgs, ParseValue, Statement, Value},
 	hir::{
-		BodyDecl, BodyField, BodyItemDecl, FieldRefOrConst, NamespaceItem,
+		BodyDecl, BodyField, BodyItemDecl, Expr, NamespaceItem,
 		NativeType, Reference, ReferenceKind, Value as HirValue,
 	},
 	specializer::Registry,
@@ -67,13 +67,43 @@ fn const_value(value: Value) -> Result<HirValue> {
 	})
 }
 
-fn arg_value(value: Value) -> Result<FieldRefOrConst> {
+fn arg_value(value: Value) -> Result<Expr> {
 	Ok(match value {
-		Value::FieldRef(r) => FieldRefOrConst::FieldRef(r),
-		v => FieldRefOrConst::Const(const_value(v).context(
-			"reference argument should be either field reference or constant",
+		Value::FieldRef(r) => Expr::Field(r),
+		Value::Binary(op, a, b) => {
+			Expr::Binary(op, Box::new(arg_value(*a)?), Box::new(arg_value(*b)?))
+		}
+		Value::Item(item)
+			if item.args.positional_count() == 1
+				&& item.args.named_names().next().is_none()
+				&& item.block.is_empty() =>
+		{
+			let operand: Value = item.args.arg(0, "cast operand")?;
+			let ty = TypeKind::from_ast(
+				Item {
+					name: item.name,
+					args: ItemArgs::default(),
+					block: Block::default(),
+				},
+				vec![],
+			)?;
+			Expr::Cast(Box::new(arg_value(operand)?), Box::new(ty))
+		}
+		v => Expr::Const(const_value(v).context(
+			"argument should be a field reference, constant, arithmetic or `type(value)` cast",
 		)?),
 	})
+}
+
+fn argument_type(name: &Ident, mut items: Vec<Value>) -> Result<Option<TypeKind>> {
+	if items.is_empty() {
+		return Ok(None);
+	}
+	let type_item = items
+		.remove(0)
+		.into_item()
+		.ok_or_else(|| anyhow!("argument {name:?} type should be item"))?;
+	Ok(Some(TypeKind::from_ast(type_item, items)?))
 }
 
 impl BodyDecl {
@@ -161,6 +191,7 @@ pub fn parse_ast(ast: Block, reg: &Registry) -> Result<Namespace> {
 
 	super::desugar::rewrite_paths_to_absolute(&mut ns);
 	super::desugar::resolve_paths_to_ids(&mut ns).context("resolving paths")?;
+	super::desugar::infer_generics(&mut ns, reg).context("inferring generics")?;
 
 	super::desugar::apply_specializers(&mut ns, reg).context("applying specializers")?;
 
@@ -176,19 +207,22 @@ pub fn parse_ast(ast: Block, reg: &Registry) -> Result<Namespace> {
 impl Type {
 	pub fn from_ast(value: Item, items: Vec<Value>, block: Block) -> Result<Type> {
 		let mut params = Vec::new();
+		let mut param_types = BTreeMap::new();
 		let mut types = BTreeMap::new();
 		let mut export = false;
 		for stmt in block.statements {
 			let (_attrs, item, mut items) = stmt.pop_item()?;
-			ensure!(items.is_empty(), "expected only one item");
 			match item.name.expect_simple_name()?.as_str() {
 				"argument" => {
 					let name: Ident = item.args.arg(0, "argument name")?;
 					item.args.verify_unused()?;
-
+					if let Some(ty) = argument_type(&name, items)? {
+						param_types.insert(name.clone(), ty);
+					}
 					params.push(name);
 				}
 				"export" => {
+					ensure!(items.is_empty(), "export has no items");
 					item.args.verify_unused()?;
 					ensure!(!export, "export set twice");
 					export = true;
@@ -219,6 +253,7 @@ impl Type {
 			_id: Default::default(),
 			types,
 			params,
+			param_types,
 			kind: TypeKind::from_ast(value, items)?,
 			export,
 		})
@@ -310,7 +345,7 @@ impl Namespace {
 					};
 
 					enum NativeStmt {
-						Param(Ident),
+						Param(Ident, Option<TypeKind>),
 						VirtualField(Ident, TypeKind),
 						Field(Ident, TypeKind),
 						Type(Ident, Option<TypeKind>),
@@ -342,8 +377,9 @@ impl Namespace {
 									Self::Variant(id, stmts)
 								}
 								"argument" => {
-									ensure!(items.is_empty(), "argument has no items");
-									Self::Param(item.args.arg(0, "argument name")?)
+									let name: Ident = item.args.arg(0, "argument name")?;
+									let ty = argument_type(&name, items)?;
+									Self::Param(name, ty)
 								}
 								"body" => {
 									ensure!(items.is_empty(), "body has no items");
@@ -408,6 +444,7 @@ impl Namespace {
 					#[derive(Default)]
 					struct NativeParts {
 						params: Vec<Ident>,
+						param_types: BTreeMap<Ident, TypeKind>,
 						virtual_fields: Vec<(Ident, TypeKind)>,
 						fields: Vec<(Ident, TypeKind)>,
 						types: BTreeMap<Ident, Option<TypeKind>>,
@@ -417,6 +454,9 @@ impl Namespace {
 					impl NativeParts {
 						fn extend(&mut self, from: &Self) -> Result<()> {
 							self.params.extend(from.params.iter().cloned());
+							self.param_types.extend(
+								from.param_types.iter().map(|(k, v)| (k.clone(), v.clone())),
+							);
 							self.virtual_fields
 								.extend(from.virtual_fields.iter().cloned());
 							self.fields.extend(from.fields.iter().cloned());
@@ -469,12 +509,14 @@ impl Namespace {
 									body: vec![],
 									const_args: vec![],
 									ref_args: vec![],
+									arg_types: vec![],
 									arg_virtuals: vec![],
 									is_void: self.is_void,
 									scalar,
 								}),
 								types: self.types,
 								params: self.params,
+								param_types: self.param_types,
 								export: false,
 							}
 						}
@@ -487,7 +529,12 @@ impl Namespace {
 						let mut variants = BTreeMap::new();
 						for statement in stmts {
 							match statement {
-								NativeStmt::Param(name) => parts.params.push(name),
+								NativeStmt::Param(name, ty) => {
+									if let Some(ty) = ty {
+										parts.param_types.insert(name.clone(), ty);
+									}
+									parts.params.push(name);
+								}
 								NativeStmt::VirtualField(name, ty) => {
 									parts.virtual_fields.push((name, ty))
 								}

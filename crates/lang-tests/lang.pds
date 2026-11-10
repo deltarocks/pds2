@@ -1,0 +1,151 @@
+@scalar u8
+def_native(u8);
+
+@scalar u16
+def_native(u16);
+
+@scalar bool
+def_native(bool);
+
+def_native(void) {
+	is_void;
+};
+
+@specializer array
+def_native(array) {
+	type(Value);
+
+	variant(sized) {
+		argument(count);
+
+		virtual_field(size) => u8;
+	};
+};
+
+@specializer option
+def_native(option) {
+	type(Value);
+};
+
+@specializer terminated
+def_native(terminated) {
+	type(Value);
+
+	type(End);
+
+	argument(end) => End;
+
+	body;
+};
+
+@specializer container
+def_native(container) {
+	body {
+		item(field) {
+			type(Value);
+		};
+
+		item(virtual_field) {
+			argument(value);
+
+			type(Value);
+		};
+	};
+};
+
+@specializer union
+def_native(union) {
+	body {
+		item(variant) {
+			argument(match);
+
+			type(Value) => void;
+		};
+
+		item(default) {
+			anonymous;
+
+			type(Value) => void;
+		};
+	};
+
+	variant(external) {
+		argument(tag);
+	};
+
+	variant(inline) {
+		type(Tag);
+	};
+};
+
+def(Counted) {
+	export;
+} => container {
+	virtual_field(len, value: ./data/@size + 1) => u8;
+
+	field(data) => array(count: ../len - 1) => u8;
+};
+
+def(Widened) {
+	export;
+} => container {
+	field(n) => u8;
+
+	field(items) => array(count: u16(../n) * 2) => u16;
+};
+
+def(Words) {
+	export;
+} => terminated(end: u16(0xff00 + 0xff)) => u16;
+
+def(BoundWords) {
+	export;
+} => terminated(End: u16, end: 0xffff) => u16;
+
+def(Choice) {
+	argument(k) => u8;
+} => union(tag: ./$k) {
+	variant(one, match: 1) => u8;
+
+	variant(two, match: 2) => u16;
+};
+
+def(Choices) {
+	export;
+} => container {
+	field(k) => u8;
+
+	field(picked) => Choice(k: ../k);
+
+	field(fixed) => Choice(k: 2);
+};
+
+def(Kind) => union(Tag: u8) {
+	variant(a, match: 1);
+
+	variant(b, match: 2) => u8;
+
+	default;
+};
+
+def(Tagged) {
+	export;
+} => container {
+	field(k) => Kind;
+
+	field(v) => union(tag: ../k) {
+		variant(x, match: "a");
+
+		variant(y, match: 2) => u8;
+
+		variant(z, match: 7);
+	};
+
+	field(o) => option => u8;
+
+	field(w) => union(tag: ../o) {
+		variant(p, match: 3) => u8;
+
+		default;
+	};
+};

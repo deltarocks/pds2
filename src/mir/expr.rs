@@ -1,4 +1,7 @@
-use crate::{ast::Ident, hir::TypeId};
+use crate::{
+	ast::{BinOp, Ident},
+	hir::TypeId,
+};
 
 use super::{Field, Value};
 
@@ -9,6 +12,7 @@ pub enum Expr {
 	Const(Value),
 	Construct(TypeId, Construction),
 	Cast(Box<Expr>, TypeId),
+	Binary(BinOp, Box<Expr>, Box<Expr>),
 	Eq(Box<Expr>, Box<Expr>),
 }
 
@@ -24,7 +28,15 @@ impl Expr {
 		match self {
 			Expr::Var(_, t) | Expr::Construct(t, _) | Expr::Cast(_, t) => Some(*t),
 			Expr::Field(f) => f.0.last().map(|i| i.to.get()),
+			Expr::Binary(_, a, b) => a.ty().or_else(|| b.ty()),
 			Expr::Const(_) | Expr::Eq(..) => None,
+		}
+	}
+
+	pub fn as_field(&self) -> Option<&Field> {
+		match self {
+			Expr::Field(f) => Some(f),
+			_ => None,
 		}
 	}
 
@@ -42,7 +54,7 @@ impl Expr {
 				Construction::Wrap(e) => e.walk(f),
 			},
 			Expr::Cast(e, _) => e.walk(f),
-			Expr::Eq(a, b) => {
+			Expr::Binary(_, a, b) | Expr::Eq(a, b) => {
 				a.walk(f);
 				b.walk(f);
 			}

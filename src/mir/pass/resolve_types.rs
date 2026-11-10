@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use crate::{
 	ast::{FieldRefSegment, Ident},
 	hir::TypeId,
-	mir::{self, Definition, Field, NativeType, TypeMap},
+	mir::{self, Definition, Expr, Field, NativeType, TypeMap},
 };
 
 #[derive(Default, Debug)]
@@ -65,16 +65,14 @@ impl Definition {
 					Self::resolve_type_use(self_id, sub, types, out)?;
 				}
 				for (n, r) in &native.ref_args {
-					Self::resolve_ref(self_id, types, r)
+					Self::resolve_expr(self_id, types, r)
 						.with_context(|| format!("argument {n:?}"))?;
 				}
 				for item in &native.body {
 					for (n, a) in &item.args {
-						if let Some(f) = a.as_field() {
-							Self::resolve_ref(self_id, types, f).with_context(|| {
-								format!("body item {:?} argument {n:?}", item.kind)
-							})?;
-						}
+						Self::resolve_expr(self_id, types, a).with_context(|| {
+							format!("body item {:?} argument {n:?}", item.kind)
+						})?;
 					}
 				}
 			}
@@ -94,12 +92,33 @@ impl Definition {
 		out: &mut TypeUsageCollector,
 	) -> Result<()> {
 		for (name, arg) in &ty.args {
-			let Some(arg) = arg.as_field() else {
-				continue;
-			};
-			out.used(ty.target, name, Self::resolve_ref(scope, types, arg)?);
+			if let Some(t) = Self::resolve_expr(scope, types, arg)? {
+				out.used(ty.target, name, t);
+			}
 		}
 		Ok(())
+	}
+
+	fn resolve_expr(scope: TypeId, types: &TypeMap, e: &Expr) -> Result<Option<TypeId>> {
+		Ok(match e {
+			Expr::Field(f) => Some(Self::resolve_ref(scope, types, f)?),
+			Expr::Const(_) => None,
+			Expr::Var(_, t) | Expr::Construct(t, _) => Some(*t),
+			Expr::Cast(e, t) => {
+				Self::resolve_expr(scope, types, e)?;
+				Some(*t)
+			}
+			Expr::Binary(_, a, b) => {
+				let a = Self::resolve_expr(scope, types, a)?;
+				let b = Self::resolve_expr(scope, types, b)?;
+				a.or(b)
+			}
+			Expr::Eq(a, b) => {
+				Self::resolve_expr(scope, types, a)?;
+				Self::resolve_expr(scope, types, b)?;
+				None
+			}
+		})
 	}
 
 	fn resolve_ref(from: TypeId, types: &TypeMap, r: &Field) -> Result<TypeId> {
@@ -166,7 +185,8 @@ impl Definition {
 					.iter()
 					.find(|(n, _)| n == &name)
 					.ok_or_else(|| anyhow!("virtual {name:?} has no argument to take its type from"))?;
-				Self::resolve_ref(self_id, types, r)?
+				Self::resolve_expr(self_id, types, r)?
+					.ok_or_else(|| anyhow!("argument {name:?} has no type for virtual {name:?}"))?
 			}
 			(
 				FieldRefSegment::Virtual(name),
@@ -198,7 +218,10 @@ impl Definition {
 
 	fn propogate_types(&mut self, i: TypeId, collector: &TypeUsageCollector) -> Result<()> {
 		for (name, param) in self.params.iter_mut() {
-			*param = collector.find_type(i, name)?;
+			*param = match self.param_types.iter().find(|(n, _)| n == name) {
+				Some((_, declared)) => *declared,
+				None => collector.find_type(i, name)?,
+			};
 		}
 		Ok(())
 	}

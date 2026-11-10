@@ -70,7 +70,16 @@ rule itemArgs() -> ItemArgs
 		out
 	}
 rule itemArg() -> (Option<Ident>, Value)
-	= tag:(t:baseIdent() ":" {t})? _ val:value() _ { (tag, val) }
+	= tag:(t:baseIdent() ":" {t})? _ val:expr() _ { (tag, val) }
+rule expr() -> Value = precedence!{
+	x:(@) _ "+" _ y:@ { Value::Binary(BinOp::Add, Box::new(x), Box::new(y)) }
+	x:(@) _ "-" _ y:@ { Value::Binary(BinOp::Sub, Box::new(x), Box::new(y)) }
+	--
+	x:(@) _ "*" _ y:@ { Value::Binary(BinOp::Mul, Box::new(x), Box::new(y)) }
+	--
+	"(" _ e:expr() _ ")" { e }
+	v:value() { v }
+}
 rule itemBlock() -> Block
 	= "{" attrs:(a:insideBlockAttr() _ {a})* s:statement()* "}" _ {
 		Block {

@@ -149,6 +149,26 @@ impl Value {
 			Value::Item(i) => {
 				i.print(out, before_block);
 			}
+			Value::Binary(op, a, b) => {
+				if let Some(before_block) = before_block {
+					out.push_info(before_block);
+				}
+				let operand = |out: &mut PrintItems, v: &Value, right: bool| {
+					let paren = matches!(v, Value::Binary(inner, ..) if inner.precedence() < op.precedence() || (right && inner.precedence() == op.precedence()));
+					if paren {
+						out.push_str_runtime_width_computed("(");
+					}
+					v.print(out, None);
+					if paren {
+						out.push_str_runtime_width_computed(")");
+					}
+				};
+				operand(out, a, false);
+				out.push_str_runtime_width_computed(" ");
+				out.push_str_runtime_width_computed(op.symbol());
+				out.push_str_runtime_width_computed(" ");
+				operand(out, b, true);
+			}
 			Value::Internal(i) => {
 				if let Some(before_block) = before_block {
 					out.push_info(before_block);
@@ -275,4 +295,24 @@ pub fn format(input: &Block) -> String {
 			new_line_text: "\n",
 		},
 	)
+}
+
+#[cfg(test)]
+mod tests {
+	fn squash(s: &str) -> String {
+		s.split_whitespace().collect::<Vec<_>>().join(" ")
+	}
+
+	#[test]
+	fn arithmetic_roundtrips_through_the_formatter() {
+		for src in [
+			"def(a) => x(n: ../len - 1);",
+			"def(a) => x(n: (../a + 1) * 2);",
+			"def(a) => x(n: ../a - (../b - 1));",
+			"def(a) => x(n: u16(../a) * 2 + -1);",
+		] {
+			let out = super::format(&crate::ast::parse(src).unwrap());
+			assert_eq!(squash(&out), squash(src));
+		}
+	}
 }

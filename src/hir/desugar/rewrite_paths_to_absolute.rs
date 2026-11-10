@@ -33,7 +33,7 @@ use std::collections::HashSet;
 use crate::{
 	ast::Ident,
 	hir::{
-		Namespace, NamespaceItem, Reference, ReferenceKind, Type,
+		Namespace, NamespaceItem, ReferenceKind, Type,
 		TypeKind,
 	},
 };
@@ -46,42 +46,23 @@ impl TypeKind {
 		paths: &HashSet<Vec<Ident>>,
 	) {
 		match self {
-			TypeKind::Reference(Reference {
-				ty: ty @ ReferenceKind::Path(_),
-				types,
-				body,
-				..
-			}) => {
-				// Try to resolve generic
-				{
-					let p = ty.path().unwrap();
-					if let Some(p) = p.simple_name() {
-						if generics.contains(&p) {
-							*ty = ReferenceKind::Generic(p);
+			TypeKind::Reference(r) => {
+				if let ReferenceKind::Path(_) = &r.ty {
+					// Try to resolve generic
+					{
+						let p = r.ty.path().unwrap();
+						if let Some(p) = p.simple_name() {
+							if generics.contains(&p) {
+								r.ty = ReferenceKind::Generic(p);
+							}
 						}
 					}
+					// Try to resolve absolute path
+					if let Some(p) = r.ty.path_mut() {
+						p.rewrite_to_absolute(current_ns, paths);
+					}
 				}
-				// Try to resolve absolute path
-				if let Some(p) = ty.path_mut() {
-					p.rewrite_to_absolute(current_ns, paths);
-				}
-				for (_, ty) in types.iter_mut() {
-					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
-				}
-				for ty in body.iter_mut().filter_map(|f| f.ty.as_mut()) {
-					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
-				}
-			}
-			TypeKind::Reference(Reference {
-				ty: ReferenceKind::Generic(_) | ReferenceKind::Resolved(_),
-				types,
-				body,
-				..
-			}) => {
-				for (_, ty) in types.iter_mut() {
-					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
-				}
-				for ty in body.iter_mut().filter_map(|f| f.ty.as_mut()) {
+				for ty in r.nested_types_mut() {
 					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
 			}
@@ -117,6 +98,9 @@ impl Type {
 			if let Some(t) = t {
 				t.rewrite_paths_to_absolute(current_ns, &generics, paths);
 			}
+		}
+		for (_, t) in self.param_types.iter_mut() {
+			t.rewrite_paths_to_absolute(current_ns, &generics, paths);
 		}
 		self.kind
 			.rewrite_paths_to_absolute(current_ns, &generics, paths);

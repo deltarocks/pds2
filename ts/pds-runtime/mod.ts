@@ -48,6 +48,10 @@ export class Input {
 		this.#offset++;
 	}
 
+	rewind(offset: number): void {
+		this.#offset = offset;
+	}
+
 	read_bytes(n: number): Uint8Array {
 		if (n > this.remaining()) {
 			throw new PdsError("NotEnoughData");

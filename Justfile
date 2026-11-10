@@ -9,6 +9,11 @@ nbt:
 	cargo run compile crates/nbt/nbt.pds rust --to crates/nbt/src/gen
 	cargo run compile crates/nbt/nbt.pds typescript --to ts/nbt/gen
 
-test: minecraft
+lang:
+	rm -rf crates/lang-tests/src/gen ts/lang-tests/gen
+	cargo run compile crates/lang-tests/lang.pds rust --to crates/lang-tests/src/gen
+	cargo run compile crates/lang-tests/lang.pds typescript --to ts/lang-tests/gen
+
+test: minecraft lang
 	cargo test --workspace
 	cd ts && deno test --allow-net

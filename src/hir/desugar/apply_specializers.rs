@@ -12,15 +12,15 @@
 //! are ordinary generic types, monomorphized like any other, with use-site value
 //! arguments staying on the reference.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{anyhow, Context, Result};
 
 use crate::{
 	ast::{Ident, Path},
 	hir::{
-		BodyDecl, FieldRefOrConst, HirSpecializerCtx, NamespaceItem, NativeType, Traverse,
-		TraverseSkip, TypeId, TypeKind, Visitor,
+		BodyDecl, Expr, HirSpecializerCtx, NamespaceItem, NativeType, Reference, ReferenceKind,
+		Traverse, TraverseSkip, TypeId, TypeKind, Visitor,
 	},
 	specializer::{Projection, Registry},
 };
@@ -29,11 +29,18 @@ use super::super::Namespace;
 
 /// Collect, for the whole tree: every type's absolute path -> id, and which ids are
 /// body-accepting specializer natives (id -> (specializer name, overload variant)).
+struct Template {
+	specializer: Ident,
+	variant: Ident,
+	decl: BodyDecl,
+	param_types: BTreeMap<Ident, TypeKind>,
+}
+
 fn collect(
 	ns: &Namespace,
 	path: &mut Vec<Ident>,
 	by_path: &mut HashMap<Path, TypeId>,
-	spec: &mut HashMap<TypeId, (Ident, Ident, BodyDecl)>,
+	spec: &mut HashMap<TypeId, Template>,
 ) {
 	for (name, item) in &ns.items {
 		match item {
@@ -58,7 +65,15 @@ fn collect(
 					..
 				}) = &t.kind
 				{
-					spec.insert(t.id(), (s.clone(), variant.clone(), decl.clone()));
+					spec.insert(
+						t.id(),
+						Template {
+							specializer: s.clone(),
+							variant: variant.clone(),
+							decl: decl.clone(),
+							param_types: t.param_types.clone(),
+						},
+					);
 				}
 			}
 		}
@@ -67,7 +82,7 @@ fn collect(
 
 struct Apply<'a> {
 	by_path: &'a HashMap<Path, TypeId>,
-	spec: &'a HashMap<TypeId, (Ident, Ident, BodyDecl)>,
+	spec: &'a HashMap<TypeId, Template>,
 }
 
 impl Visitor for Apply<'_> {
@@ -78,7 +93,13 @@ impl Visitor for Apply<'_> {
 		let Some(id) = r.ty.resolved() else {
 			return Ok(());
 		};
-		let Some((name, variant, decl)) = self.spec.get(&id) else {
+		let Some(Template {
+			specializer: name,
+			variant,
+			decl,
+			param_types,
+		}) = self.spec.get(&id)
+		else {
 			return Ok(());
 		};
 		decl.check(&mut r.body)
@@ -87,12 +108,33 @@ impl Visitor for Apply<'_> {
 			.asthir
 			.get(name.as_str())
 			.ok_or_else(|| anyhow!("no specializer implementation for {name:?}"))?;
+		let mut arg_types = Vec::new();
+		for (n, ty) in param_types {
+			let ty = match ty {
+				TypeKind::Reference(Reference {
+					ty: ReferenceKind::Generic(g),
+					..
+				}) => r
+					.types
+					.get(g)
+					.cloned()
+					.ok_or_else(|| {
+						anyhow!(
+							"argument {n:?} is a {g:?}: bind `{g:?}: <type>` or give it a typed value like `u8(...)`"
+						)
+					})?,
+				ty => ty.clone(),
+			};
+			arg_types.push((n.clone(), ty));
+		}
 		let mut const_args = Vec::new();
 		let mut ref_args = Vec::new();
 		for (n, a) in &r.args {
 			match a {
-				FieldRefOrConst::Const(c) => const_args.push((n.clone(), c.clone())),
-				FieldRefOrConst::FieldRef(f) => ref_args.push((n.clone(), f.clone())),
+				Expr::Const(c) if !param_types.contains_key(n) => {
+					const_args.push((n.clone(), c.clone()))
+				}
+				e => ref_args.push((n.clone(), e.clone())),
 			}
 		}
 
@@ -137,6 +179,7 @@ impl Visitor for Apply<'_> {
 			body,
 			const_args,
 			ref_args,
+			arg_types,
 			arg_virtuals,
 			is_void: false,
 			scalar: None,
@@ -171,7 +214,7 @@ mod tests {
 	use crate::{
 		ast::{FieldRefSegment, Ident},
 		hir::{
-			parse_ast, BodyField, FieldRefOrConst, HirSpecializerCtx, Namespace, NamespaceItem,
+			parse_ast, BodyField, Expr, HirSpecializerCtx, Namespace, NamespaceItem,
 			ReferenceKind, TypeKind, Value,
 		},
 		specializer::{register_protodef_types, AstHir, Registry},
@@ -258,7 +301,7 @@ mod tests {
 		let is_u8 = |f: &BodyField| matches!(&f.ty, Some(TypeKind::Reference(r)) if matches!(r.ty, ReferenceKind::Resolved(_)));
 
 		assert_eq!(a.constant("size"), Some(&Value::Number(8)));
-		let Some(FieldRefOrConst::FieldRef(at)) = a.args.get(&Ident::new("at")) else {
+		let Some(Expr::Field(at)) = a.args.get(&Ident::new("at")) else {
 			panic!("`at` should stay a reference: {a:?}");
 		};
 		assert_eq!(at.up, 0);

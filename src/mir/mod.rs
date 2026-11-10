@@ -13,13 +13,14 @@ use crate::{
 #[derive(Debug)]
 pub struct Type {
 	pub target: TypeId,
-	pub args: Vec<(Ident, FieldOrConst)>,
+	pub args: Vec<(Ident, Expr)>,
 }
 
 #[derive(Debug)]
 pub struct Definition {
 	pub name: Path,
 	pub params: Vec<(Ident, TypeId)>,
+	pub param_types: Vec<(Ident, TypeId)>,
 	pub kind: TypeKind,
 }
 
@@ -38,7 +39,8 @@ pub struct NativeType {
 	pub body: Vec<BodyItem>,
 	// Constant configuration arguments from the use-site (registryEntryHolder baseName)
 	pub const_args: Vec<(Ident, crate::hir::Value)>,
-	pub ref_args: Vec<(Ident, Field)>,
+	pub ref_args: Vec<(Ident, Expr)>,
+	pub arg_types: Vec<(Ident, TypeId)>,
 	pub arg_virtuals: Vec<Ident>,
 	pub is_void: bool,
 	pub scalar: Option<Ident>,
@@ -48,7 +50,7 @@ pub struct NativeType {
 pub struct BodyItem {
 	pub kind: Ident,
 	pub name: Option<Ident>,
-	pub args: Vec<(Ident, FieldOrConst)>,
+	pub args: Vec<(Ident, Expr)>,
 }
 impl BodyItem {
 	pub fn expect_name(&self) -> anyhow::Result<&Ident> {
@@ -56,7 +58,7 @@ impl BodyItem {
 			.as_ref()
 			.ok_or_else(|| anyhow::anyhow!("body item {:?} needs a name", self.kind))
 	}
-	pub fn arg(&self, name: &str) -> Option<&FieldOrConst> {
+	pub fn arg(&self, name: &str) -> Option<&Expr> {
 		self.args
 			.iter()
 			.find(|(n, _)| n.as_str() == name)
@@ -64,14 +66,8 @@ impl BodyItem {
 	}
 	pub fn constant(&self, name: &str) -> Option<&Value> {
 		match self.arg(name)? {
-			FieldOrConst::Const(v) => Some(v),
-			FieldOrConst::Field(_) => None,
-		}
-	}
-	pub fn field(&self, name: &str) -> Option<&Field> {
-		match self.arg(name)? {
-			FieldOrConst::Field(f) => Some(f),
-			FieldOrConst::Const(_) => None,
+			Expr::Const(v) => Some(v),
+			_ => None,
 		}
 	}
 }
@@ -159,16 +155,3 @@ impl std::fmt::Debug for Field {
 	}
 }
 
-#[derive(Clone, Debug)]
-pub enum FieldOrConst {
-	Field(Field),
-	Const(Value),
-}
-impl FieldOrConst {
-	pub fn as_field(&self) -> Option<&Field> {
-		match self {
-			FieldOrConst::Field(field) => Some(field),
-			FieldOrConst::Const(_) => None,
-		}
-	}
-}

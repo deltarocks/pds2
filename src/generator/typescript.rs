@@ -7,9 +7,9 @@ use genco::prelude::*;
 
 use super::common::{self, option_inner, sanitize, scalar_of};
 use super::GeneratorOutput;
-use crate::ast::{FieldRefSegment, Ident};
+use crate::ast::{BinOp, FieldRefSegment, Ident};
 use crate::hir::TypeId;
-use crate::mir::{self, Construction, Expr, Field, FieldOrConst, Type, TypeKind, TypeMap, Value};
+use crate::mir::{self, Construction, Expr, Field, Type, TypeKind, TypeMap, Value};
 use crate::specializer::expr::Elaborator;
 use crate::specializer::{LowerCx, Names, NativeCodegen, NativeCodegenCtx, Registry, Scalar};
 
@@ -159,12 +159,43 @@ fn read_reference(meta: &TsMeta, from_locals: bool, input: &Field) -> Tokens {
 fn read_or_const_reference(
 	meta: &TsMeta,
 	from_locals: bool,
-	input: &FieldOrConst,
+	input: &Expr,
 	param: TypeId,
 ) -> Tokens {
 	match input {
-		FieldOrConst::Field(field) => read_reference(meta, from_locals, field),
-		FieldOrConst::Const(value) => meta.literal(value, param),
+		Expr::Field(field) => read_reference(meta, from_locals, field),
+		Expr::Const(value) => meta.literal(value, param),
+		e => lower(meta, e, from_locals).expect("validated before codegen"),
+	}
+}
+
+fn wrap(s: Scalar, x: Tokens) -> Tokens {
+	match s {
+		Scalar::I8 => quote!((($x) << 24 >> 24)),
+		Scalar::U8 => quote!((($x) & 0xff)),
+		Scalar::I16 => quote!((($x) << 16 >> 16)),
+		Scalar::U16 => quote!((($x) & 0xffff)),
+		Scalar::I32 => quote!((($x) | 0)),
+		Scalar::U32 => quote!((($x) $(">>>") 0)),
+		Scalar::I64 => quote!(BigInt.asIntN(64, $x)),
+		Scalar::U64 => quote!(BigInt.asUintN(64, $x)),
+		Scalar::F32 => quote!(Math.fround($x)),
+		Scalar::F64 | Scalar::Bool => x,
+	}
+}
+
+fn numeric_cast(from: Scalar, to: Scalar, x: Tokens) -> Tokens {
+	let wide = |s: Scalar| matches!(s, Scalar::I64 | Scalar::U64);
+	let float = |s: Scalar| matches!(s, Scalar::F32 | Scalar::F64);
+	if float(to) {
+		return wrap(to, if wide(from) { quote!(Number($x)) } else { x });
+	}
+	let x = if float(from) { quote!(Math.trunc($x)) } else { x };
+	match (wide(from), wide(to)) {
+		(true, true) => wrap(to, x),
+		(false, true) => wrap(to, quote!(BigInt($x))),
+		(true, false) => wrap(to, quote!(Number(BigInt.asIntN(32, $x)))),
+		(false, false) => wrap(to, x),
 	}
 }
 
@@ -230,8 +261,27 @@ fn lower(meta: &TsMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 				reg: meta.reg,
 			}
 			.resolve(from);
-			let (n, codegen) = native_codegen(meta, from)?;
-			codegen.cast(&cx, from, n, rec(e)?, *to)?
+			let numeric = |t: TypeId| scalar_of(meta.types, t).filter(|s| *s != Scalar::Bool);
+			match (numeric(from), numeric(*to)) {
+				(Some(f), Some(t)) => numeric_cast(f, t, rec(e)?),
+				_ => {
+					let (n, codegen) = native_codegen(meta, from)?;
+					codegen.cast(&cx, from, n, rec(e)?, *to)?
+				}
+			}
+		}
+		Expr::Binary(op, a, b) => {
+			let ty = expr
+				.ty()
+				.ok_or_else(|| anyhow!("untyped arithmetic"))?;
+			let s = scalar_of(meta.types, ty)
+				.filter(|s| *s != Scalar::Bool)
+				.ok_or_else(|| anyhow!("arithmetic on a non-number"))?;
+			let (a, b) = (rec(a)?, rec(b)?);
+			match (op, s) {
+				(BinOp::Mul, Scalar::I32 | Scalar::U32) => wrap(s, quote!(Math.imul($a, $b))),
+				_ => wrap(s, quote!(($a $(op.symbol()) $b))),
+			}
 		}
 		Expr::Eq(a, b) => {
 			let scalar = |e: &Expr| e.ty().is_some_and(|t| scalar_of(meta.types, t).is_some());
@@ -249,6 +299,13 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 	let virtuals_used = common::virtuals_used(input);
 	let elab = Elaborator { types: input, reg };
 	let elaborated = common::elaborate(&elab)?;
+	for def in input.0.values() {
+		for e in def.exprs() {
+			if !matches!(e, Expr::Field(_) | Expr::Const(_)) {
+				lower(&meta, e, true).with_context(|| format!("in {:?}", def.name))?;
+			}
+		}
+	}
 
 	let pinput = &js::import("../pds.ts", "Input");
 	let poutput = &js::import("../pds.ts", "Output");
@@ -339,8 +396,7 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 								exprs: elaborated.exprs(*id),
 								cast_to: elaborated.cast_to(*id),
 								virtual_used: &virtual_used,
-								read_ref: &|f, from_locals| read_reference(&meta, from_locals, f),
-								read_arg: &|v, from_locals| {
+								read: &|v, from_locals| {
 									read_or_const_reference(&meta, from_locals, v, TypeId::default())
 								},
 								lower: &|e, from_locals| lower(&meta, e, from_locals),

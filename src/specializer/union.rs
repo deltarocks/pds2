@@ -12,7 +12,7 @@ use super::{
 use crate::ast::{FieldRefSegment, Ident};
 use crate::generator::common::sanitize;
 use crate::generator::rust::rname;
-use crate::hir::{HirSpecializerCtx, TypeId};
+use crate::hir::{self, HirSpecializerCtx, TypeId};
 use crate::mir::{self, Construction, Expr, TypeKind, TypeMap, Value};
 
 pub struct Union;
@@ -54,7 +54,7 @@ pub fn view(native: &mir::NativeType) -> Option<UnionView<'_>> {
 				.ref_args
 				.iter()
 				.find(|(n, _)| n.as_str() == "tag")
-				.map(|(_, f)| f)?,
+				.and_then(|(_, e)| e.as_field())?,
 		),
 		"inline" => TagView::Inline(
 			native
@@ -128,7 +128,15 @@ impl AstHir for Union {
 					.ok_or_else(|| anyhow!("inline union needs a `Tag` type"))?;
 				out.virtual_fields.push((Ident::new("tag"), tag.clone()));
 			}
-			"external" => out.arg_virtuals.push(Ident::new("tag")),
+			"external" => {
+				ensure!(
+					ctx.args
+						.iter()
+						.any(|(n, e)| n.as_str() == "tag" && matches!(e, hir::Expr::Field(_))),
+					"union `tag` should be a field reference"
+				);
+				out.arg_virtuals.push(Ident::new("tag"));
+			}
 			v => bail!("unknown union variant {v:?}"),
 		}
 		Ok(out)

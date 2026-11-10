@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, ensure, Result};
 
 use super::{Registry, Scalar};
+use crate::ast::BinOp;
 use crate::generator::common::{sanitize, scalar_of};
 use crate::hir::TypeId;
 use crate::mir::{self, Construction, Expr, TypeKind, TypeMap, Value};
@@ -124,8 +125,102 @@ impl Elaborator<'_> {
 		bail!("{value:?} can't be compared with {}", self.name(ty))
 	}
 
+	fn numeric(&self, ty: TypeId) -> Option<Scalar> {
+		scalar_of(self.types, ty).filter(|s| *s != Scalar::Bool)
+	}
+
+	fn operand(&self, e: Expr) -> Result<Expr> {
+		match e {
+			Expr::Const(_) => Ok(e),
+			e => self.elaborate(e),
+		}
+	}
+
+	fn typed(&self, e: Expr, ty: TypeId) -> Result<Expr> {
+		match e {
+			Expr::Const(v) => self
+				.construct(ty, &v)
+				.ok_or_else(|| anyhow!("{v:?} can't be constructed as {}", self.name(ty))),
+			e => Ok(e),
+		}
+	}
+
+	pub fn coerce(&self, e: Expr, ty: TypeId) -> Result<Expr> {
+		let e = self.typed(self.operand(e)?, ty)?;
+		let got = e
+			.ty()
+			.ok_or_else(|| anyhow!("expected {}, got an untyped value", self.name(ty)))?;
+		ensure!(
+			self.resolve(got) == self.resolve(ty),
+			"expected {}, got {}; cast it explicitly",
+			self.name(ty),
+			self.name(got)
+		);
+		Ok(e)
+	}
+
+	fn binary(&self, op: BinOp, a: Expr, b: Expr) -> Result<Expr> {
+		let (a, b) = (self.operand(a)?, self.operand(b)?);
+		if let (Expr::Const(x), Expr::Const(y)) = (&a, &b) {
+			let int = |v: &Value| match v {
+				Value::Signed(n) => Some(*n),
+				Value::Unsigned(n) => i128::try_from(*n).ok(),
+				_ => None,
+			};
+			let (Some(x), Some(y)) = (int(x), int(y)) else {
+				bail!("{} needs numbers, got {x:?} and {y:?}", op.symbol());
+			};
+			let n = op
+				.eval(x, y)
+				.ok_or_else(|| anyhow!("{x} {} {y} overflows", op.symbol()))?;
+			return Ok(Expr::Const(Value::Signed(n)));
+		}
+		let ty = a
+			.ty()
+			.or_else(|| b.ty())
+			.ok_or_else(|| anyhow!("{} of untyped operands", op.symbol()))?;
+		let (a, b) = (self.typed(a, ty)?, self.typed(b, ty)?);
+		let (ta, tb) = (a.ty().map(|t| self.resolve(t)), b.ty().map(|t| self.resolve(t)));
+		ensure!(
+			ta == tb,
+			"{} of different types {:?} and {:?}, cast one explicitly",
+			op.symbol(),
+			ta.map(|t| self.name(t)),
+			tb.map(|t| self.name(t))
+		);
+		ensure!(
+			self.numeric(ty).is_some(),
+			"{} needs numbers, got {}",
+			op.symbol(),
+			self.name(ty)
+		);
+		Ok(Expr::Binary(op, Box::new(a), Box::new(b)))
+	}
+
+	fn cast(&self, e: Expr, to: TypeId) -> Result<Expr> {
+		let e = self.operand(e)?;
+		if let Expr::Const(_) = e {
+			return self.typed(e, to);
+		}
+		let from = e
+			.ty()
+			.ok_or_else(|| anyhow!("cast of an untyped expression"))?;
+		if self.resolve(from) == self.resolve(to) {
+			return Ok(e);
+		}
+		let numeric = self.numeric(from).is_some() && self.numeric(to).is_some();
+		ensure!(
+			numeric || self.casts(from).contains(&to),
+			"{} can't be cast to {}",
+			self.name(from),
+			self.name(to)
+		);
+		Ok(Expr::Cast(Box::new(e), to))
+	}
+
 	pub fn elaborate(&self, expr: Expr) -> Result<Expr> {
 		Ok(match expr {
+			Expr::Binary(op, a, b) => self.binary(op, *a, *b)?,
 			Expr::Eq(a, b) => match (*a, *b) {
 				(Expr::Const(a), Expr::Const(b)) => bail!("{a:?} compared with {b:?}"),
 				(x, Expr::Const(v)) | (Expr::Const(v), x) => self.compare(self.elaborate(x)?, &v)?,
@@ -141,19 +236,7 @@ impl Elaborator<'_> {
 					Expr::Eq(Box::new(a), Box::new(b))
 				}
 			},
-			Expr::Cast(e, to) => {
-				let e = self.elaborate(*e)?;
-				let from = e
-					.ty()
-					.ok_or_else(|| anyhow!("cast of an untyped expression"))?;
-				ensure!(
-					self.casts(from).contains(&to),
-					"{} can't be cast to {}",
-					self.name(from),
-					self.name(to)
-				);
-				Expr::Cast(Box::new(e), to)
-			}
+			Expr::Cast(e, to) => self.cast(*e, to)?,
 			Expr::Const(v) => bail!("constant {v:?} needs a type"),
 			e => e,
 		})
@@ -213,7 +296,7 @@ mod tests {
 		let mut reg = Registry::default();
 		register_protodef_types(&mut reg);
 		let ast = crate::ast::parse(SRC).unwrap();
-		let types = mir::from_hir(&crate::hir::parse_ast(ast, &reg).unwrap()).unwrap();
+		let types = mir::from_hir(&crate::hir::parse_ast(ast, &reg).unwrap(), &reg).unwrap();
 		let elab = Elaborator {
 			types: &types,
 			reg: &reg,

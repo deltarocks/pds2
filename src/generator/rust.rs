@@ -6,9 +6,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::ast::{FieldRefSegment, Ident};
+use crate::ast::{BinOp, FieldRefSegment, Ident};
 use crate::hir::TypeId;
-use crate::mir::FieldOrConst;
 use crate::mir::{self, Construction, Expr, Field, Type, TypeKind, TypeMap, Value};
 
 use super::boxing::{self, Boxed};
@@ -148,23 +147,27 @@ pub(crate) fn rname(i: &Ident) -> Tokens {
 fn generate_read_or_const_reference(
 	types: &RustMeta,
 	from_locals: bool,
-	input: &FieldOrConst,
+	input: &Expr,
 	target: Option<&Tokens>,
 ) -> Tokens {
 	let input = match input {
-		FieldOrConst::Field(field) => field,
-		FieldOrConst::Const(mir::Value::Signed(n)) => {
+		Expr::Field(field) => field,
+		Expr::Const(mir::Value::Signed(n)) => {
 			return quote!(&($(n.to_string())).try_into().expect("constant fits"))
 		}
-		FieldOrConst::Const(mir::Value::Unsigned(n)) => {
+		Expr::Const(mir::Value::Unsigned(n)) => {
 			return quote!(&($(n.to_string())).try_into().expect("constant fits"))
 		}
-		FieldOrConst::Const(mir::Value::Bool(b)) => return quote!(&$(b.to_string())),
-		FieldOrConst::Const(mir::Value::String(s)) => {
+		Expr::Const(mir::Value::Bool(b)) => return quote!(&$(b.to_string())),
+		Expr::Const(mir::Value::String(s)) => {
 			return quote!(&$(quoted(s.as_str())).to_owned())
 		}
-		FieldOrConst::Const(mir::Value::UnionDescriminator(id)) => {
+		Expr::Const(mir::Value::UnionDescriminator(id)) => {
 			unreachable!("union discriminator constant {id:?} as an argument")
+		}
+		e => {
+			let value = lower(types, e, from_locals).expect("validated before codegen");
+			return quote!(&($value));
 		}
 	};
 	generate_read_reference(types, from_locals, input, target)
@@ -302,8 +305,31 @@ fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 				reg: meta.reg,
 			}
 			.resolve(from);
-			let (n, codegen) = native_codegen(meta, from)?;
-			codegen.cast(&cx, from, n, rec(e)?, *to)?
+			let numeric = |t: TypeId| scalar_of(meta.types, t).is_some_and(|s| s != Scalar::Bool);
+			if numeric(from) && numeric(*to) {
+				quote!((($(rec(e)?)) as $(meta.ty(*to))))
+			} else {
+				let (n, codegen) = native_codegen(meta, from)?;
+				codegen.cast(&cx, from, n, rec(e)?, *to)?
+			}
+		}
+		Expr::Binary(op, a, b) => {
+			let ty = expr
+				.ty()
+				.ok_or_else(|| anyhow!("untyped arithmetic"))?;
+			let (a, b) = (rec(a)?, rec(b)?);
+			match scalar_of(meta.types, ty) {
+				Some(Scalar::F32 | Scalar::F64) => quote!(($a $(op.symbol()) $b)),
+				Some(Scalar::Bool) | None => bail!("arithmetic on a non-number"),
+				Some(_) => {
+					let method = match op {
+						BinOp::Add => "wrapping_add",
+						BinOp::Sub => "wrapping_sub",
+						BinOp::Mul => "wrapping_mul",
+					};
+					quote!(($a).$method($b))
+				}
+			}
 		}
 		Expr::Eq(a, b) => quote!(($(rec(a)?) == $(rec(b)?))),
 	})
@@ -315,6 +341,13 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 	let virtuals_used = common::virtuals_used(input);
 	let elab = Elaborator { types: input, reg };
 	let elaborated = common::elaborate(&elab)?;
+	for def in input.0.values() {
+		for e in def.exprs() {
+			if !matches!(e, Expr::Field(_) | Expr::Const(_)) {
+				lower(&meta, e, true).with_context(|| format!("in {:?}", def.name))?;
+			}
+		}
+	}
 
 	let mut out_module = vec![];
 
@@ -417,10 +450,7 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 							exprs: elaborated.exprs(*id),
 							cast_to: elaborated.cast_to(*id),
 							virtual_used: &virtual_used,
-							read_ref: &|f, from_locals| {
-								generate_read_reference(&meta, from_locals, f, None)
-							},
-							read_arg: &|v, from_locals| {
+							read: &|v, from_locals| {
 								generate_read_or_const_reference(&meta, from_locals, v, None)
 							},
 							lower: &|e, from_locals| lower(&meta, e, from_locals),

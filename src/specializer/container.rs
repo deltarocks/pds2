@@ -7,15 +7,15 @@ use super::{AstHir, BoxCost, Embed, NativeCodegen, NativeCodegenCtx, NativeLayou
 use crate::ast::{FieldRefSegment, Ident};
 use crate::generator::common::local;
 use crate::generator::rust::rname;
-use crate::hir::{self, FieldRefOrConst, HirSpecializerCtx, TypeId};
-use crate::mir::{self, FieldOrConst, TypeKind, TypeMap};
+use crate::hir::{self, HirSpecializerCtx, TypeId};
+use crate::mir::{self, Expr, TypeKind, TypeMap};
 
 pub struct Container;
 
 pub struct ContainerField<'a> {
 	pub name: &'a Ident,
 	pub ty: &'a mir::Type,
-	pub load_from: Option<&'a mir::Field>,
+	pub load_from: Option<&'a Expr>,
 }
 
 pub fn view(native: &mir::NativeType) -> Option<Vec<ContainerField<'_>>> {
@@ -30,7 +30,7 @@ pub fn view(native: &mir::NativeType) -> Option<Vec<ContainerField<'_>>> {
 		.map(|(item, (name, ty))| {
 			let load_from = match item.kind.as_str() {
 				"field" => None,
-				"virtual_field" => Some(item.field("value")?),
+				"virtual_field" => Some(item.arg("value")?),
 				_ => return None,
 			};
 			Some(ContainerField {
@@ -54,8 +54,8 @@ impl AstHir for Container {
 				let name = f.expect_name()?;
 				if f.kind.as_str() == "virtual_field" {
 					ensure!(
-						matches!(f.args.get(&Ident::new("value")), Some(FieldRefOrConst::FieldRef(_))),
-						"virtual_field {name:?} needs a reference `value`"
+						!matches!(f.args.get(&Ident::new("value")), Some(hir::Expr::Const(_)) | None),
+						"virtual_field {name:?} needs a `value` computed from the container"
 					);
 				}
 				let ty =
@@ -83,7 +83,7 @@ fn assert_tag_arg<'a>(
 	types: &'a TypeMap,
 	siblings: &[ContainerField],
 	field: &'a ContainerField,
-) -> Option<&'a FieldOrConst> {
+) -> Option<&'a Expr> {
 	if field.load_from.is_some() {
 		return None;
 	}
@@ -107,20 +107,24 @@ fn assert_tag_arg<'a>(
 	// closure-converted param (threaded only at deserialize time, e.g. a
 	// bitflags field passed down through an array) is not available in
 	// serialize, so skip the check there.
-	if let FieldOrConst::Field(f) = val {
+	let mut readable = true;
+	val.walk(&mut |e| {
+		let Expr::Field(f) = e else {
+			return;
+		};
 		match f.0.first().map(|i| &i.segment) {
-			Some(FieldRefSegment::Arg(_)) => return None,
+			Some(FieldRefSegment::Arg(_)) => readable = false,
 			Some(FieldRefSegment::Down { to, .. })
 				if siblings
 					.iter()
 					.any(|s| s.name == to && s.load_from.is_some()) =>
 			{
-				return None
+				readable = false
 			}
 			_ => {}
 		}
-	}
-	Some(val)
+	});
+	readable.then_some(val)
 }
 
 impl NativeCodegen<Rust> for Container {
@@ -137,14 +141,14 @@ impl NativeCodegen<Rust> for Container {
 			quote! {
 				$(names.item(field.ty.target, "debug_assert_tag"))(
 					&_0.$(rname(field.name)),
-					$((ctx.read_arg)(val, false)),
+					$((ctx.read)(val, false)),
 				);
 			}
 		};
 		let value_of = |field: &ContainerField| -> rust::Tokens {
 			match field.load_from {
 				None => quote!(&_0.$(rname(field.name))),
-				Some(from) => (ctx.read_ref)(from, false),
+				Some(from) => (ctx.read)(from, false),
 			}
 		};
 		Ok(quote! {
@@ -178,7 +182,7 @@ impl NativeCodegen<Rust> for Container {
 				)
 				$(for field in fields.iter().filter(|f| f.load_from.is_some()) join($['\r']) =>
 					debug_assert!(
-						&$(local(field.name)) == $((ctx.read_ref)(field.load_from.unwrap(), true)),
+						&$(local(field.name)) == $((ctx.read)(field.load_from.unwrap(), true)),
 						$(quoted(format!("virtual field {} does not match its value source", field.name.as_str())))
 					);
 				)
@@ -222,13 +226,13 @@ impl NativeCodegen<JavaScript> for Container {
 				return quote!();
 			};
 			quote! {
-				$(names.item(field.ty.target, "assert_tag"))(_0.$(field.name.as_str()), $((ctx.read_arg)(val, false)));
+				$(names.item(field.ty.target, "assert_tag"))(_0.$(field.name.as_str()), $((ctx.read)(val, false)));
 			}
 		};
 		let value_of = |field: &ContainerField| -> js::Tokens {
 			match field.load_from {
 				None => quote!(_0.$(field.name.as_str())),
-				Some(from) => (ctx.read_ref)(from, false),
+				Some(from) => (ctx.read)(from, false),
 			}
 		};
 		let stored: Vec<&ContainerField> = fields.iter().filter(|f| f.load_from.is_none()).collect();
@@ -248,7 +252,7 @@ impl NativeCodegen<JavaScript> for Container {
 					const $(local(f.name)) = $(names.deserialize(f.ty.target))(input$(args_of(f.ty)));
 				)
 				$(for f in fields.iter().filter(|f| f.load_from.is_some()) join($['\r']) =>
-					if (!$pequal($(local(f.name)), $((ctx.read_ref)(f.load_from.unwrap(), true)))) {
+					if (!$pequal($(local(f.name)), $((ctx.read)(f.load_from.unwrap(), true)))) {
 						throw new $perror("InvalidValue", $(quoted(format!("virtual field {} does not match its value source", f.name.as_str()))));
 					}
 				)

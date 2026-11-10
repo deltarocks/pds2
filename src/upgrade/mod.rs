@@ -54,6 +54,7 @@ pub fn parse_reference(r: &str, extra_ups: usize) -> Result<ast::FieldRef> {
 pub struct NativeSigVariant {
 	/// value (lowercase) parameters, declared as `argument(name)`
 	pub args: BTreeSet<String>,
+	pub arg_types: BTreeMap<String, &'static str>,
 	/// type (uppercase) parameters, declared as `type(Name)`
 	pub generics: BTreeSet<String>,
 	/// whether the native receives a chained `=> T` element type (the `Value` generic)
@@ -648,11 +649,12 @@ pub fn upgrade_type(value: Value, ctx: &mut UpgradeCtx) -> Result<Vec<ast::Value
 fn native_variant(sig: &NativeSigVariant) -> Vec<Statement> {
 	let mut statements = Vec::new();
 	for arg in &sig.args {
-		statements.push(simple_stmt(
-			Item::simple_builder("argument")
-				.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(arg.as_str())))
-				.build_values(),
-		));
+		let item = Item::simple_builder("argument")
+			.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(arg.as_str())));
+		statements.push(simple_stmt(match sig.arg_types.get(arg) {
+			Some(ty) => item.then(vec![ast::Value::new_simple_item(*ty)]),
+			None => item.build_values(),
+		}));
 	}
 	for generic in &sig.generics {
 		statements.push(simple_stmt(

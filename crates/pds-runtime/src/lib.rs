@@ -42,6 +42,9 @@ impl<'i> Input<'i> {
 	pub fn skip(&self) {
 		self.offset.set(self.offset.get() + 1)
 	}
+	pub fn rewind(&self, offset: usize) {
+		self.offset.set(offset)
+	}
 }
 
 #[derive(Default)]

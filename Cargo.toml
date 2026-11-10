@@ -27,5 +27,6 @@ members = [
 	"crates/minecraft-protocol",
 	"crates/minecraft-proxy",
 	"crates/nbt",
+	"crates/lang-tests",
 	"crates/pds-runtime",
 ]

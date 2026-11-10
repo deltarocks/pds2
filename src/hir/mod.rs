@@ -1,4 +1,4 @@
-use crate::ast::{FieldRef, Ident, Path};
+use crate::ast::{BinOp, FieldRef, Ident, Path};
 use crate::specializer::Registry;
 use std::{cell::Cell, collections::BTreeMap};
 mod from_ast;
@@ -168,7 +168,8 @@ pub struct NativeType {
 	/// constant configuration arguments captured at the use-site when the reference
 	/// was inlined (`registryEntryHolder(baseName: "patternId") { ... }`)
 	pub const_args: Vec<(Ident, Value)>,
-	pub ref_args: Vec<(Ident, FieldRef)>,
+	pub ref_args: Vec<(Ident, Expr)>,
+	pub arg_types: Vec<(Ident, TypeKind)>,
 	pub arg_virtuals: Vec<Ident>,
 	/// `is_void;` in the def_native block: the type carries no data.
 	pub is_void: bool,
@@ -205,9 +206,12 @@ impl Traverse for NativeType {
 				.with_context(|| format!("type({n:?})"))?;
 		}
 		for (n, r) in self.ref_args.iter_mut() {
-			visitor
-				.visit_field_ref(r)
+			r.traverse(visitor, skip, reg)
 				.with_context(|| format!("argument {n:?}"))?;
+		}
+		for (n, t) in self.arg_types.iter_mut() {
+			t.traverse(visitor, skip, reg)
+				.with_context(|| format!("argument {n:?} type"))?;
 		}
 		for f in self.body.iter_mut() {
 			for (n, a) in f.args.iter_mut() {
@@ -274,11 +278,30 @@ impl ReferenceKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum FieldRefOrConst {
-	FieldRef(FieldRef),
+pub enum Expr {
+	Field(FieldRef),
 	Const(Value),
+	Binary(BinOp, Box<Expr>, Box<Expr>),
+	Cast(Box<Expr>, Box<TypeKind>),
 }
-impl Traverse for FieldRefOrConst {
+impl Expr {
+	pub fn types_mut(&mut self) -> Vec<&mut TypeKind> {
+		match self {
+			Expr::Field(_) | Expr::Const(_) => vec![],
+			Expr::Binary(_, a, b) => {
+				let mut out = a.types_mut();
+				out.extend(b.types_mut());
+				out
+			}
+			Expr::Cast(e, t) => {
+				let mut out = e.types_mut();
+				out.push(t);
+				out
+			}
+		}
+	}
+}
+impl Traverse for Expr {
 	fn traverse(
 		&mut self,
 		visitor: &mut impl Visitor,
@@ -286,8 +309,16 @@ impl Traverse for FieldRefOrConst {
 		reg: &Registry,
 	) -> Result<()> {
 		match self {
-			FieldRefOrConst::FieldRef(field_ref) => visitor.visit_field_ref(field_ref),
-			FieldRefOrConst::Const(value) => value.traverse(visitor, skip, reg),
+			Expr::Field(field_ref) => visitor.visit_field_ref(field_ref),
+			Expr::Const(value) => value.traverse(visitor, skip, reg),
+			Expr::Binary(_, a, b) => {
+				a.traverse(visitor, skip, reg)?;
+				b.traverse(visitor, skip, reg)
+			}
+			Expr::Cast(e, t) => {
+				e.traverse(visitor, skip, reg)?;
+				t.traverse(visitor, skip, reg)
+			}
 		}
 	}
 }
@@ -298,7 +329,7 @@ pub struct BodyField {
 	/// the statement head (`field`, `flag`, ...), interpreted by the specializer
 	pub kind: Ident,
 	pub name: Option<Ident>,
-	pub args: BTreeMap<Ident, FieldRefOrConst>,
+	pub args: BTreeMap<Ident, Expr>,
 	/// chained element type, if the body item carries one (`field(x) => u8`)
 	pub ty: Option<TypeKind>,
 }
@@ -310,8 +341,8 @@ impl BodyField {
 	}
 	pub fn constant(&self, name: &str) -> Option<&Value> {
 		match self.args.get(&Ident::new(name))? {
-			FieldRefOrConst::Const(v) => Some(v),
-			FieldRefOrConst::FieldRef(_) => None,
+			Expr::Const(v) => Some(v),
+			_ => None,
 		}
 	}
 }
@@ -382,7 +413,7 @@ impl BodyDecl {
 				let default = default
 					.clone()
 					.ok_or_else(|| anyhow!("{kind:?} needs argument {a:?}"))?;
-				f.args.insert(a.clone(), FieldRefOrConst::Const(default));
+				f.args.insert(a.clone(), Expr::Const(default));
 			}
 			match (&decl.value, &mut f.ty) {
 				(None, Some(_)) => bail!("{kind:?} takes no `=> type`"),
@@ -398,10 +429,27 @@ impl BodyDecl {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Reference {
 	pub ty: ReferenceKind,
-	pub args: Vec<(Ident, FieldRefOrConst)>,
+	pub args: Vec<(Ident, Expr)>,
 	pub types: BTreeMap<Ident, TypeKind>,
 	/// body of a use-site reference to a body-accepting native, consumed by its specializer
 	pub body: Vec<BodyField>,
+}
+impl Reference {
+	pub fn nested_types_mut(&mut self) -> Vec<&mut TypeKind> {
+		let mut out: Vec<&mut TypeKind> = self.types.values_mut().collect();
+		for (_, a) in self.args.iter_mut() {
+			out.extend(a.types_mut());
+		}
+		for f in self.body.iter_mut() {
+			for a in f.args.values_mut() {
+				out.extend(a.types_mut());
+			}
+			if let Some(t) = &mut f.ty {
+				out.push(t);
+			}
+		}
+		out
+	}
 }
 impl Traverse for Reference {
 	fn traverse(
@@ -476,6 +524,7 @@ impl Traverse for TypeKind {
 pub struct Type {
 	_id: Cell<TypeId>,
 	pub params: Vec<Ident>,
+	pub param_types: BTreeMap<Ident, TypeKind>,
 	pub types: BTreeMap<Ident, Option<TypeKind>>,
 	pub kind: TypeKind,
 	/// `export;` in the def block: keep this def in the output even when it is a
@@ -505,6 +554,9 @@ impl Traverse for Type {
 			if let Some(t) = t {
 				visitor.visit_type_kind(t, reg)?;
 			}
+		}
+		for (_, t) in self.param_types.iter_mut() {
+			visitor.visit_type_kind(t, reg)?;
 		}
 		self.kind.traverse(visitor, skip, reg)?;
 
@@ -537,6 +589,7 @@ impl Type {
 		Self {
 			_id: Cell::new(id.into_inner()),
 			params,
+			param_types: BTreeMap::new(),
 			types,
 			kind,
 			export: false,
@@ -566,7 +619,7 @@ pub struct HirSpecializerCtx<'a> {
 	/// generic bindings of the reference (e.g. `Value` -> the wrapped integer type)
 	pub types: &'a BTreeMap<Ident, TypeKind>,
 	/// value arguments of the reference
-	pub args: &'a [(Ident, FieldRefOrConst)],
+	pub args: &'a [(Ident, Expr)],
 	/// resolve a top-level native type by name to its id
 	pub resolve: &'a dyn Fn(&str) -> Option<TypeId>,
 }

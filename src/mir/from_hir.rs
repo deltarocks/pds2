@@ -1,12 +1,13 @@
 use crate::{
 	ast::{FieldRef, Ident, Path},
-	hir::{self, FieldRefOrConst, Reference, ReferenceKind, TypeId},
+	hir::{self, Reference, ReferenceKind, TypeId},
 	mir::{self, FieldItem},
+	specializer::Registry,
 };
 use anyhow::Result;
 use std::collections::HashMap;
 
-use super::{Definition, Field, FieldOrConst, NativeType, Type, TypeKind, TypeMap, Value};
+use super::{Definition, Expr, Field, NativeType, Type, TypeKind, TypeMap, Value};
 
 impl Type {
 	fn from_hir(kind: &hir::TypeKind) -> Self {
@@ -22,7 +23,7 @@ impl Type {
 					target: *target,
 					args: args
 						.iter()
-						.map(|(n, r)| (n.clone(), FieldOrConst::from_hir(r)))
+						.map(|(n, r)| (n.clone(), Expr::from_hir(r)))
 						.collect(),
 				}
 			}
@@ -79,7 +80,7 @@ impl TypeKind {
 						args: b
 							.args
 							.iter()
-							.map(|(n, a)| (n.clone(), FieldOrConst::from_hir(a)))
+							.map(|(n, a)| (n.clone(), Expr::from_hir(a)))
 							.collect(),
 					})
 					.collect(),
@@ -87,7 +88,12 @@ impl TypeKind {
 				ref_args: native
 					.ref_args
 					.iter()
-					.map(|(n, r)| (n.clone(), Field::from_hir(r)))
+					.map(|(n, r)| (n.clone(), Expr::from_hir(r)))
+					.collect(),
+				arg_types: native
+					.arg_types
+					.iter()
+					.map(|(n, t)| (n.clone(), Type::from_hir(t).target))
 					.collect(),
 				arg_virtuals: native.arg_virtuals.clone(),
 				is_void: native.is_void,
@@ -106,13 +112,22 @@ impl Definition {
 	fn from_hir(name: Path, hir: &hir::Type) -> Result<Self> {
 		assert!(hir.id().is_valid());
 
+		let param_types: Vec<(Ident, TypeId)> = hir
+			.param_types
+			.iter()
+			.map(|(n, t)| (n.clone(), Type::from_hir(t).target))
+			.collect();
 		Ok(Definition {
 			name,
 			params: hir
 				.params
 				.iter()
-				.map(|p| (p.clone(), TypeId::default()))
+				.map(|p| {
+					let declared = param_types.iter().find(|(n, _)| n == p).map(|(_, t)| *t);
+					(p.clone(), declared.unwrap_or_default())
+				})
 				.collect(),
+			param_types,
 			kind: TypeKind::from_hir(&hir.kind)?,
 		})
 	}
@@ -137,11 +152,17 @@ impl Field {
 	}
 }
 
-impl FieldOrConst {
-	fn from_hir(hir: &FieldRefOrConst) -> Self {
+impl Expr {
+	fn from_hir(hir: &hir::Expr) -> Self {
 		match hir {
-			FieldRefOrConst::FieldRef(field_ref) => FieldOrConst::Field(Field::from_hir(field_ref)),
-			FieldRefOrConst::Const(value) => FieldOrConst::Const(Value::from_hir(value)),
+			hir::Expr::Field(field_ref) => Expr::Field(Field::from_hir(field_ref)),
+			hir::Expr::Const(value) => Expr::Const(Value::from_hir(value)),
+			hir::Expr::Binary(op, a, b) => {
+				Expr::Binary(*op, Box::new(Expr::from_hir(a)), Box::new(Expr::from_hir(b)))
+			}
+			hir::Expr::Cast(e, t) => {
+				Expr::Cast(Box::new(Expr::from_hir(e)), Type::from_hir(t).target)
+			}
 		}
 	}
 }
@@ -171,11 +192,11 @@ pub fn from_hir_internal(
 	Ok(())
 }
 
-pub fn from_hir(hir: &hir::Namespace) -> Result<TypeMap> {
+pub fn from_hir(hir: &hir::Namespace, reg: &Registry) -> Result<TypeMap> {
 	let mut out = HashMap::new();
 	from_hir_internal(hir, &mut Vec::new(), &mut out)?;
 	let mut out = TypeMap(out.into_iter().collect());
 	super::pass::resolve_types(&mut out)?;
-	super::pass::remove_delegation(&mut out)?;
+	super::pass::elaborate(&mut out, reg)?;
 	Ok(out)
 }

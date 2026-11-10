@@ -87,7 +87,7 @@ impl Visitor for FindGenericTypeReferences<'_> {
 			for name in captured {
 				value.args.push((
 					name.clone(),
-					crate::hir::FieldRefOrConst::FieldRef(crate::ast::FieldRef {
+					crate::hir::Expr::Field(crate::ast::FieldRef {
 						up: 0,
 						path: crate::ast::BaseFieldRef(vec![crate::ast::FieldRefSegment::Arg(
 							name.clone(),

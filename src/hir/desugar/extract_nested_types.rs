@@ -45,7 +45,7 @@ use anyhow::Result;
 use crate::{
 	ast::{BaseFieldRef, FieldRef, FieldRefSegment, Ident},
 	hir::{
-		FieldRefOrConst, IdGenerator, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip,
+		Expr, IdGenerator, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip,
 		Type, TypeKind, Visitor,
 	},
 	specializer::Registry,
@@ -87,13 +87,14 @@ impl Visitor for TypeReceiver {
 				args: collector
 					.args
 					.into_iter()
-					.map(|(i, f)| (i, FieldRefOrConst::FieldRef(f)))
+					.map(|(i, f)| (i, Expr::Field(f)))
 					.collect(),
 				types: BTreeMap::new(),
 				body: vec![],
 			}),
 		);
 		self.extracted.push(Type {
+			param_types: BTreeMap::new(),
 			_id: Cell::new(id),
 			types: BTreeMap::new(),
 			params: collector.params,

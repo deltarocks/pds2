@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 
 use crate::ast::{FieldRefSegment, Ident};
 use crate::hir::TypeId;
-use crate::mir::{self, Expr, Field, FieldOrConst, TypeKind, TypeMap};
+use crate::mir::{self, Expr, TypeKind, TypeMap};
 use crate::specializer::{expr::Elaborator, Scalar};
 
 /// Sanitize an arbitrary string (`minecraft:foo`) into an identifier, mirroring the
@@ -95,12 +95,17 @@ pub fn option_inner(input: &TypeMap, id: TypeId) -> Option<TypeId> {
 
 pub fn virtuals_used(input: &TypeMap) -> HashSet<(TypeId, Ident)> {
 	let mut out = HashSet::new();
-	let mut scan = |f: &Field| {
-		for item in &f.0 {
-			if let FieldRefSegment::Virtual(n) = &item.segment {
-				out.insert((item.from.get(), n.clone()));
+	let mut scan = |e: &Expr| {
+		e.walk(&mut |e| {
+			let Expr::Field(f) = e else {
+				return;
+			};
+			for item in &f.0 {
+				if let FieldRefSegment::Virtual(n) = &item.segment {
+					out.insert((item.from.get(), n.clone()));
+				}
 			}
-		}
+		})
 	};
 	for def in input.0.values() {
 		let mut uses: Vec<&mir::Type> = Vec::new();
@@ -109,14 +114,12 @@ pub fn virtuals_used(input: &TypeMap) -> HashSet<(TypeId, Ident)> {
 				uses.extend(n.specialization.iter().map(|(_, t)| t));
 				uses.extend(n.fields.iter().map(|(_, t)| t));
 				uses.extend(n.virtual_fields.iter().map(|(_, t)| t));
-				for (_, f) in &n.ref_args {
-					scan(f);
+				for (_, e) in &n.ref_args {
+					scan(e);
 				}
 				for item in &n.body {
 					for (_, a) in &item.args {
-						if let FieldOrConst::Field(f) = a {
-							scan(f);
-						}
+						scan(a);
 					}
 				}
 			}
@@ -124,9 +127,7 @@ pub fn virtuals_used(input: &TypeMap) -> HashSet<(TypeId, Ident)> {
 		}
 		for u in uses {
 			for (_, arg) in &u.args {
-				if let FieldOrConst::Field(f) = arg {
-					scan(f);
-				}
+				scan(arg);
 			}
 		}
 	}

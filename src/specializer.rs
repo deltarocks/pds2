@@ -141,8 +141,7 @@ pub struct NativeCodegenCtx<'a, L: Lang> {
 	pub exprs: &'a [mir::Expr],
 	pub cast_to: &'a [TypeId],
 	pub virtual_used: &'a dyn Fn(&str) -> bool,
-	pub read_ref: &'a dyn Fn(&mir::Field, bool) -> Tokens<L>,
-	pub read_arg: &'a dyn Fn(&mir::FieldOrConst, bool) -> Tokens<L>,
+	pub read: &'a dyn Fn(&mir::Expr, bool) -> Tokens<L>,
 	pub lower: &'a dyn Fn(&mir::Expr, bool) -> Result<Tokens<L>>,
 }
 
@@ -1394,6 +1393,20 @@ impl NativeLayout for EntityMetadataLoop {
 		visit_specialization(native, VALUE, Embed::Indirect, v);
 	}
 }
+fn terminator<L: Lang>(ctx: &NativeCodegenCtx<L>) -> Result<(TypeId, Tokens<L>)> {
+	let end = ctx
+		.native
+		.ref_args
+		.iter()
+		.find(|(n, _)| n.as_str() == "end")
+		.map(|(_, e)| e)
+		.ok_or_else(|| anyhow!("terminated array needs `end`, declared as `argument(end) => <type>`"))?;
+	let ty = end
+		.ty()
+		.ok_or_else(|| anyhow!("terminator `end` has no type, declare `argument(end) => <type>`"))?;
+	Ok((ty, (ctx.lower)(end, false)?))
+}
+
 impl NativeCodegen<Rust> for EntityMetadataLoop {
 	fn inline_ty(
 		&self,
@@ -1411,20 +1424,7 @@ impl NativeCodegen<Rust> for EntityMetadataLoop {
 		let ty = self
 			.inline_ty(ctx.id, ctx.native, ctx.names)
 			.context("terminated array type")?;
-		let end = match ctx
-			.native
-			.const_args
-			.iter()
-			.find(|(n, _)| n.as_str() == "end")
-		{
-			Some((_, hir::Value::Number(n))) => {
-				u8::try_from(*n).map_err(|_| anyhow!("terminator {n} does not fit a byte"))?
-			}
-			other => bail!("terminated array needs a constant byte `end`, got {other:?}"),
-		};
-		let end = end.to_string();
-		let u8id =
-			(ctx.resolve)("u8").ok_or_else(|| anyhow!("terminated array needs the `u8` native"))?;
+		let (end_ty, end) = terminator(ctx)?;
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 		Ok(quote! {
@@ -1434,20 +1434,21 @@ impl NativeCodegen<Rust> for EntityMetadataLoop {
 				for e in _0.iter() {
 					$(ctx.names.serialize(value))(e, output)?;
 				}
-				$(ctx.names.serialize(u8id))(&$(&end), output)
+				$(ctx.names.serialize(end_ty))(&$(&end), output)
 			}
 			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
 				let mut out = Vec::new();
 				loop {
-					if input.peek()? == $(&end) {
-						input.skip();
+					let at = input.offset();
+					if $(ctx.names.deserialize(end_ty))(input)? == $(&end) {
 						return Ok(out);
 					}
+					input.rewind(at);
 					out.push($(ctx.deserialize_call(value_use))?);
 				}
 			}
 			pub fn size_of(_0: &Ty) -> usize {
-				let mut n = 1;
+				let mut n = $(ctx.names.size_of(end_ty))(&$(&end));
 				for e in _0.iter() { n += $(ctx.names.size_of(value))(e); }
 				n
 			}
@@ -1479,10 +1480,35 @@ impl Upgrade for EntityMetadataLoop {
 				value_generic: true,
 				accepts_body: Some(""),
 				args: BTreeSet::from_iter(["end".to_owned()]),
-				..Default::default()
+				arg_types: BTreeMap::from_iter([("end".to_owned(), "End")]),
+				generics: BTreeSet::from_iter(["End".to_owned()]),
 			},
 			..Default::default()
 		}
+	}
+
+	// https://github.com/PrismarineJS/node-minecraft-protocol/blob/master/src/datatypes/compiler-minecraft.js
+	fn upgrade(&self, data: &[serde_json::Value], ctx: &mut UpgradeCtx) -> Result<Vec<ast::Value>> {
+		ensure!(data.len() == 1, "entityMetadataLoop should have exactly one argument");
+		let obj = data[0]
+			.as_object()
+			.ok_or_else(|| anyhow!("entityMetadataLoop needs an object"))?;
+		let end = obj
+			.get("endVal")
+			.ok_or_else(|| anyhow!("entityMetadataLoop missing endVal"))?;
+		let ty = obj
+			.get("type")
+			.ok_or_else(|| anyhow!("entityMetadataLoop missing type"))?;
+		let end = ast::Item::simple_builder("u8")
+			.argsb(ast::ItemArgs::builder().arg(ctx.upgrade_value(end)?))
+			.build_values()
+			.remove(0);
+		Ok(ast::Item::simple_builder("entityMetadataLoop")
+			.argsb(ast::ItemArgs::builder().named("end", end))
+			.then(
+				ctx.wrapped(|ctx| ctx.upgrade_type(ty.clone()))
+					.context("entityMetadataLoop value")?,
+			))
 	}
 }
 struct OptionP;
@@ -1695,12 +1721,10 @@ impl Upgrade for Container {
 		NativeSig {
 			specializer: Some("container".to_owned()),
 			default: NativeSigVariant {
-				args: BTreeSet::new(),
-				generics: BTreeSet::new(),
-				value_generic: false,
 				accepts_body: Some(
 					"item(field) { type(Value); }; item(virtual_field) { argument(value); type(Value); };",
 				),
+				..Default::default()
 			},
 			..Default::default()
 		}

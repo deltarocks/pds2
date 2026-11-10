@@ -14,28 +14,52 @@
 
 use std::collections::BTreeMap;
 
-use crate::ast::{BaseFieldRef, FieldRefSegment, Ident};
+use crate::ast::{FieldRefSegment, Ident};
 use crate::hir::{
-	FieldRefOrConst, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip, Type, TypeId,
+	Expr, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip, Type, TypeId,
 	TypeKind, Visitor,
 };
 use crate::specializer::Registry;
 use anyhow::Result;
 
-/// How one target argument of an alias is produced from the alias's own arguments.
-#[derive(Debug)]
-enum RemapArg {
-	/// take the use-site value of the alias parameter, descend by the path suffix
-	/// (`def(p, x) => thing(a: $x.inner)` remaps target arg `a` from param `x` via `.inner`)
-	Arg(Ident, BaseFieldRef),
-	Const(crate::hir::Value),
-}
-
 #[derive(Debug)]
 struct Alias {
 	target: TypeId,
 	/// target argument name -> how to build it from the use-site arguments
-	remap_arguments: BTreeMap<Ident, RemapArg>,
+	remap_arguments: BTreeMap<Ident, Expr>,
+}
+
+fn substitute(template: &Expr, supplied: &[(Ident, Expr)]) -> Expr {
+	match template {
+		Expr::Field(r) => {
+			assert_eq!(r.up, 0);
+			let mut suffix = r.path.clone();
+			let first_segment = suffix.0.remove(0);
+			let FieldRefSegment::Arg(param) = first_segment else {
+				panic!("first segment should be arg, got {first_segment:?}")
+			};
+			let (_, value) = supplied
+				.iter()
+				.find(|(n, _)| n == &param)
+				.unwrap_or_else(|| panic!("alias use-site is missing argument {param:?}"));
+			if suffix.0.is_empty() {
+				return value.clone();
+			}
+			let Expr::Field(value) = value else {
+				panic!("alias remap through a path needs a field reference")
+			};
+			let mut value = value.clone();
+			value.path.0.extend_from_slice(&suffix.0);
+			Expr::Field(value)
+		}
+		Expr::Const(c) => Expr::Const(c.clone()),
+		Expr::Binary(op, a, b) => Expr::Binary(
+			*op,
+			Box::new(substitute(a, supplied)),
+			Box::new(substitute(b, supplied)),
+		),
+		Expr::Cast(e, t) => Expr::Cast(Box::new(substitute(e, supplied)), t.clone()),
+	}
 }
 
 struct CollectAliasList<'t> {
@@ -67,23 +91,7 @@ impl Visitor for CollectAliasList<'_> {
 			let resolved = ty.resolved().unwrap();
 			let remap_arguments = args
 				.iter()
-				.map(|(name, value)| {
-					(
-						name.clone(),
-						match value {
-							FieldRefOrConst::FieldRef(value) => {
-								assert_eq!(value.up, 0);
-								let mut refer = value.path.clone();
-								let first_segment = refer.0.remove(0);
-								let FieldRefSegment::Arg(arg) = first_segment else {
-									panic!("first segment should be arg, got {first_segment:?}")
-								};
-								RemapArg::Arg(arg, refer)
-							}
-							FieldRefOrConst::Const(c) => RemapArg::Const(c.clone()),
-						},
-					)
-				})
+				.map(|(name, value)| (name.clone(), value.clone()))
 				.collect();
 			if self
 				.aliases
@@ -127,26 +135,8 @@ impl Visitor for ReplaceAliasedReferences<'_> {
 			let args = alias
 				.remap_arguments
 				.iter()
-				.map(|(target_name, remap)| {
-					let arg = match remap {
-						RemapArg::Arg(param, suffix) => {
-							let supplied = value
-								.args
-								.iter()
-								.find(|(n, _)| n == param)
-								.unwrap_or_else(|| {
-									panic!("alias use-site is missing argument {param:?}")
-								});
-							let FieldRefOrConst::FieldRef(supplied) = &supplied.1 else {
-								panic!("alias remap through a path needs a field reference")
-							};
-							let mut supplied = supplied.clone();
-							supplied.path.0.extend_from_slice(&suffix.0);
-							FieldRefOrConst::FieldRef(supplied)
-						}
-						RemapArg::Const(c) => FieldRefOrConst::Const(c.clone()),
-					};
-					(target_name.clone(), arg)
+				.map(|(target_name, template)| {
+					(target_name.clone(), substitute(template, &value.args))
 				})
 				.collect();
 			*value = Reference {

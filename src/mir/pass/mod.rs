@@ -1,4 +1,4 @@
-mod remove_delegation;
+mod elaborate;
 mod resolve_types;
-pub use remove_delegation::remove_delegation;
+pub use elaborate::elaborate;
 pub use resolve_types::resolve_types;

@@ -254,7 +254,7 @@ fn try_main() -> anyhow::Result<()> {
 				dbg!(&hir);
 			}
 
-			let mir = mir::from_hir(&hir)?;
+			let mir = mir::from_hir(&hir, &reg)?;
 
 			if print_mir {
 				dbg!(&mir);

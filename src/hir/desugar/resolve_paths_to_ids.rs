@@ -108,13 +108,8 @@ impl TypeKind {
 					};
 					r.ty = ReferenceKind::Resolved(id);
 				}
-				for (_, ty) in r.types.iter_mut() {
+				for ty in r.nested_types_mut() {
 					ty.resolve_paths_to_ids(paths)?;
-				}
-				for f in r.body.iter_mut() {
-					if let Some(ty) = &mut f.ty {
-						ty.resolve_paths_to_ids(paths)?;
-					}
 				}
 			}
 			TypeKind::Native(NativeType {
@@ -127,6 +122,7 @@ impl TypeKind {
 				body: _,
 				const_args: _,
 				ref_args: _,
+				arg_types: _,
 				arg_virtuals: _,
 				is_void: _,
 				scalar: _,
@@ -157,6 +153,9 @@ impl Type {
 			if let Some(t) = t {
 				t.resolve_paths_to_ids(paths)?;
 			}
+		}
+		for (_, t) in self.param_types.iter_mut() {
+			t.resolve_paths_to_ids(paths)?;
 		}
 		self.kind.resolve_paths_to_ids(paths)
 	}
