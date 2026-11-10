@@ -2,7 +2,8 @@ use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::encode::{int_of, Encoder, Encoding, Val};
+use pds2_core::specializer::decode::Input;
+use pds2_core::specializer::encode::{int_of, Encoder, Encoding, Target, Val};
 use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
 use pds2_core::specializer::{
 	specialization_use, AstHir, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout,
@@ -130,6 +131,22 @@ impl ValueModel for Enum {
 	fn casts(&self, _cx: &Elaborator, _id: TypeId, native: &mir::NativeType) -> Vec<TypeId> {
 		view(native).map(|e| vec![e.tag.target]).unwrap_or_default()
 	}
+	fn literal(
+		&self,
+		cx: &Elaborator,
+		_id: TypeId,
+		native: &mir::NativeType,
+		c: &Construction,
+	) -> Result<Expr> {
+		let e = view_of(native)?;
+		match c {
+			Construction::Variant(n, payload) if *n == e.unknown => match payload.as_slice() {
+				[number] => cx.literal(number),
+				_ => bail!("unknown enum value without its number"),
+			},
+			c => cx.construction_literal(c),
+		}
+	}
 }
 
 impl Encoder for Enum {
@@ -137,6 +154,15 @@ impl Encoder for Enum {
 		let e = view_of(v.native)?;
 		let n = number_of(cx.elab, &e, v.c)?;
 		cx.encode_use(e.tag, &n, &v.scope(), out).context("enum number")
+	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let e = view_of(t.native)?;
+		let tag = cx.decode_use(e.tag, &t.scope(), input).context("enum number")?;
+		let n = int_of(&tag).ok_or_else(|| anyhow!("enum number {} is not a number", describe(&tag)))?;
+		Ok(match e.values.iter().find(|(_, m)| *m == n) {
+			Some((v, _)) => Construction::Variant((*v).clone(), vec![]),
+			None => Construction::Variant(e.unknown.clone(), vec![tag]),
+		})
 	}
 	fn cast(&self, cx: &Encoding, v: &Val, to: TypeId) -> Result<Expr> {
 		let e = view_of(v.native)?;

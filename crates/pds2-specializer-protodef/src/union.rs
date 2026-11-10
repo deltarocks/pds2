@@ -4,7 +4,8 @@ use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::encode::{Encoder, Encoding, Scope, Val};
+use pds2_core::specializer::decode::Input;
+use pds2_core::specializer::encode::{Encoder, Encoding, Scope, Target, Val};
 use pds2_core::specializer::expr::{value_eq, Elaborator, ValueModel};
 use pds2_core::specializer::{
 	AstHir, BoxCost, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, Projection,
@@ -350,6 +351,48 @@ impl Encoder for Union {
 		};
 		cx.encode_use(ty, &value, &scope, out)
 			.with_context(|| format!("variant {name:?}"))
+	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let u = view(t.native).ok_or_else(|| anyhow!("malformed union"))?;
+		let scope = t.scope();
+		let tag = match u.tag {
+			TagView::Inline(ty) => cx.decode_use(ty, &scope, input).context("tag")?,
+			TagView::External(f) => cx.eval(&Expr::Field(f.clone()), &scope).context("tag")?,
+		};
+		let conds = cx.elab.exprs(t.id)?;
+		let vars = [(Ident::new(TAG), tag.clone())];
+		let tagged = Scope {
+			vars: &vars,
+			..scope
+		};
+		let mut matching = None;
+		for ((_, arm, ty), cond) in u.arms.iter().zip(&conds) {
+			if cx.truthy(cond, &tagged)? {
+				matching = Some((*arm, *ty));
+				break;
+			}
+		}
+		let (name, ty, mut payload) = match (matching, u.default) {
+			(Some((arm, ty)), _) => (arm, ty, vec![]),
+			(None, Some((default, ty))) => (default, ty, vec![tag]),
+			(None, None) => bail!(
+				"{} has no variant for tag {}",
+				cx.name(t.id),
+				pds2_core::specializer::expr::describe(&tag)
+			),
+		};
+		if !cx.types().is_void(ty.target) {
+			let partial = Construction::Variant(name.clone(), payload.clone());
+			let scope = Scope {
+				value: Some((t.id, &partial)),
+				..scope
+			};
+			let value = cx
+				.decode_use(ty, &scope, input)
+				.with_context(|| format!("variant {name:?}"))?;
+			payload.push(value);
+		}
+		Ok(Construction::Variant(name.clone(), payload))
 	}
 	fn virtual_field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
 		ensure!(name.as_str() == "tag", "{} has no virtual field {name:?}", cx.name(v.id));

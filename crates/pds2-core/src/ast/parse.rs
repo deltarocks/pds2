@@ -127,7 +127,16 @@ rule string_singleline() -> String
 	= quiet! { "\"" chars:stringChar()* "\"" _ { chars.into_iter().collect() } }
 	/ expected!("string")
 rule stringChar() -> char
-	= !['"' | '\n'] c:$[_] { c.chars().next().unwrap() }
+	= "\\\\" { '\\' }
+	/ "\\\"" { '"' }
+	/ "\\n" { '\n' }
+	/ "\\r" { '\r' }
+	/ "\\t" { '\t' }
+	/ "\\0" { '\0' }
+	/ "\\u{" h:$(['0'..='9' | 'a'..='f' | 'A'..='F']*<1,6>) "}" {?
+		u32::from_str_radix(h, 16).ok().and_then(char::from_u32).ok_or("unicode scalar value")
+	}
+	/ !['"' | '\n' | '\\'] c:$[_] { c.chars().next().unwrap() }
 pub rule reference_segment() -> FieldRefSegment
 	= "@" id:baseIdent() { FieldRefSegment::Virtual(id) }
 	/ "$" id:baseIdent() { FieldRefSegment::Arg(id) }

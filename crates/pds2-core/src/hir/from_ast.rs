@@ -93,14 +93,20 @@ pub fn arg_value(value: Value) -> Result<Expr> {
 			if item.block.is_empty()
 				&& !item.name.absolute
 				&& item.name.path.is_empty()
-				&& item.name.item.as_str() == "serialized" =>
+				&& matches!(item.name.item.as_str(), "serialized" | "deserialized") =>
 		{
+			let op = item.name.item.as_str();
 			ensure!(
 				item.args.positional_count() == 1 && item.args.named_names().next().is_none(),
-				"`serialized(value)` takes one value"
+				"`{op}(value)` takes one value"
 			);
-			let value: Value = item.args.arg(0, "serialized value")?;
-			Expr::Serialized(Box::new(arg_value(value)?))
+			let value: Value = item.args.arg(0, op)?;
+			let value = Box::new(arg_value(value)?);
+			if op == "serialized" {
+				Expr::Serialized(value)
+			} else {
+				Expr::Deserialized(value)
+			}
 		}
 		Value::Item(item) if item.block.is_empty() && !item.args.is_empty() => {
 			let operand = match item.args.positional_count() {

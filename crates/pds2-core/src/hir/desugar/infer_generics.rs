@@ -15,9 +15,12 @@ fn syntactic_type(e: &Expr) -> Option<TypeKind> {
 	match e {
 		Expr::Cast(_, t) => Some((**t).clone()),
 		Expr::Binary(_, a, b) => syntactic_type(a).or_else(|| syntactic_type(b)),
-		Expr::Field(_) | Expr::Const(_) | Expr::Record(_) | Expr::List(_) | Expr::Serialized(_) => {
-			None
-		}
+		Expr::Field(_)
+		| Expr::Const(_)
+		| Expr::Record(_)
+		| Expr::List(_)
+		| Expr::Serialized(_)
+		| Expr::Deserialized(_) => None,
 	}
 }
 

@@ -5,6 +5,7 @@ use genco::lang::{rust, JavaScript, Lang, Rust};
 use genco::prelude::*;
 use genco::Tokens;
 
+pub mod decode;
 pub mod encode;
 pub mod expr;
 pub mod reflect;

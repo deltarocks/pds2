@@ -8,11 +8,12 @@ use pds2_core::ast::{self, Ident, Statement};
 use pds2_core::generator::rust::rname;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, Value};
-use pds2_core::specializer::encode::{int_of, Args, Encoder, Encoding, Val};
+use pds2_core::specializer::decode::Input;
+use pds2_core::specializer::encode::{int_of, Args, Encoder, Encoding, Target, Val};
 use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
 use pds2_core::specializer::reflect::{
-	self, bytes_of, count_arg, encode_bytes, encode_items, list_of, record_fields, record_of,
-	use_of, variant_name,
+	self, bytes_of, count_arg, decode_bytes, decode_count, decode_items, encode_bytes,
+	encode_items, list_of, record_fields, record_of, use_of, variant_name,
 };
 use pds2_core::specializer::{
 	construct_vec, list_value, pds_io, specialization_use, vec_of_value, visit_fields,
@@ -879,6 +880,18 @@ impl Encoder for OptionP {
 		}
 		Ok(())
 	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let present = cx.decode(cx.resolve_name("bool")?, &Args::new(), input)?;
+		Ok(match int_of(&present) {
+			Some(0) => Construction::Variant(Ident::new("none"), vec![]),
+			Some(_) => Construction::Wrap(Box::new(cx.decode_use(
+				use_of(t.native, VALUE)?,
+				&t.scope(),
+				input,
+			)?)),
+			None => bail!("option presence {} is not a bool", describe(&present)),
+		})
+	}
 }
 
 impl Encoder for Array {
@@ -892,6 +905,10 @@ impl Encoder for Array {
 			count_arg(v, items.len())?;
 		}
 		encode_items(cx, v, items, out)
+	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let n = decode_count(cx, t, input)?;
+		Ok(Construction::List(decode_items(cx, t, n, input)?))
 	}
 	fn virtual_field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
 		let (_, ty) = v
@@ -941,6 +958,33 @@ impl Encoder for Bitfield {
 		let bytes: Vec<u8> = (0..total / 8).rev().map(|i| (acc >> (i * 8)) as u8).collect();
 		encode_bytes(cx, &bytes, out)
 	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let entries = bitfield_entries(&t.native.body)?;
+		let total: u32 = entries.iter().map(|e| e.size).sum();
+		ensure!(total % 8 == 0, "bitfield does not pack into whole bytes: {total} bits");
+		let acc = decode_bytes(cx, (total / 8) as usize, input)?
+			.into_iter()
+			.fold(0u128, |acc, b| (acc << 8) | u128::from(b));
+		let mut shift = total;
+		let mut fields = Vec::new();
+		for e in &entries {
+			shift -= e.size;
+			let raw = ((acc >> shift) & ((1u128 << e.size) - 1)) as i128;
+			let n = if e.signed && raw >> (e.size - 1) == 1 {
+				raw - (1i128 << e.size)
+			} else {
+				raw
+			};
+			let (_, ty) = t
+				.native
+				.fields
+				.iter()
+				.find(|(f, _)| *f == e.name)
+				.ok_or_else(|| anyhow!("bitfield lacks field {:?}", e.name))?;
+			fields.push((e.name.clone(), cx.number(ty.target, n)?));
+		}
+		Ok(Construction::Record(fields))
+	}
 }
 
 impl ValueModel for Bitflags {
@@ -976,6 +1020,21 @@ impl ValueModel for Bitflags {
 			.collect::<Result<_>>()?;
 		Ok(Construction::Record(fields))
 	}
+	fn literal(
+		&self,
+		_cx: &Elaborator,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &Construction,
+	) -> Result<Expr> {
+		Ok(Expr::List(
+			record_of(c)?
+				.iter()
+				.filter(|(_, on)| int_of(on) == Some(1))
+				.map(|(n, _)| Expr::Const(Value::UnionDescriminator(n.clone())))
+				.collect(),
+		))
+	}
 }
 
 impl Encoder for Bitflags {
@@ -992,6 +1051,25 @@ impl Encoder for Bitflags {
 		}
 		let value = use_of(v.native, VALUE)?;
 		cx.encode_use(value, &cx.number(value.target, acc)?, &v.scope(), out)
+	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let value = cx.decode_use(use_of(t.native, VALUE)?, &t.scope(), input)?;
+		let n = int_of(&value).ok_or_else(|| anyhow!("{} is not a number", describe(&value)))?;
+		let flags = &t.native.fields;
+		ensure!(
+			n >> flags.len() == 0,
+			"bitflags {n:#x} set bits beyond its {} flags",
+			flags.len()
+		);
+		let fields = flags
+			.iter()
+			.enumerate()
+			.map(|(i, (name, ty))| {
+				let on = cx.elab.build(ty.target, &Expr::Const(Value::Bool(n >> i & 1 == 1)))?;
+				Ok((name.clone(), on))
+			})
+			.collect::<Result<_>>()?;
+		Ok(Construction::Record(fields))
 	}
 }
 
@@ -1024,6 +1102,10 @@ impl Encoder for Buffer {
 			count_arg(v, bytes.len())?;
 		}
 		encode_bytes(cx, bytes, out)
+	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let n = decode_count(cx, t, input)?;
+		Ok(Construction::Literal(Value::Bytes(decode_bytes(cx, n, input)?)))
 	}
 	fn virtual_field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
 		let (_, ty) = v
@@ -1062,5 +1144,12 @@ impl Encoder for PString {
 		let n = cx.number(count.target, bytes.len() as i128)?;
 		cx.encode_use(count, &n, &v.scope(), out).context("length")?;
 		encode_bytes(cx, bytes, out)
+	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let count = use_of(t.native, "Count")?;
+		let n = cx.decode_use(count, &t.scope(), input).context("length")?;
+		let bytes = decode_bytes(cx, cx.count(&n).context("length")?, input)?;
+		let s = String::from_utf8(bytes).map_err(|e| anyhow!("{} is not UTF-8: {e}", cx.name(t.id)))?;
+		Ok(Construction::Literal(Value::String(s)))
 	}
 }

@@ -140,4 +140,19 @@ mod tests {
 		let v = roundtrip(pds_Widened::deserialize, pds_Widened::serialize, &widened).unwrap();
 		assert_eq!(v.items, vec![1, 2, 3, 0xffff]);
 	}
+
+	#[test]
+	fn compile_time_deserialization_matches_values() {
+		assert_eq!(pds_decoded_counted::value(), pds_sample_counted::value());
+		assert_eq!(pds_decoded_words::value(), pds_sample_words::value());
+		assert_eq!(pds_decoded_choices::value(), pds_sample_choices::value());
+		assert_eq!(pds_decoded_tagged::value(), pds_sample_tagged::value());
+		assert_eq!(pds_decoded_default::value(), pds_sample_default::value());
+		assert_eq!(pds_decoded_packed::value(), pds_sample_packed::value());
+		assert_eq!(pds_decoded_flagset::value(), pds_sample_flagset::value());
+		assert_eq!(pds_decoded_blob::value(), pds_sample_blob::value());
+		assert_eq!(pds_decoded_holders::value(), pds_sample_holders::value());
+		assert_eq!(pds_decoded_loop::value(), pds_sample_loop::value());
+		assert_eq!(pds_decoded_top_bits::value(), pds_sample_top_bits::value());
+	}
 }

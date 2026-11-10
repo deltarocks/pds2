@@ -13,6 +13,7 @@ pub enum Expr {
 	Record(Vec<(Ident, Expr)>),
 	List(Vec<Expr>),
 	Serialized(Box<Expr>),
+	Deserialized(Box<Expr>),
 	Construct(TypeId, Construction),
 	Cast(Box<Expr>, TypeId),
 	Binary(BinOp, Box<Expr>, Box<Expr>),
@@ -34,14 +35,20 @@ impl Expr {
 			Expr::Var(_, t) | Expr::Construct(t, _) | Expr::Cast(_, t) => Some(*t),
 			Expr::Field(f) => f.0.last().map(|i| i.to.get()),
 			Expr::Binary(_, a, b) => a.ty().or_else(|| b.ty()),
-			Expr::Const(_) | Expr::Record(_) | Expr::List(_) | Expr::Serialized(_) | Expr::Eq(..) => {
-				None
-			}
+			Expr::Const(_)
+			| Expr::Record(_)
+			| Expr::List(_)
+			| Expr::Serialized(_)
+			| Expr::Deserialized(_)
+			| Expr::Eq(..) => None,
 		}
 	}
 
 	pub fn is_untyped_literal(&self) -> bool {
-		matches!(self, Expr::Const(_) | Expr::Record(_) | Expr::List(_))
+		matches!(
+			self,
+			Expr::Const(_) | Expr::Record(_) | Expr::List(_) | Expr::Deserialized(_)
+		)
 	}
 
 	pub fn as_field(&self) -> Option<&Field> {
@@ -67,9 +74,10 @@ impl Expr {
 				}
 			}
 			Expr::Construct(_, Construction::Literal(_)) => {}
-			Expr::Construct(_, Construction::Wrap(e)) | Expr::Cast(e, _) | Expr::Serialized(e) => {
-				e.walk(f)
-			}
+			Expr::Construct(_, Construction::Wrap(e))
+			| Expr::Cast(e, _)
+			| Expr::Serialized(e)
+			| Expr::Deserialized(e) => e.walk(f),
 			Expr::Binary(_, a, b) | Expr::Eq(a, b) => {
 				a.walk(f);
 				b.walk(f);

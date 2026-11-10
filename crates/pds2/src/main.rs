@@ -1,3 +1,4 @@
+use std::io::Write as _;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context as _};
@@ -76,6 +77,21 @@ enum Protobuf {
 		root: Vec<String>,
 		#[arg(long)]
 		to: PathBuf,
+	},
+	/// Encode a value written in pds syntax to binary, written to stdout
+	Encode {
+		schema: PathBuf,
+		/// Type of the value, when it isn't written as `root::Type(...)`
+		#[arg(long = "type")]
+		ty: Option<String>,
+		value: PathBuf,
+	},
+	/// Decode a binary value to pds syntax, written to stdout
+	Decode {
+		schema: PathBuf,
+		#[arg(long = "type")]
+		ty: String,
+		value: PathBuf,
 	},
 }
 
@@ -201,6 +217,26 @@ fn main() {
 					.map_err(|e| anyhow!("decoding {}: {e:?}", from.display()))?;
 				std::fs::write(&to, pds2_specializer_protobuf::convert(&set, &root)?)?;
 				info!("wrote {}", to.display());
+			}
+			Opts::Protobuf(Protobuf::Encode { schema, ty, value }) => {
+				let bytes = pds2_cli::encode(
+					&std::fs::read_to_string(&schema)?,
+					ty.as_deref(),
+					&std::fs::read_to_string(&value)?,
+					&pds2::registry(),
+				)
+				.with_context(|| format!("encoding {}", value.display()))?;
+				std::io::stdout().write_all(&bytes)?;
+			}
+			Opts::Protobuf(Protobuf::Decode { schema, ty, value }) => {
+				let text = pds2_cli::decode(
+					&std::fs::read_to_string(&schema)?,
+					&ty,
+					&std::fs::read(&value)?,
+					&pds2::registry(),
+				)
+				.with_context(|| format!("decoding {}", value.display()))?;
+				print!("{text}");
 			}
 		}
 		Ok(())

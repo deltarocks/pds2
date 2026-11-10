@@ -137,18 +137,50 @@ fn field_type<'a>(
 	Ok((path(decl), Some(full.as_str())))
 }
 
+type Extensions<'a> = BTreeMap<String, Vec<(String, &'a FieldDescriptorProto)>>;
+
+fn collect_extensions<'a>(
+	out: &mut Extensions<'a>,
+	scope: &str,
+	fields: &'a [FieldDescriptorProto],
+) -> Result<()> {
+	for f in fields {
+		let extendee = f
+			.extendee
+			.as_deref()
+			.ok_or_else(|| anyhow!("extension {:?} without an extendee", f.name))?;
+		out.entry(extendee.to_owned())
+			.or_default()
+			.push((format!("{scope}.{}", name(&f.name)?), f));
+	}
+	Ok(())
+}
+
+fn collect_message_extensions<'a>(
+	out: &mut Extensions<'a>,
+	scope: &str,
+	msg: &'a DescriptorProto,
+) -> Result<()> {
+	let full = format!("{scope}.{}", name(&msg.name)?);
+	collect_extensions(out, &full, &msg.extension)?;
+	for nested in &msg.nested_type {
+		collect_message_extensions(out, &full, nested)?;
+	}
+	Ok(())
+}
+
 fn message(
 	out: &mut String,
 	decls: &BTreeMap<String, Decl>,
 	local: &str,
 	msg: &DescriptorProto,
+	extensions: &[(String, &FieldDescriptorProto)],
 ) -> Result<()> {
 	write!(out, "def({local}) => message {{")?;
+	let mut taken = BTreeSet::new();
 	for f in &msg.field {
 		let fname = name(&f.name)?;
-		let number = f.number.ok_or_else(|| anyhow!("field {fname} without a number"))?;
-		let (ty, _) = field_type(decls, f).with_context(|| format!("field {fname}"))?;
-		let repeated = matches!(f.label, Some(Label::LABEL_REPEATED));
+		taken.insert(fname.to_owned());
 		let oneof = match (f.oneof_index, f.proto3_optional) {
 			(Some(i), None | Some(false)) => Some(
 				msg.oneof_decl
@@ -158,15 +190,34 @@ fn message(
 			),
 			_ => None,
 		};
-		match (repeated, oneof) {
-			(true, _) => write!(out, "repeated({fname}, number: {number}) => {ty};")?,
-			(false, Some(g)) => {
-				write!(out, "oneof({fname}, number: {number}, group: \"{g}\") => {ty};")?
-			}
-			(false, None) => write!(out, "field({fname}, number: {number}) => {ty};")?,
+		message_field(out, decls, fname, f, oneof)?;
+	}
+	for (full, f) in extensions {
+		let mut fname = full.trim_start_matches('.').replace('.', "_");
+		while !taken.insert(fname.clone()) {
+			fname.push('_');
 		}
+		message_field(out, decls, &fname, f, None).with_context(|| format!("extension {full}"))?;
 	}
 	writeln!(out, "}};")?;
+	Ok(())
+}
+
+fn message_field(
+	out: &mut String,
+	decls: &BTreeMap<String, Decl>,
+	fname: &str,
+	f: &FieldDescriptorProto,
+	oneof: Option<&str>,
+) -> Result<()> {
+	let number = f.number.ok_or_else(|| anyhow!("field {fname} without a number"))?;
+	let (ty, _) = field_type(decls, f).with_context(|| format!("field {fname}"))?;
+	let repeated = matches!(f.label, Some(Label::LABEL_REPEATED));
+	match (repeated, oneof) {
+		(true, _) => write!(out, "repeated({fname}, number: {number}) => {ty};")?,
+		(false, Some(g)) => write!(out, "oneof({fname}, number: {number}, group: \"{g}\") => {ty};")?,
+		(false, None) => write!(out, "field({fname}, number: {number}) => {ty};")?,
+	}
 	Ok(())
 }
 
@@ -202,6 +253,7 @@ impl Namespace {
 
 pub fn convert(set: &FileDescriptorSet, roots: &[String]) -> Result<String> {
 	let mut decls = BTreeMap::new();
+	let mut extensions = Extensions::new();
 	let mut queue = VecDeque::new();
 	for file in &set.file {
 		let package: Vec<String> = file
@@ -213,8 +265,10 @@ pub fn convert(set: &FileDescriptorSet, roots: &[String]) -> Result<String> {
 		let scope = package.iter().fold(String::new(), |s, p| format!("{s}.{p}"));
 		let is_root = roots.is_empty() || roots.iter().any(|r| file.name.as_deref() == Some(r));
 		let before: BTreeSet<String> = decls.keys().cloned().collect();
+		collect_extensions(&mut extensions, &scope, &file.extension)?;
 		for msg in &file.message_type {
 			collect_message(&mut decls, &package, &scope, "", msg)?;
+			collect_message_extensions(&mut extensions, &scope, msg)?;
 		}
 		for e in &file.enum_type {
 			let en = name(&e.name)?;
@@ -245,7 +299,8 @@ pub fn convert(set: &FileDescriptorSet, roots: &[String]) -> Result<String> {
 			..
 		}) = decls.get(&full)
 		{
-			for f in &m.field {
+			let extended = extensions.get(&full).into_iter().flatten().map(|(_, f)| *f);
+			for f in m.field.iter().chain(extended) {
 				if let (_, Some(dep)) = field_type(&decls, f)
 					.with_context(|| format!("in {full}"))?
 				{
@@ -260,7 +315,13 @@ pub fn convert(set: &FileDescriptorSet, roots: &[String]) -> Result<String> {
 		let decl = &decls[full];
 		let mut def = String::new();
 		match decl.kind {
-			Kind::Message(m) => message(&mut def, &decls, &decl.local, m),
+			Kind::Message(m) => message(
+				&mut def,
+				&decls,
+				&decl.local,
+				m,
+				extensions.get(full).map_or(&[], Vec::as_slice),
+			),
 			Kind::Enum(e) => enumeration(&mut def, &decl.local, e),
 		}
 		.with_context(|| format!("in {full}"))?;

@@ -2,7 +2,8 @@ use anyhow::{anyhow, bail, ensure, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::encode::{Encoder, Encoding, Val};
+use pds2_core::specializer::decode::Input;
+use pds2_core::specializer::encode::{Encoder, Encoding, Target, Val};
 use pds2_core::specializer::expr::{Elaborator, ValueModel};
 use pds2_core::specializer::{
 	AstHir, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor, VALUE,
@@ -53,6 +54,11 @@ impl Encoder for Const {
 		let value_use = pds2_core::specializer::specialization_use(v.native, VALUE)
 			.ok_or_else(|| anyhow!("const needs its `Value` type"))?;
 		cx.encode_use(value_use, inner(v.c)?, &v.scope(), out)
+	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let value_use = pds2_core::specializer::specialization_use(t.native, VALUE)
+			.ok_or_else(|| anyhow!("const needs its `Value` type"))?;
+		Ok(Construction::Wrap(Box::new(cx.decode_use(value_use, &t.scope(), input)?)))
 	}
 }
 

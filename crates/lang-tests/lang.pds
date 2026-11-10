@@ -361,3 +361,35 @@ def(encoded_tagged) => const(value: serialized(Tagged(k: (b: 9), v: (y: 5), o: 3
 def(encoded_default) => const(value: serialized(Tagged(k: 7, v: z, o: none, w: (default: none)))) => bytes;
 
 def(encoded_widened) => const(value: serialized(Widened(n: 2, items: [1, 2, 3, 0xffff]))) => bytes;
+
+def(decoded_counted) => const(value: Counted(deserialized(b"\x03\x07\x08")));
+
+def(decoded_words) => const(value: Words(deserialized(b"\x00\x01\xff\x00\xff\xff")));
+
+def(decoded_choices) => const(value: Choices(deserialized(b"\x02\x00\x09\x00\x07")));
+
+def(decoded_tagged) => const(value: Tagged(deserialized(b"\x02\x09\x05\x01\x03\x04")));
+
+def(decoded_default) => const(value: Tagged(deserialized(b"\x07\x00")));
+
+def(decoded_packed) => const(value: Packed(deserialized(serialized(Packed(x: -3, y: 4000)))));
+
+def(decoded_flagset) => const(value: Flags(deserialized(serialized(Flags([a, c])))));
+
+def(decoded_blob) => const(
+	value: Blob(deserialized(serialized(Blob(raw: b"\x01\xff", n: 3, fixed: "abc", name: "pds", rest: b"!")))),
+);
+
+def(decoded_holders) => const(
+	value: Holders(
+		deserialized(
+			serialized(Holders(by_id: (id: 7), inline: (data: 513), ids: (ids: [1, 300]), named: (name: "tag"))),
+		),
+	),
+);
+
+def(decoded_loop) => const(value: Loop(deserialized(serialized(Loop([1, 2, 254])))));
+
+def(decoded_top_bits) => const(
+	value: TopBits(deserialized(serialized(TopBits([(slot: 1, v: 10), (slot: 5, v: 300)])))),
+);

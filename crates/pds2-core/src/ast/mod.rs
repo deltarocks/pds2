@@ -9,7 +9,7 @@ use std::{
 	rc::Rc,
 };
 mod format;
-pub use format::format;
+pub use format::{format, format_call, format_value};
 mod parse;
 pub use parse::{parse, parse_expr};
 

@@ -7,7 +7,8 @@ use genco::prelude::*;
 use pds2_core::ast::{self, Ident};
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr};
-use pds2_core::specializer::encode::{int_of, Args, Encoder, Encoding, Val};
+use pds2_core::specializer::decode::Input;
+use pds2_core::specializer::encode::{int_of, Args, Encoder, Encoding, Target, Val};
 use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
 use pds2_core::specializer::reflect::{list_of, use_of, variant_of};
 use pds2_core::specializer::{
@@ -472,6 +473,27 @@ impl Encoder for TopBitSetTerminatedArray {
 		}
 		Ok(())
 	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let value = use_of(t.native, VALUE)?;
+		let mut items = Vec::new();
+		loop {
+			let mut masked = input.peek().to_vec();
+			let first = masked
+				.first_mut()
+				.ok_or_else(|| anyhow!("byte {}: item {} is missing", input.position(), items.len()))?;
+			let more = *first & 0x80 != 0;
+			*first &= 0x7f;
+			let mut item_input = Input::at(&masked, input.position());
+			let item = cx
+				.decode_use(value, &t.scope(), &mut item_input)
+				.with_context(|| format!("item {}", items.len()))?;
+			input.take(item_input.offset())?;
+			items.push(item);
+			if !more {
+				return Ok(Construction::List(items));
+			}
+		}
+	}
 }
 
 impl ValueModel for TopBitSetTerminatedArray {
@@ -544,6 +566,33 @@ impl ValueModel for RegistryEntryHolder {
 	) -> Result<Construction> {
 		holder_value(cx, id, native, value, "id", "id", "inline")
 	}
+	fn literal(
+		&self,
+		cx: &Elaborator,
+		_id: TypeId,
+		native: &mir::NativeType,
+		c: &Construction,
+	) -> Result<Expr> {
+		holder_literal(cx, native, c, "id")
+	}
+}
+
+fn holder_literal(
+	cx: &Elaborator,
+	native: &mir::NativeType,
+	c: &Construction,
+	list_kind: &str,
+) -> Result<Expr> {
+	let (kind, payload) = variant_of(c)?;
+	let [value] = payload else {
+		bail!("holder variant {kind:?} with {} values", payload.len());
+	};
+	let key = if kind.as_str() == list_kind {
+		kind.clone()
+	} else {
+		holder_slot(native)?.clone()
+	};
+	Ok(Expr::Record(vec![(key, cx.literal(value)?)]))
 }
 
 impl Encoder for RegistryEntryHolder {
@@ -562,6 +611,22 @@ impl Encoder for RegistryEntryHolder {
 			(k, p) => bail!("registryEntryHolder variant {k:?} with {} values", p.len()),
 		}
 	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let varint = cx.resolve_name("varint")?;
+		let n = cx.decode(varint, &Args::new(), input)?;
+		match int_of(&n) {
+			Some(0) => {
+				let (_, ty) = t.native.fields.first().ok_or_else(|| anyhow!("no body field"))?;
+				let value = cx.decode_use(ty, &t.scope(), input)?;
+				Ok(Construction::Variant(Ident::new("inline"), vec![value]))
+			}
+			Some(n) => Ok(Construction::Variant(
+				Ident::new("id"),
+				vec![cx.number(varint, n - 1)?],
+			)),
+			None => bail!("{} is not a number", describe(&n)),
+		}
+	}
 }
 
 impl ValueModel for RegistryEntryHolderSet {
@@ -573,6 +638,15 @@ impl ValueModel for RegistryEntryHolderSet {
 		value: &Expr,
 	) -> Result<Construction> {
 		holder_value(cx, id, native, value, "ids", "ids", "named")
+	}
+	fn literal(
+		&self,
+		cx: &Elaborator,
+		_id: TypeId,
+		native: &mir::NativeType,
+		c: &Construction,
+	) -> Result<Expr> {
+		holder_literal(cx, native, c, "ids")
 	}
 }
 
@@ -593,6 +667,26 @@ impl Encoder for RegistryEntryHolderSet {
 				cx.encode_use(ty, value, &v.scope(), out)
 			}
 			(k, p) => bail!("registryEntryHolderSet variant {k:?} with {} values", p.len()),
+		}
+	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let varint = cx.resolve_name("varint")?;
+		let n = cx.decode(varint, &Args::new(), input)?;
+		match cx.count(&n)? {
+			0 => {
+				let (_, ty) = t.native.fields.first().ok_or_else(|| anyhow!("no body field"))?;
+				let value = cx.decode_use(ty, &t.scope(), input)?;
+				Ok(Construction::Variant(Ident::new("named"), vec![value]))
+			}
+			n => {
+				let ids = (0..n - 1)
+					.map(|i| {
+						cx.decode(varint, &Args::new(), input)
+							.with_context(|| format!("id {i}"))
+					})
+					.collect::<Result<_>>()?;
+				Ok(Construction::Variant(Ident::new("ids"), vec![Expr::List(ids)]))
+			}
 		}
 	}
 }

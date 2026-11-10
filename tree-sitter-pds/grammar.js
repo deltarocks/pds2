@@ -91,7 +91,7 @@ module.exports = grammar({
         string: $ => choice($.stringSingleline, $.stringBlock),
         boolean: $ => choice(token('true'), token('false')),
 
-        stringSingleline: $ => token(/"[^"\n]*?"/),
+        stringSingleline: $ => token(/"([^"\\\n]|\\.)*"/),
         stringBlock: $ => token(seq(
             "\"\"\"\n",
             /[^"]+/,

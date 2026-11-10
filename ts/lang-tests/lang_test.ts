@@ -30,6 +30,17 @@ import * as encoded_loop from "./gen/pds_encoded_loop.ts";
 import * as sample_top_bits from "./gen/pds_sample_top_bits.ts";
 import * as encoded_top_bits from "./gen/pds_encoded_top_bits.ts";
 import * as encoded_widened from "./gen/pds_encoded_widened.ts";
+import * as decoded_counted from "./gen/pds_decoded_counted.ts";
+import * as decoded_words from "./gen/pds_decoded_words.ts";
+import * as decoded_choices from "./gen/pds_decoded_choices.ts";
+import * as decoded_tagged from "./gen/pds_decoded_tagged.ts";
+import * as decoded_default from "./gen/pds_decoded_default.ts";
+import * as decoded_packed from "./gen/pds_decoded_packed.ts";
+import * as decoded_flagset from "./gen/pds_decoded_flagset.ts";
+import * as decoded_blob from "./gen/pds_decoded_blob.ts";
+import * as decoded_holders from "./gen/pds_decoded_holders.ts";
+import * as decoded_loop from "./gen/pds_decoded_loop.ts";
+import * as decoded_top_bits from "./gen/pds_decoded_top_bits.ts";
 
 type Codec<T> = {
 	deserialize(input: Input): T;
@@ -112,4 +123,23 @@ Deno.test("compile-time serialization matches generated serializers", () => {
 		assertEquals(roundtrip(codec, [...encoded.value()]), codec.value());
 	}
 	assertEquals([...roundtrip(pds_Widened, [...encoded_widened.value()]).items], [1, 2, 3, 0xffff]);
+});
+
+Deno.test("compile-time deserialization matches values", () => {
+	const cases: [{ value(): unknown }, { value(): unknown }][] = [
+		[decoded_counted, sample_counted],
+		[decoded_words, sample_words],
+		[decoded_choices, sample_choices],
+		[decoded_tagged, sample_tagged],
+		[decoded_default, sample_default],
+		[decoded_packed, sample_packed],
+		[decoded_flagset, sample_flagset],
+		[decoded_blob, sample_blob],
+		[decoded_holders, sample_holders],
+		[decoded_loop, sample_loop],
+		[decoded_top_bits, sample_top_bits],
+	];
+	for (const [decoded, sample] of cases) {
+		assertEquals(decoded.value(), sample.value());
+	}
 });

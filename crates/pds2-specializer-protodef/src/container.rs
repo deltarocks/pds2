@@ -2,8 +2,9 @@ use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::encode::{Encoder, Encoding, Val};
-use pds2_core::specializer::expr::{Elaborator, ValueModel};
+use pds2_core::specializer::decode::Input;
+use pds2_core::specializer::encode::{const_eq, Encoder, Encoding, Scope, Target, Val};
+use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
 use crate::union::{self, TagView, UnionView};
 use pds2_core::specializer::{
 	AstHir, BoxCost, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor,
@@ -116,6 +117,49 @@ impl Encoder for Container {
 				.with_context(|| format!("field {:?}", f.name))?;
 		}
 		Ok(())
+	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let fields = view(t.native).ok_or_else(|| anyhow!("malformed container"))?;
+		let mut read: Vec<(Ident, Expr)> = Vec::new();
+		for f in &fields {
+			let scope = Scope {
+				fields: &read,
+				..t.scope()
+			};
+			let value = cx
+				.decode_use(f.ty, &scope, input)
+				.with_context(|| format!("field {:?}", f.name))?;
+			read.push((f.name.clone(), value));
+		}
+		let scope = Scope {
+			fields: &read,
+			..t.scope()
+		};
+		for f in &fields {
+			let Some(from) = f.load_from else {
+				continue;
+			};
+			let expected = cx
+				.typed(cx.eval(from, &scope)?, f.ty.target)
+				.with_context(|| format!("virtual field {:?}", f.name))?;
+			let (_, got) = read
+				.iter()
+				.find(|(n, _)| n == f.name)
+				.expect("every field was read");
+			ensure!(
+				const_eq(got, &expected),
+				"virtual field {:?} reads {}, but its value source gives {}",
+				f.name,
+				describe(got),
+				describe(&expected)
+			);
+		}
+		let stored = read
+			.iter()
+			.filter(|(n, _)| fields.iter().any(|f| f.name == n && f.load_from.is_none()))
+			.cloned()
+			.collect();
+		Ok(Construction::Record(stored))
 	}
 	fn field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
 		let fields = view(v.native).ok_or_else(|| anyhow!("malformed container"))?;

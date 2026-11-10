@@ -130,7 +130,7 @@ impl Definition {
 				}
 				None
 			}
-			Expr::Serialized(e) => {
+			Expr::Serialized(e) | Expr::Deserialized(e) => {
 				Self::resolve_expr(scope, types, e)?;
 				None
 			}

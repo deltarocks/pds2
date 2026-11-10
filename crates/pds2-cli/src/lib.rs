@@ -1,9 +1,11 @@
 use std::io;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use pds2_core::generator::GeneratorTypes;
+use pds2_core::specializer::encode::Encoding;
+use pds2_core::specializer::expr::{source, Elaborator};
 use pds2_core::specializer::Registry;
 use pds2_core::{ast, hir, mir};
 
@@ -141,10 +143,52 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 	Ok(())
 }
 
+const VALUE_DEF: &str = "__pds2_value";
+const VALUE_NATIVE: &str =
+	"@specializer const def_native(__pds2_const) { type(Value); argument(value) => Value; body; };";
+
+fn compile_value(schema: &str, value: &str, reg: &Registry) -> Result<(mir::TypeMap, mir::Expr)> {
+	let mut parsed = ast::parse(schema).map_err(|e| anyhow!("parsing the schema: {e}"))?;
+	let def = ast::parse(&format!("{VALUE_NATIVE} def({VALUE_DEF}) => __pds2_const(value: {value});"))
+		.map_err(|e| anyhow!("{e}"))?;
+	parsed.statements.extend(def.statements);
+	let types = mir::from_hir(&hir::parse_ast(parsed, reg)?, reg)?;
+	let value = types
+		.0
+		.values()
+		.find(|d| d.name.readable_name() == VALUE_DEF)
+		.and_then(|d| match &d.kind {
+			mir::TypeKind::Native(n) => n.ref_args.iter().find(|(n, _)| n.as_str() == "value"),
+			mir::TypeKind::Alias(_) => None,
+		})
+		.map(|(_, e)| e.clone())
+		.ok_or_else(|| anyhow!("the value was not compiled"))?;
+	Ok((types, value))
+}
+
+pub fn encode(schema: &str, ty: Option<&str>, value: &str, reg: &Registry) -> Result<Vec<u8>> {
+	let parsed = ast::parse_expr(value).map_err(|e| anyhow!("parsing the value: {e}"))?;
+	let value = match ty {
+		Some(ty) => format!("{ty}({value})"),
+		None if matches!(&parsed, ast::Value::Item(i) if !i.args.is_empty()) => value.to_owned(),
+		None => bail!("the value has no type, write it as `root::Type(...)` or pass --type"),
+	};
+	let (types, value) = compile_value(schema, &value, reg)?;
+	let elab = Elaborator { types: &types, reg };
+	Encoding::new(&elab).encode_root(&value)
+}
+
+pub fn decode(schema: &str, ty: &str, bytes: &[u8], reg: &Registry) -> Result<String> {
+	let bytes = ast::format_value(&ast::Value::Bytes(bytes.to_vec()));
+	let (types, value) = compile_value(schema, &format!("{ty}(deserialized({bytes}))"), reg)?;
+	let elab = Elaborator { types: &types, reg };
+	Ok(format!("{}\n", ast::format_call(ty, &source(&elab.literal(&value)?)?)))
+}
+
 pub fn format(args: FormatArgs) -> Result<()> {
 	let data = std::fs::read_to_string(args.from)?;
 	let parsed = ast::parse(&data)?;
-	println!("{}", ast::format(&parsed));
+	print!("{}", ast::format(&parsed));
 	Ok(())
 }
 

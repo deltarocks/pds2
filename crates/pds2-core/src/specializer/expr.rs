@@ -1,7 +1,8 @@
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
 
+use super::encode::Encoding;
 use super::{Registry, Scalar};
-use crate::ast::BinOp;
+use crate::ast::{self, BinOp, Ident};
 use crate::generator::common::{sanitize, scalar_of};
 use crate::hir::TypeId;
 use crate::mir::{self, Construction, Expr, TypeKind, TypeMap, Value};
@@ -22,6 +23,44 @@ pub trait ValueModel {
 	fn exprs(&self, _cx: &Elaborator, _id: TypeId, _native: &mir::NativeType) -> Vec<Expr> {
 		vec![]
 	}
+	fn literal(
+		&self,
+		cx: &Elaborator,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &Construction,
+	) -> Result<Expr> {
+		cx.construction_literal(c)
+	}
+}
+
+pub fn source(e: &Expr) -> Result<ast::Value> {
+	let name = |n: &str| ast::Value::Item(ast::Item::simple_builder(n).build());
+	Ok(match e {
+		Expr::Const(Value::Signed(n)) => ast::Value::Int(*n),
+		Expr::Const(Value::Unsigned(n)) => {
+			ast::Value::Int(i128::try_from(*n).map_err(|_| anyhow!("{n} is too large to write"))?)
+		}
+		Expr::Const(Value::Float(f)) => {
+			ensure!(f.is_finite(), "{f} can't be written");
+			ast::Value::Float(ast::Float(*f))
+		}
+		Expr::Const(Value::Bool(b)) => name(if *b { "true" } else { "false" }),
+		Expr::Const(Value::String(s)) => ast::Value::String {
+			string: s.clone(),
+			is_block: false,
+		},
+		Expr::Const(Value::Bytes(b)) => ast::Value::Bytes(b.clone()),
+		Expr::Const(Value::UnionDescriminator(n)) => name(n.as_str()),
+		Expr::Record(fields) => ast::Value::Record(
+			fields
+				.iter()
+				.map(|(n, e)| Ok((n.clone(), source(e)?)))
+				.collect::<Result<_>>()?,
+		),
+		Expr::List(items) => ast::Value::List(items.iter().map(source).collect::<Result<_>>()?),
+		e => bail!("{} is not a literal", describe(e)),
+	})
 }
 
 impl Scalar {
@@ -56,7 +95,7 @@ impl Scalar {
 
 pub fn describe(e: &Expr) -> String {
 	match e {
-		Expr::Const(v) => format!("{v:?}"),
+		Expr::Const(v) | Expr::Construct(_, Construction::Literal(v)) => format!("{v:?}"),
 		Expr::Record(_) => "a record".to_owned(),
 		Expr::List(_) => "a list".to_owned(),
 		e => format!("{e:?}"),
@@ -104,6 +143,9 @@ impl Elaborator<'_> {
 	}
 
 	pub fn build(&self, ty: TypeId, value: &Expr) -> Result<Expr> {
+		if let Expr::Deserialized(bytes) = value {
+			return self.deserialize(ty, bytes);
+		}
 		let id = self.resolve(ty);
 		let construction = if self.types.is_void(id) {
 			ensure!(
@@ -127,6 +169,87 @@ impl Elaborator<'_> {
 			model.construct(self, id, native, value)?
 		};
 		Ok(Expr::Construct(id, construction))
+	}
+
+	fn deserialize(&self, ty: TypeId, bytes: &Expr) -> Result<Expr> {
+		let bytes = match self.operand(bytes.clone())? {
+			Expr::Const(Value::Bytes(b)) | Expr::Construct(_, Construction::Literal(Value::Bytes(b))) => b,
+			Expr::Const(Value::String(s))
+			| Expr::Construct(_, Construction::Literal(Value::String(s))) => s.into_bytes(),
+			e => bail!("deserialized(...) takes bytes, got {}", describe(&e)),
+		};
+		let cx = Encoding::new(self);
+		let value = cx
+			.decode_root(ty, &bytes)
+			.with_context(|| format!("deserialized(...) as {}", self.name(ty)))?;
+		let skipped = cx.skipped();
+		if !skipped.is_empty() {
+			let list: Vec<String> = skipped.iter().map(|(what, n)| format!("{what} ({n}x)")).collect();
+			tracing::warn!(
+				"deserialized(...) as {} skipped {}",
+				self.name(ty),
+				list.join(", ")
+			);
+		}
+		Ok(value)
+	}
+
+	pub fn literal(&self, e: &Expr) -> Result<Expr> {
+		Ok(match e {
+			Expr::Const(_) => e.clone(),
+			Expr::Record(fields) => self.record_literal(fields)?,
+			Expr::List(items) => self.list_literal(items)?,
+			Expr::Construct(id, _) if self.types.is_void(*id) => Expr::Record(vec![]),
+			Expr::Construct(id, c) => match (scalar_of(self.types, *id), c) {
+				(Some(Scalar::F32), Construction::Literal(Value::Float(f))) => {
+					let short = (*f as f32).to_string().parse().unwrap_or(*f);
+					Expr::Const(Value::Float(short))
+				}
+				(Some(_), Construction::Literal(v)) => Expr::Const(v.clone()),
+				_ => {
+					let (native, model) = self
+						.native(*id)
+						.ok_or_else(|| anyhow!("{} has no literal form", self.name(*id)))?;
+					let model =
+						model.ok_or_else(|| anyhow!("{} has no literal form", self.name(*id)))?;
+					model.literal(self, *id, native, c)?
+				}
+			},
+			e => bail!("{} is not a constant value", describe(e)),
+		})
+	}
+
+	pub fn record_literal(&self, fields: &[(Ident, Expr)]) -> Result<Expr> {
+		Ok(Expr::Record(
+			fields
+				.iter()
+				.map(|(n, e)| Ok((n.clone(), self.literal(e).with_context(|| format!("field {n:?}"))?)))
+				.collect::<Result<_>>()?,
+		))
+	}
+
+	pub fn list_literal(&self, items: &[Expr]) -> Result<Expr> {
+		Ok(Expr::List(
+			items
+				.iter()
+				.enumerate()
+				.map(|(i, e)| self.literal(e).with_context(|| format!("item {i}")))
+				.collect::<Result<_>>()?,
+		))
+	}
+
+	pub fn construction_literal(&self, c: &Construction) -> Result<Expr> {
+		Ok(match c {
+			Construction::Literal(v) => Expr::Const(v.clone()),
+			Construction::Wrap(e) => self.literal(e)?,
+			Construction::Record(fields) => self.record_literal(fields)?,
+			Construction::List(items) => self.list_literal(items)?,
+			Construction::Variant(n, p) => match p.as_slice() {
+				[] => Expr::Const(Value::UnionDescriminator(n.clone())),
+				[v] => Expr::Record(vec![(n.clone(), self.literal(v)?)]),
+				_ => bail!("variant {n:?} holding {} values has no literal form", p.len()),
+			},
+		})
 	}
 
 	pub fn construct(&self, ty: TypeId, value: &Value) -> Option<Expr> {
@@ -294,7 +417,7 @@ impl Elaborator<'_> {
 			Expr::Cast(e, to) => self.cast(*e, to)?,
 			Expr::Serialized(e) => {
 				let e = self.elaborate(*e)?;
-				let bytes = super::encode::Encoding { elab: self }
+				let bytes = Encoding::new(self)
 					.encode_root(&e)
 					.context("serialized(...)")?;
 				Expr::Const(Value::Bytes(bytes))

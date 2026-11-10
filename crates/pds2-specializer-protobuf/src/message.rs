@@ -2,7 +2,8 @@ use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::encode::{write_varint, Encoder, Encoding, Val};
+use pds2_core::specializer::decode::Input;
+use pds2_core::specializer::encode::{write_varint, Encoder, Encoding, Target, Val};
 use pds2_core::specializer::expr::{Elaborator, ValueModel};
 use pds2_core::specializer::{
 	AstHir, BoxCost, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor,
@@ -245,6 +246,102 @@ impl Encoder for Message {
 		}
 		Ok(())
 	}
+
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let Plan {
+			fields,
+			wires,
+			groups,
+			..
+		} = plan(cx.types(), t.native)?;
+		let scope = t.scope();
+		let mut single: Vec<Option<Expr>> = vec![None; fields.len()];
+		let mut repeated: Vec<Vec<Expr>> = vec![vec![]; fields.len()];
+		while input.remaining() > 0 {
+			let at = input.position();
+			let key = input.varint()?;
+			let (number, wire) = (key >> 3, (key & 7) as u8);
+			let Some(i) = fields.iter().position(|f| u64::from(f.number) == number) else {
+				skip(input, wire).with_context(|| format!("byte {at}: unknown field {number}"))?;
+				cx.skip(format!("unknown field {number} of {}", cx.name(t.id)));
+				continue;
+			};
+			let f = &fields[i];
+			let field = || format!("field {:?}", f.name);
+			if matches!(f.label, Label::Repeated) && wire == Wire::Len as u8 && wires[i] != Wire::Len {
+				let mut packed = frame(input)?;
+				while packed.remaining() > 0 {
+					let item = cx.decode_use(f.ty, &scope, &mut packed).with_context(field)?;
+					repeated[i].push(item);
+				}
+				continue;
+			}
+			ensure!(
+				wire == wires[i] as u8,
+				"byte {at}: field {:?} has wire type {wire}, expected {}",
+				f.name,
+				wires[i] as u8
+			);
+			let value = if wires[i] == Wire::Len {
+				let mut sub = frame(input)?;
+				let value = cx.decode_use(f.ty, &scope, &mut sub).with_context(field)?;
+				ensure!(
+					sub.remaining() == 0,
+					"{}: {} bytes are left in its frame",
+					field(),
+					sub.remaining()
+				);
+				value
+			} else {
+				cx.decode_use(f.ty, &scope, input).with_context(field)?
+			};
+			match f.label {
+				Label::Repeated => repeated[i].push(value),
+				Label::Single => single[i] = Some(value),
+				Label::Oneof(g) => {
+					for (_, members) in groups.iter().filter(|(n, _)| *n == g) {
+						for &j in members {
+							single[j] = None;
+						}
+					}
+					single[i] = Some(value);
+				}
+			}
+		}
+		let record = fields
+			.iter()
+			.zip(single.into_iter().zip(repeated))
+			.filter_map(|(f, (one, many))| match f.label {
+				Label::Repeated => (!many.is_empty()).then(|| (f.name.clone(), Expr::List(many))),
+				_ => one.map(|v| (f.name.clone(), v)),
+			})
+			.collect();
+		Ok(Construction::Record(record))
+	}
+}
+
+fn frame<'b>(input: &mut Input<'b>) -> Result<Input<'b>> {
+	let len = input.varint()?;
+	input.sub(usize::try_from(len).map_err(|_| anyhow!("length {len} is too large"))?)
+}
+
+fn skip(input: &mut Input, wire: u8) -> Result<()> {
+	match wire {
+		0 => {
+			input.varint()?;
+		}
+		1 => {
+			input.take(8)?;
+		}
+		2 => {
+			frame(input)?;
+		}
+		5 => {
+			input.take(4)?;
+		}
+		w => bail!("wire type {w} can't be skipped"),
+	}
+	Ok(())
 }
 
 fn entries<'f, 'c>(

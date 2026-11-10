@@ -289,6 +289,7 @@ pub enum Expr {
 	Record(Vec<(Ident, Expr)>),
 	List(Vec<Expr>),
 	Serialized(Box<Expr>),
+	Deserialized(Box<Expr>),
 }
 impl Expr {
 	pub fn types_mut(&mut self) -> Vec<&mut TypeKind> {
@@ -296,7 +297,7 @@ impl Expr {
 			Expr::Field(_) | Expr::Const(_) => vec![],
 			Expr::Record(fields) => fields.iter_mut().flat_map(|(_, e)| e.types_mut()).collect(),
 			Expr::List(items) => items.iter_mut().flat_map(Expr::types_mut).collect(),
-			Expr::Serialized(e) => e.types_mut(),
+			Expr::Serialized(e) | Expr::Deserialized(e) => e.types_mut(),
 			Expr::Binary(_, a, b) => {
 				let mut out = a.types_mut();
 				out.extend(b.types_mut());
@@ -341,7 +342,7 @@ impl Traverse for Expr {
 				}
 				Ok(())
 			}
-			Expr::Serialized(e) => e.traverse(visitor, skip, reg),
+			Expr::Serialized(e) | Expr::Deserialized(e) => e.traverse(visitor, skip, reg),
 		}
 	}
 }

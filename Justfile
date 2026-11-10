@@ -42,6 +42,9 @@ envoy: envoy-protos
 	cargo run compile crates/envoy-api/envoy.pds rust --const cluster_fixture=crates/envoy-api/cluster.txtpds2 --to crates/envoy-api/src/gen
 	cargo run compile crates/envoy-api/envoy.pds typescript --const cluster_fixture=crates/envoy-api/cluster.txtpds2 --to ts/envoy-api/gen
 	{{protoc}} {{envoy_includes}} --encode=envoy.config.cluster.v3.Cluster {{envoy_roots}} < crates/envoy-api/cluster.txtpb > target/cluster.bin
+	cargo run protobuf encode crates/envoy-api/envoy.pds crates/envoy-api/cluster.txtpds2 | cmp - target/cluster.bin
+	cargo run protobuf decode crates/envoy-api/envoy.pds --type root::envoy::config::cluster::v3::Cluster target/cluster.bin > target/cluster.decoded.txtpds2
+	cargo run protobuf encode crates/envoy-api/envoy.pds target/cluster.decoded.txtpds2 | cmp - target/cluster.bin
 
 test: lang descriptor-check envoy
 	cargo test --workspace

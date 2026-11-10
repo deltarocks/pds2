@@ -1,7 +1,9 @@
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Context as _, Result};
 
+use super::decode::Input;
 use super::expr::{describe, value_eq, Elaborator};
 
 use super::Scalar;
@@ -27,9 +29,20 @@ impl Val<'_> {
 	pub fn scope(&self) -> Scope<'_> {
 		Scope {
 			value: Some((self.id, self.c)),
-			args: self.args,
-			vars: &[],
+			..Scope::of(self.args)
 		}
+	}
+}
+
+pub struct Target<'a> {
+	pub id: TypeId,
+	pub native: &'a mir::NativeType,
+	pub args: &'a Args,
+}
+
+impl Target<'_> {
+	pub fn scope(&self) -> Scope<'_> {
+		Scope::of(self.args)
 	}
 }
 
@@ -38,10 +51,23 @@ pub struct Scope<'a> {
 	pub value: Option<(TypeId, &'a Construction)>,
 	pub args: &'a Args,
 	pub vars: &'a [(Ident, Expr)],
+	pub fields: &'a [(Ident, Expr)],
+}
+
+impl<'a> Scope<'a> {
+	pub fn of(args: &'a Args) -> Self {
+		Scope {
+			value: None,
+			args,
+			vars: &[],
+			fields: &[],
+		}
+	}
 }
 
 pub trait Encoder {
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()>;
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction>;
 	fn field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
 		match v.c {
 			Construction::Record(fields) => fields
@@ -62,6 +88,7 @@ pub trait Encoder {
 
 pub struct Encoding<'a> {
 	pub elab: &'a Elaborator<'a>,
+	skipped: RefCell<BTreeMap<String, usize>>,
 }
 
 pub fn write_varint(out: &mut Vec<u8>, mut v: u64) {
@@ -150,6 +177,21 @@ pub fn const_eq(a: &Expr, b: &Expr) -> bool {
 }
 
 impl<'a> Encoding<'a> {
+	pub fn new(elab: &'a Elaborator<'a>) -> Self {
+		Encoding {
+			elab,
+			skipped: RefCell::default(),
+		}
+	}
+
+	pub fn skip(&self, what: String) {
+		*self.skipped.borrow_mut().entry(what).or_default() += 1;
+	}
+
+	pub fn skipped(&self) -> BTreeMap<String, usize> {
+		self.skipped.take()
+	}
+
 	pub fn types(&self) -> &'a TypeMap {
 		self.elab.types
 	}
@@ -178,7 +220,7 @@ impl<'a> Encoding<'a> {
 		}
 	}
 
-	fn encoder(&self, id: TypeId) -> Result<(&'a mir::NativeType, &'a dyn Encoder)> {
+	pub(super) fn encoder(&self, id: TypeId) -> Result<(&'a mir::NativeType, &'a dyn Encoder)> {
 		let TypeKind::Native(n) = &self.types()[id].kind else {
 			bail!("{} is not a native", self.name(id));
 		};
@@ -240,12 +282,7 @@ impl<'a> Encoding<'a> {
 		let mut args = self.eval_args(&u.args, scope)?;
 		let mut target = u.target;
 		while let TypeKind::Alias(t) = &self.types()[target].kind {
-			let inner = Scope {
-				value: None,
-				args: &args,
-				vars: &[],
-			};
-			args = self.eval_args(&t.args, &inner)?;
+			args = self.eval_args(&t.args, &Scope::of(&args))?;
 			target = t.target;
 		}
 		Ok(args)
@@ -309,9 +346,14 @@ impl<'a> Encoding<'a> {
 					.cloned()
 					.ok_or_else(|| anyhow!("argument {name:?} is not bound"))?,
 				FieldRefSegment::Down { to, .. } => {
-					let (id, c, root) = base(&cur)?;
-					let args = if root { scope.args } else { &empty };
-					self.field(id, &c, args, to)?
+					match scope.fields.iter().find(|(n, _)| n == to).filter(|_| cur.is_none()) {
+						Some((_, e)) => e.clone(),
+						None => {
+							let (id, c, root) = base(&cur)?;
+							let args = if root { scope.args } else { &empty };
+							self.field(id, &c, args, to)?
+						}
+					}
 				}
 				FieldRefSegment::Virtual(name) => {
 					let (id, c, root) = base(&cur)?;
@@ -413,7 +455,7 @@ impl<'a> Encoding<'a> {
 				let (a, b) = (self.eval(a, scope)?, self.eval(b, scope)?);
 				Expr::Const(Value::Bool(const_eq(&a, &b)))
 			}
-			Expr::Record(_) | Expr::List(_) | Expr::Serialized(_) => {
+			Expr::Record(_) | Expr::List(_) | Expr::Serialized(_) | Expr::Deserialized(_) => {
 				bail!("{} can't be evaluated here", describe(e))
 			}
 		})

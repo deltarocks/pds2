@@ -6,7 +6,8 @@ use genco::Tokens;
 use pds2_core::ast::Ident;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir;
-use pds2_core::specializer::encode::{Args, Encoder, Encoding, Val};
+use pds2_core::specializer::decode::Input;
+use pds2_core::specializer::encode::{const_eq, Args, Encoder, Encoding, Target, Val};
 use pds2_core::specializer::expr::{Elaborator, ValueModel};
 use pds2_core::specializer::reflect::{list_of, use_of};
 use pds2_core::specializer::{
@@ -121,16 +122,18 @@ impl AstHir for Terminated {
 	}
 }
 
+fn end_of(native: &mir::NativeType) -> Result<&mir::Expr> {
+	native
+		.ref_args
+		.iter()
+		.find(|(n, _)| n.as_str() == "end")
+		.map(|(_, e)| e)
+		.ok_or_else(|| anyhow!("terminated array without `end`"))
+}
+
 impl Encoder for Terminated {
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
-		let end = v
-			.native
-			.ref_args
-			.iter()
-			.find(|(n, _)| n.as_str() == "end")
-			.map(|(_, e)| e)
-			.ok_or_else(|| anyhow!("terminated array without `end`"))?;
-		let end = cx.eval(end, &v.scope())?;
+		let end = cx.eval(end_of(v.native)?, &v.scope())?;
 		let mut terminator = Vec::new();
 		cx.encode(&end, &Args::new(), &mut terminator).context("end")?;
 		let value = use_of(v.native, VALUE)?;
@@ -146,5 +149,26 @@ impl Encoder for Terminated {
 		}
 		out.extend(terminator);
 		Ok(())
+	}
+
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<mir::Construction> {
+		let end = cx.eval(end_of(t.native)?, &t.scope())?;
+		let end_ty = end
+			.ty()
+			.ok_or_else(|| anyhow!("terminator `end` has no type"))?;
+		let value = use_of(t.native, VALUE)?;
+		let mut items = Vec::new();
+		loop {
+			let at = input.offset();
+			let next = cx.decode(end_ty, &Args::new(), input).context("end")?;
+			if const_eq(&next, &end) {
+				return Ok(mir::Construction::List(items));
+			}
+			input.rewind(at);
+			let item = cx
+				.decode_use(value, &t.scope(), input)
+				.with_context(|| format!("item {}", items.len()))?;
+			items.push(item);
+		}
 	}
 }

@@ -1,7 +1,10 @@
 use anyhow::{anyhow, bail, ensure, Result};
 use pds2_core::generator::common::scalar_of;
 use pds2_core::mir::{Construction, Expr, Value};
-use pds2_core::specializer::encode::{bits_of, float_of, int_of, width, write_varint, Encoder, Encoding, Val};
+use pds2_core::specializer::decode::Input;
+use pds2_core::specializer::encode::{
+	bits_of, float_of, int_of, width, wrap, write_varint, Encoder, Encoding, Target, Val,
+};
 use pds2_core::specializer::{Registry, Scalar};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +95,70 @@ impl Encoder for ScalarEncoding {
 			(e, s) => bail!("`@encoding {}` can't encode {s:?} ({})", e.name(), cx.name(v.id)),
 		}
 		Ok(())
+	}
+
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let s = scalar_of(cx.types(), t.id).ok_or_else(|| {
+			anyhow!("{} needs `@scalar` for `@encoding {}`", cx.name(t.id), self.name())
+		})?;
+		let int = |n: i128| {
+			if s == Scalar::Bool {
+				Value::Bool(n != 0)
+			} else {
+				Value::Signed(wrap(n, s))
+			}
+		};
+		let value = match (self, s) {
+			(ScalarEncoding::Raw, Scalar::String) => Value::String(
+				String::from_utf8(input.rest().to_vec())
+					.map_err(|e| anyhow!("{} is not UTF-8: {e}", cx.name(t.id)))?,
+			),
+			(ScalarEncoding::Raw, Scalar::Bytes) => Value::Bytes(input.rest().to_vec()),
+			(ScalarEncoding::Le | ScalarEncoding::Be, s) => {
+				let bits = width(s).ok_or_else(|| anyhow!("{s:?} has no fixed width"))?;
+				let bytes = input.take((bits / 8) as usize)?;
+				let mut buf = [0u8; 8];
+				if *self == ScalarEncoding::Le {
+					buf[..bytes.len()].copy_from_slice(bytes);
+				} else {
+					for (to, b) in buf.iter_mut().zip(bytes.iter().rev()) {
+						*to = *b;
+					}
+				}
+				let raw = u64::from_le_bytes(buf);
+				match s {
+					Scalar::F32 => Value::Float(f64::from(f32::from_bits(raw as u32))),
+					Scalar::F64 => Value::Float(f64::from_bits(raw)),
+					_ => int(i128::from(raw)),
+				}
+			}
+			(ScalarEncoding::Varint | ScalarEncoding::Varint64 | ScalarEncoding::Zigzag, s)
+				if s.is_number() || s == Scalar::Bool =>
+			{
+				ensure!(
+					!matches!(s, Scalar::F32 | Scalar::F64),
+					"{} can't be a varint",
+					cx.name(t.id)
+				);
+				let bits = width(s).expect("integer scalar");
+				let at = input.position();
+				let u = input.varint()?;
+				let fits = |u: u64| bits == 64 || u >> bits == 0;
+				int(match self {
+					ScalarEncoding::Varint64 => i128::from(u as i64),
+					ScalarEncoding::Varint => {
+						ensure!(fits(u), "byte {at}: varint {u} does not fit {bits} bits");
+						i128::from(u)
+					}
+					_ => {
+						ensure!(fits(u), "byte {at}: zigzag {u} does not fit {bits} bits");
+						i128::from(u >> 1) ^ -i128::from(u & 1)
+					}
+				})
+			}
+			(e, s) => bail!("`@encoding {}` can't decode {s:?} ({})", e.name(), cx.name(t.id)),
+		};
+		Ok(Construction::Literal(value))
 	}
 }
 
