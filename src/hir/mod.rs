@@ -166,13 +166,11 @@ pub struct NativeType {
 	/// the field projection already happened in `apply_specializers`
 	pub body: Vec<BodyField>,
 	/// constant configuration arguments captured at the use-site when the reference
-	/// was inlined (`registryEntryHolder(baseName: "patternId") { ... }`); inlining
-	/// leaves no reference to hold them, and only constants are scope-free
+	/// was inlined (`registryEntryHolder(baseName: "patternId") { ... }`)
 	pub const_args: Vec<(Ident, Value)>,
 	pub ref_args: Vec<(Ident, FieldRef)>,
 	pub arg_virtuals: Vec<Ident>,
-	/// `is_void;` in the def_native block: the type carries no data. All inline void
-	/// kinds and other is_void natives are deduplicated to the first such def.
+	/// `is_void;` in the def_native block: the type carries no data.
 	pub is_void: bool,
 	pub scalar: Option<Ident>,
 }
@@ -441,7 +439,6 @@ impl Traverse for Reference {
 
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
 pub enum TypeKind {
-	Void,
 	Reference(Reference),
 	Native(NativeType),
 }
@@ -464,7 +461,6 @@ impl Traverse for TypeKind {
 		{
 			let skip = skip - TraverseSkip::TOPLEVEL_TYPEKIND;
 			match self {
-				TypeKind::Void => {}
 				TypeKind::Reference(r) => r.traverse(visitor, skip, reg)?,
 				TypeKind::Native(n) => n.traverse(visitor, skip, reg)?,
 			}

@@ -162,7 +162,6 @@ pub fn parse_ast(ast: Block, reg: &Registry) -> Result<Namespace> {
 	super::desugar::rewrite_paths_to_absolute(&mut ns);
 	super::desugar::resolve_paths_to_ids(&mut ns).context("resolving paths")?;
 
-	super::desugar::deduplicate_voids(&mut ns, reg).context("deduplicating voids")?;
 	super::desugar::apply_specializers(&mut ns, reg).context("applying specializers")?;
 
 	// Make monomorphization only see scope-free references in bindings
@@ -228,63 +227,46 @@ impl Type {
 
 impl TypeKind {
 	fn from_ast(value: Item, mut items: Vec<Value>) -> Result<Self> {
-		if let Some(simple) = value.name.simple_name() {
-			let kind = match simple.as_str() {
-				"void" if value.args.is_empty() && value.block.is_empty() && items.is_empty() => {
-					TypeKind::Void
+		// ensure!(items.is_empty(), "unexpected values");
+		let body = parse_specializer_body(&value.block)?;
+
+		let mut args = Vec::new();
+		let mut types = BTreeMap::new();
+		// We don't have reference resolved at this phase, so verify_unused check will only reject unused unnamed arguments
+		for name in value.args.named_names() {
+			if name.is_type_arg() {
+				let ty: Item = value.args.named(name.clone())?;
+				let kind = TypeKind::from_ast(ty, vec![])?;
+				if types.insert(name.clone(), kind).is_some() {
+					bail!("generic set twice: {name:?}")
 				}
-				_ => {
-					// ensure!(items.is_empty(), "unexpected values");
-					let body = parse_specializer_body(&value.block)?;
-
-					let mut args = Vec::new();
-					let mut types = BTreeMap::new();
-					// We don't have reference resolved at this phase, so verify_unused check will only reject unused unnamed arguments
-					for name in value.args.named_names() {
-						if name.is_type_arg() {
-							let ty: Item = value.args.named(name.clone())?;
-							let kind = TypeKind::from_ast(ty, vec![])?;
-							if types.insert(name.clone(), kind).is_some() {
-								bail!("generic set twice: {name:?}")
-							}
-						} else {
-							let value: Value = value
-								.args
-								.named(name.clone())
-								.context("parsing value argument")?;
-							args.push((name.clone(), arg_value(value)?));
-						}
-					}
-					value.args.verify_unused()?;
-
-					if !items.is_empty() {
-						let item = items
-							.remove(0)
-							.into_item()
-							.ok_or_else(|| anyhow!("plain type value should be item"))?;
-						let kind = TypeKind::from_ast(item, items)?;
-						if types.insert(Ident::new("Value"), kind).is_some() {
-							bail!("generic set twice: Value");
-						}
-					}
-
-					return Ok(TypeKind::Reference(Reference {
-						ty: ReferenceKind::Path(value.name),
-						args,
-						types,
-						body,
-					}));
-				}
-			};
-			Ok(kind)
-		} else {
-			Ok(TypeKind::Reference(Reference {
-				ty: ReferenceKind::Path(value.name),
-				args: vec![],
-				types: BTreeMap::new(),
-				body: vec![],
-			}))
+			} else {
+				let value: Value = value
+					.args
+					.named(name.clone())
+					.context("parsing value argument")?;
+				args.push((name.clone(), arg_value(value)?));
+			}
 		}
+		value.args.verify_unused()?;
+
+		if !items.is_empty() {
+			let item = items
+				.remove(0)
+				.into_item()
+				.ok_or_else(|| anyhow!("plain type value should be item"))?;
+			let kind = TypeKind::from_ast(item, items)?;
+			if types.insert(Ident::new("Value"), kind).is_some() {
+				bail!("generic set twice: Value");
+			}
+		}
+
+		Ok(TypeKind::Reference(Reference {
+			ty: ReferenceKind::Path(value.name),
+			args,
+			types,
+			body,
+		}))
 	}
 }
 

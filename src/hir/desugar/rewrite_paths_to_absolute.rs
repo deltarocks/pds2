@@ -85,7 +85,6 @@ impl TypeKind {
 					ty.rewrite_paths_to_absolute(current_ns, generics, paths)
 				}
 			}
-			TypeKind::Void => {}
 			TypeKind::Native(native) => {
 				// the native's generics live on the surrounding Type, already in scope
 				for (_, ty) in native.specialization.iter_mut() {

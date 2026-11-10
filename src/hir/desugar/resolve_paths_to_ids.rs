@@ -4,8 +4,8 @@
 //! and throws error if named type can't be resolved
 //!
 //! Overloaded natives (a `def_native` with `variant(..)` blocks) are split by
-//! `from_ast` into a namespace of per-variant types (`union::tagged`,
-//! `union::inline`). A reference to the bare native name selects the overload here,
+//! `from_ast` into a namespace of per-variant types. A reference to the bare native
+//! name selects the overload here,
 //! by shape: the names of supplied value arguments (lowercase), generic bindings
 //! (uppercase), and whether a body is present, are matched against each variant's
 //! declared signature; the most specific match wins, ambiguity is an error.
@@ -146,7 +146,6 @@ impl TypeKind {
 					v.resolve_paths_to_ids(paths)?;
 				}
 			}
-			TypeKind::Void => {}
 		}
 		Ok(())
 	}

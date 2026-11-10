@@ -4,11 +4,10 @@ use genco::prelude::*;
 
 use super::{
 	bitfield_entries, specialization_use, Array, Bitfield, Bitflags, Buffer, EntityMetadataLoop,
-	Names, NativeCodegen, NativeCodegenCtx, OptionP, PString, Registry, RegistryEntryHolder,
-	RegistryEntryHolderSet, Scalar, TopBitSetTerminatedArray, VALUE,
+	LowerCx, Names, NativeCodegen, NativeCodegenCtx, OptionP, PString, Registry,
+	RegistryEntryHolder, RegistryEntryHolderSet, Scalar, TopBitSetTerminatedArray, VALUE,
 };
 use crate::ast::Ident;
-use crate::generator::common::EqKind;
 use crate::hir::{self, TypeId};
 use crate::mir;
 
@@ -33,8 +32,8 @@ fn pds(name: &str) -> js::Import {
 	js::import("../pds.ts", name)
 }
 
-fn typed_array(scalar: Scalar) -> &'static str {
-	match scalar {
+fn typed_array(names: &dyn Names<JavaScript>, value: TypeId) -> Option<&'static str> {
+	Some(match names.scalar(value)? {
 		Scalar::I8 => "Int8Array",
 		Scalar::U8 => "Uint8Array",
 		Scalar::I16 => "Int16Array",
@@ -45,12 +44,13 @@ fn typed_array(scalar: Scalar) -> &'static str {
 		Scalar::U64 => "BigUint64Array",
 		Scalar::F32 => "Float32Array",
 		Scalar::F64 => "Float64Array",
-	}
+		Scalar::Bool => return None,
+	})
 }
 
 fn array_ty(names: &dyn Names<JavaScript>, value: TypeId) -> Tokens {
-	match names.scalar(value) {
-		Some(s) => quote!($(typed_array(s))),
+	match typed_array(names, value) {
+		Some(a) => quote!($a),
 		None => quote!(Array<$(names.ty(value))>),
 	}
 }
@@ -73,12 +73,12 @@ fn value_of(native: &mir::NativeType) -> Option<TypeId> {
 
 fn collect(ctx: &Ctx, value: TypeId, count: Tokens, read: Tokens) -> Tokens {
 	let perror = &pds("PdsError");
-	match ctx.names.scalar(value) {
-		Some(s) => quote! {
+	match typed_array(ctx.names, value) {
+		Some(a) => quote! {
 			if ($(&count) > input.remaining()) {
 				throw new $perror("NotEnoughData", "array length exceeds the input");
 			}
-			const out = new $(typed_array(s))($(&count));
+			const out = new $a($(&count));
 			for (let i = 0; i < $(&count); i++) {
 				out[i] = $read;
 			}
@@ -211,11 +211,6 @@ impl NativeCodegen<JavaScript> for OptionP {
 		} else {
 			quote!(_0)
 		};
-		let inner_a = if ctx.boxed(&slot) {
-			quote!(a.value)
-		} else {
-			quote!(a)
-		};
 		let read = ctx.slot_new(&slot, ctx.deserialize_call(value_use));
 		let boolean =
 			(ctx.resolve)("bool").ok_or_else(|| anyhow!("option needs the `bool` native"))?;
@@ -239,17 +234,19 @@ impl NativeCodegen<JavaScript> for OptionP {
 				}
 				return n;
 			}
-			$(for (t, _) in ctx.eq_targets.iter().filter(|(_, k)| *k != EqKind::Bool) join($['\r']) =>
-				export function $(format!("is_equal_{}", t.raw()))(a: Ty, b: $(ctx.names.ty(*t))): boolean {
-					return a !== null && $(&inner_a) === b;
-				}
-			)
-			$(if ctx.eq_targets.iter().any(|(_, k)| *k == EqKind::Bool) =>
-				export function is_equal_bool(a: Ty, b: boolean): boolean {
-					return a === b;
-				}
-			)
 		})
+	}
+	fn construct(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<Tokens> {
+		let mir::Construction::Wrap(inner) = c else {
+			bail!("option is constructed from its value, got {c:?}");
+		};
+		Ok(cx.names.slot_new(id, &Ident::new(VALUE), (cx.lower)(inner)?))
 	}
 }
 
@@ -497,8 +494,8 @@ impl NativeCodegen<JavaScript> for RegistryEntryHolderSet {
 		let read_named = ctx.slot_new(nname, ctx.deserialize_call(nty_use));
 		let (pinput, poutput, perror) = (&pds("Input"), &pds("Output"), &pds("PdsError"));
 		let ids_ty = array_ty(ctx.names, varint);
-		let new_ids = match ctx.names.scalar(varint) {
-			Some(s) => quote!(new $(typed_array(s))(count)),
+		let new_ids = match typed_array(ctx.names, varint) {
+			Some(a) => quote!(new $a(count)),
 			None => quote!(new Array<$(ctx.names.ty(varint))>(count)),
 		};
 		Ok(quote! {
@@ -553,8 +550,8 @@ impl NativeCodegen<JavaScript> for RegistryEntryHolderSet {
 }
 
 fn from_list(ctx: &Ctx, value: TypeId) -> Tokens {
-	match ctx.names.scalar(value) {
-		Some(s) => quote!($(typed_array(s)).from(out)),
+	match typed_array(ctx.names, value) {
+		Some(a) => quote!($a.from(out)),
 		None => quote!(out),
 	}
 }

@@ -79,24 +79,26 @@ impl Visitor for TypeReceiver {
 		let mut collector = ReferenceCollector::default();
 		ty.traverse(&mut collector, TraverseSkip::empty(), reg)?;
 
-		let vty = mem::replace(ty, TypeKind::Void);
 		let id = self.id.next();
+		let vty = mem::replace(
+			ty,
+			TypeKind::Reference(Reference {
+				ty: ReferenceKind::Resolved(id),
+				args: collector
+					.args
+					.into_iter()
+					.map(|(i, f)| (i, FieldRefOrConst::FieldRef(f)))
+					.collect(),
+				types: BTreeMap::new(),
+				body: vec![],
+			}),
+		);
 		self.extracted.push(Type {
 			_id: Cell::new(id),
 			types: BTreeMap::new(),
 			params: collector.params,
 			kind: vty,
 			export: false,
-		});
-		*ty = TypeKind::Reference(Reference {
-			ty: ReferenceKind::Resolved(id),
-			args: collector
-				.args
-				.into_iter()
-				.map(|(i, f)| (i, FieldRefOrConst::FieldRef(f)))
-				.collect(),
-			types: BTreeMap::new(),
-			body: vec![],
 		});
 		Ok(())
 	}

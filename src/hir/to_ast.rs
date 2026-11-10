@@ -22,7 +22,6 @@ impl TypeKind {
 					r, args, types
 				))]
 			}
-			TypeKind::Void => vec![],
 			TypeKind::Native(_) => unreachable!(),
 			_ => todo!(),
 		}

@@ -1,19 +1,19 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
+use super::expr::{value_eq, Elaborator, ValueModel};
 use super::{
-	AstHir, BoxCost, Embed, NativeCodegen, NativeCodegenCtx, NativeLayout, NativeSig,
+	AstHir, BoxCost, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, NativeSig,
 	NativeSigVariant, Projection, SlotVisitor, Upgrade,
 };
 use crate::ast::{FieldRefSegment, Ident};
-use crate::generator::common::{eq_fn_name, eq_target, option_inner, sanitize, tag_repr, EqKind, TagRepr};
+use crate::generator::common::sanitize;
 use crate::generator::rust::rname;
-use crate::generator::typescript::literal;
 use crate::hir::{HirSpecializerCtx, TypeId};
-use crate::mir::{self, TypeKind, TypeMap, Value};
+use crate::mir::{self, Construction, Expr, TypeKind, TypeMap, Value};
 
 pub struct Union;
 
@@ -184,11 +184,58 @@ impl Upgrade for Union {
 	}
 }
 
-fn unsupported(input: &TypeMap, value: &Value, tag: TypeId) -> ! {
-	panic!(
-		"union arm value {value:?} cannot match tag type {:?}",
-		input[tag].name.readable_name()
-	)
+const TAG: &str = "__tag";
+
+impl ValueModel for Union {
+	fn construct(
+		&self,
+		cx: &Elaborator,
+		_id: TypeId,
+		native: &mir::NativeType,
+		value: &Value,
+	) -> Option<Construction> {
+		let u = view(native)?;
+		let void = |ty: &mir::Type| cx.types.is_void(ty.target);
+		if let Value::UnionDescriminator(name) = value {
+			let (_, arm, _) = u.arms.iter().find(|(_, n, ty)| {
+				sanitize(n.as_str()) == sanitize(name.as_str()) && void(ty)
+			})?;
+			return Some(Construction::Variant((*arm).clone(), vec![]));
+		}
+		if let Some((_, arm, ty)) = u.arms.iter().find(|(v, _, _)| value_eq(v, value)) {
+			return void(ty).then(|| Construction::Variant((*arm).clone(), vec![]));
+		}
+		let (default, ty) = u.default?;
+		if !void(ty) {
+			return None;
+		}
+		let tag = cx.construct(u.tag_type, value)?;
+		Some(Construction::Variant(default.clone(), vec![tag]))
+	}
+	fn casts(&self, _cx: &Elaborator, _id: TypeId, native: &mir::NativeType) -> Vec<TypeId> {
+		view(native).map(|u| vec![u.tag_type]).unwrap_or_default()
+	}
+	fn exprs(&self, _cx: &Elaborator, _id: TypeId, native: &mir::NativeType) -> Vec<Expr> {
+		let Some(u) = view(native) else {
+			return vec![];
+		};
+		u.arms
+			.iter()
+			.map(|(value, _, _)| {
+				Expr::Eq(
+					Box::new(Expr::Var(Ident::new(TAG), u.tag_type)),
+					Box::new(Expr::Const(value.clone())),
+				)
+			})
+			.collect()
+	}
+}
+
+fn variant_of<'c>(c: &'c Construction) -> Result<(&'c Ident, &'c [Expr])> {
+	match c {
+		Construction::Variant(name, payload) => Ok((name, payload)),
+		c => bail!("union is constructed from a variant, got {c:?}"),
+	}
 }
 
 impl NativeCodegen<Rust> for Union {
@@ -228,41 +275,16 @@ impl NativeCodegen<Rust> for Union {
 			TagView::Inline(t) => quote!($(names.size_of(t.target))(&virtual_tag(_0))),
 		};
 		let tag_ty = u.tag_type;
-		let cond = |value: &Value| -> rust::Tokens {
-			let Some((b_id, eq_kind)) = eq_target(input, tag_ty, value) else {
-				unsupported(input, value, tag_ty)
-			};
-			let call = names.item(tag_ty, &eq_fn_name(b_id, eq_kind));
-			let arg: rust::Tokens = match value {
-				Value::Signed(n) => quote!(&$(n.to_string())),
-				Value::Unsigned(n) => quote!(&$(n.to_string())),
-				Value::Bool(b) => quote!(&$(b.to_string())),
-				Value::String(s) => quote!(&$(quoted(s.as_str())).to_owned()),
-				Value::UnionDescriminator(id) => {
-					let vname = Ident::new(&sanitize(id.as_str()));
-					quote!(&$(names.ty(tag_ty))::$(rname(&vname)))
-				}
-			};
-			quote!($call(__tag, $arg))
-		};
-		let tag_value = |value: &Value| -> rust::Tokens {
-			let literal = || -> rust::Tokens {
-				match value {
-					Value::Signed(n) => quote!($(n.to_string())),
-					Value::Unsigned(n) => quote!($(n.to_string())),
-					Value::Bool(b) => quote!($(b.to_string())),
-					Value::String(s) => quote!($(quoted(s.as_str())).into()),
-					Value::UnionDescriminator(_) => quote!(unreachable!()),
-				}
-			};
-			match tag_repr(input, tag_ty, value) {
-				Some(TagRepr::Literal) => literal(),
-				Some(TagRepr::OptionSome(opt)) => {
-					let inner = names.slot_new(opt, &Ident::new("Value"), literal());
-					quote!(Some($inner))
-				}
-				Some(TagRepr::Variant(u, n)) => quote!($(names.ty(u))::$(rname(&n))),
-				None => quote!(todo!("reconstructing a non-scalar tag")),
+		let conds = ctx
+			.exprs
+			.iter()
+			.map(|e| (ctx.lower)(e, false))
+			.collect::<Result<Vec<_>>>()?;
+		ensure!(conds.len() == u.arms.len(), "one condition per union arm");
+		let tag_value = |value: &Value| -> Result<rust::Tokens> {
+			match ctx.elab.construct(tag_ty, value) {
+				Some(e) => (ctx.lower)(&e, false),
+				None => Ok(quote!(todo!("reconstructing a non-scalar tag"))),
 			}
 		};
 		let payload_ty = |t: TypeId, boxed: bool| -> rust::Tokens {
@@ -286,25 +308,25 @@ impl NativeCodegen<Rust> for Union {
 		let mut vtag_arms: Vec<rust::Tokens> = Vec::new();
 		let mut assert_arms: Vec<rust::Tokens> = Vec::new();
 		let mut de_branches: Vec<rust::Tokens> = Vec::new();
-		for (value, variant, vty) in &u.arms {
+		for ((value, variant, vty), cond) in u.arms.iter().zip(&conds) {
 			let v = rname(variant);
 			if input.is_void(vty.target) {
 				variants_decl.push(quote!($(&v),));
 				ser_arms.push(quote!(Ty::$(&v) => Ok(()),));
 				size_arms.push(quote!(Ty::$(&v) => 0,));
-				vtag_arms.push(quote!(Ty::$(&v) => $(tag_value(value)),));
-				assert_arms.push(quote!(Ty::$(&v) => $(cond(value)),));
-				de_branches.push(quote!(if $(cond(value)) { return Ok(Ty::$(&v)); }));
+				vtag_arms.push(quote!(Ty::$(&v) => $(tag_value(value)?),));
+				assert_arms.push(quote!(Ty::$(&v) => $cond,));
+				de_branches.push(quote!(if $cond { return Ok(Ty::$(&v)); }));
 			} else {
 				let boxed = ctx.boxed(variant);
 				variants_decl.push(quote!($(&v)($(payload_ty(vty.target, boxed))),));
 				ser_arms
 					.push(quote!(Ty::$(&v)(__v) => $(names.serialize(vty.target))(__v, output),));
 				size_arms.push(quote!(Ty::$(&v)(__v) => $(names.size_of(vty.target))(__v),));
-				vtag_arms.push(quote!(Ty::$(&v)(_) => $(tag_value(value)),));
-				assert_arms.push(quote!(Ty::$(&v)(_) => $(cond(value)),));
+				vtag_arms.push(quote!(Ty::$(&v)(_) => $(tag_value(value)?),));
+				assert_arms.push(quote!(Ty::$(&v)(_) => $cond,));
 				de_branches.push(quote! {
-					if $(cond(value)) {
+					if $cond {
 						return Ok(Ty::$(&v)($(de_value(vty, boxed))));
 					}
 				});
@@ -345,25 +367,7 @@ impl NativeCodegen<Rust> for Union {
 		} else {
 			quote!(match _0)
 		};
-		let eq_fns: Vec<rust::Tokens> = ctx
-			.eq_targets
-			.iter()
-			.map(|(b, kind)| match kind {
-				EqKind::SelfEq => quote! {
-					pub fn $(format!("is_equal_{}", b.raw()))(a: &Ty, b: &Ty) -> bool { a == b }
-				},
-				EqKind::VirtualTag => quote! {
-					pub fn $(format!("is_equal_{}", b.raw()))(a: &Ty, b: &$(names.ty(*b))) -> bool {
-						&virtual_tag(a) == b
-					}
-				},
-				EqKind::OptionInner => quote!(),
-				EqKind::Bool => quote! {
-					pub fn is_equal_bool(a: &Ty, b: &bool) -> bool { a == b }
-				},
-			})
-			.collect();
-		let expose_tag = is_inline || (ctx.virtual_used)("tag");
+		let expose_tag = is_inline || (ctx.virtual_used)("tag") || !ctx.cast_to.is_empty();
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
@@ -412,8 +416,33 @@ impl NativeCodegen<Rust> for Union {
 					})
 				}
 			)
-			$(for f in &eq_fns join($['\r']) => $f)
 		})
+	}
+	fn construct(
+		&self,
+		cx: &LowerCx<Rust>,
+		id: TypeId,
+		_native: &mir::NativeType,
+		c: &Construction,
+	) -> Result<rust::Tokens> {
+		let (name, payload) = variant_of(c)?;
+		let payload = payload
+			.iter()
+			.map(|e| (cx.lower)(e))
+			.collect::<Result<Vec<_>>>()?;
+		Ok(quote! {
+			$(cx.names.ty(id))::$(rname(name))$(if !payload.is_empty() => ($(for p in payload join(, ) => $p)))
+		})
+	}
+	fn cast(
+		&self,
+		cx: &LowerCx<Rust>,
+		id: TypeId,
+		_native: &mir::NativeType,
+		value: rust::Tokens,
+		_to: TypeId,
+	) -> Result<rust::Tokens> {
+		Ok(quote!($(cx.names.item(id, "virtual_tag"))(&$value)))
 	}
 }
 
@@ -437,24 +466,18 @@ impl NativeCodegen<JavaScript> for Union {
 		let is_inline = matches!(u.tag, TagView::Inline(_));
 		let is_empty = u.arms.is_empty() && u.default.is_none();
 		let tag_ty = u.tag_type;
-		let cond = |value: &Value| -> js::Tokens {
-			let Some((b, kind)) = eq_target(input, tag_ty, value) else {
-				unsupported(input, value, tag_ty)
-			};
-			let call = names.item(tag_ty, &eq_fn_name(b, kind));
-			quote!($call(__tag, $(literal(input, value, b))))
-		};
-		let tag_value = |value: &Value| -> js::Tokens {
-			match tag_repr(input, tag_ty, value) {
-				Some(TagRepr::Literal) => literal(input, value, tag_ty),
-				Some(TagRepr::OptionSome(opt)) => {
-					let inner = option_inner(input, opt).unwrap_or_default();
-					names.slot_new(opt, &Ident::new("Value"), literal(input, value, inner))
-				}
-				Some(TagRepr::Variant(_, n)) => quote!({ kind: $(quoted(n.as_str())) }),
-				None => {
-					quote!((() => { throw new $perror("InvalidValue", "reconstructing a non-scalar tag"); })())
-				}
+		let conds = ctx
+			.exprs
+			.iter()
+			.map(|e| (ctx.lower)(e, false))
+			.collect::<Result<Vec<_>>>()?;
+		ensure!(conds.len() == u.arms.len(), "one condition per union arm");
+		let tag_value = |value: &Value| -> Result<js::Tokens> {
+			match ctx.elab.construct(tag_ty, value) {
+				Some(e) => (ctx.lower)(&e, false),
+				None => Ok(
+					quote!((() => { throw new $perror("InvalidValue", "reconstructing a non-scalar tag"); })()),
+				),
 			}
 		};
 		let read_tag = match u.tag {
@@ -486,14 +509,14 @@ impl NativeCodegen<JavaScript> for Union {
 		let mut vtag: Vec<js::Tokens> = Vec::new();
 		let mut asserts: Vec<js::Tokens> = Vec::new();
 		let mut de: Vec<js::Tokens> = Vec::new();
-		for (value, variant, vty) in &u.arms {
+		for ((value, variant, vty), cond) in u.arms.iter().zip(&conds) {
 			let kind: js::Tokens = quote!($(quoted(variant.as_str())));
 			if input.is_void(vty.target) {
 				variants.push(quote!({ kind: $(&kind) }));
 				ser.push(quote!(case $(&kind): return;));
 				size.push(quote!(case $(&kind): return __n;));
 				de.push(quote! {
-					if ($(cond(value))) {
+					if ($cond) {
 						return { kind: $(&kind) };
 					}
 				});
@@ -506,13 +529,13 @@ impl NativeCodegen<JavaScript> for Union {
 					quote!(case $(&kind): return __n + $(names.size_of(vty.target))(_0.value);),
 				);
 				de.push(quote! {
-					if ($(cond(value))) {
+					if ($cond) {
 						return { kind: $(&kind), value: $(names.deserialize(vty.target))(input$(args_of(vty))) };
 					}
 				});
 			}
-			vtag.push(quote!(case $(&kind): return $(tag_value(value));));
-			asserts.push(quote!(case $(&kind): ok = $(cond(value)); break;));
+			vtag.push(quote!(case $(&kind): return $(tag_value(value)?);));
+			asserts.push(quote!(case $(&kind): ok = $cond; break;));
 		}
 		let de_default = if let Some((dname, dty)) = u.default {
 			let kind: js::Tokens = quote!($(quoted(dname.as_str())));
@@ -537,30 +560,7 @@ impl NativeCodegen<JavaScript> for Union {
 			quote!(throw new $perror("InvalidValue", "no union arm matches the tag");)
 		};
 
-		let eq_fns: Vec<js::Tokens> = ctx
-			.eq_targets
-			.iter()
-			.map(|(b, kind)| match kind {
-				EqKind::SelfEq => quote! {
-					export function $(format!("is_equal_{}", b.raw()))(a: Ty, b: Ty): boolean {
-						return a.kind === b.kind;
-					}
-				},
-				EqKind::VirtualTag => quote! {
-					export function $(format!("is_equal_{}", b.raw()))(a: Ty, b: $(names.ty(*b))): boolean {
-						return virtual_tag(a) === b;
-					}
-				},
-				EqKind::OptionInner => quote!(),
-				EqKind::Bool => quote! {
-					export function is_equal_bool(a: Ty, b: boolean): boolean {
-						return Number(virtual_tag(a)) === Number(b);
-					}
-				},
-			})
-			.collect();
-
-		let expose_tag = is_inline || (ctx.virtual_used)("tag");
+		let expose_tag = is_inline || (ctx.virtual_used)("tag") || !ctx.cast_to.is_empty();
 		let args_param = || -> js::Tokens {
 			if has_args {
 				quote!(, $((ctx.args_param)()))
@@ -587,7 +587,6 @@ impl NativeCodegen<JavaScript> for Union {
 						throw new $perror("InvalidValue", "empty union");
 					}
 				)
-				$(for f in &eq_fns join($['\r']) => $f)
 			}
 		} else {
 			quote! {
@@ -630,8 +629,34 @@ impl NativeCodegen<JavaScript> for Union {
 						}
 					}
 				)
-				$(for f in &eq_fns join($['\r']) => $f)
 			}
 		})
+	}
+	fn construct(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		native: &mir::NativeType,
+		c: &Construction,
+	) -> Result<js::Tokens> {
+		let (name, payload) = variant_of(c)?;
+		let is_default = view(native)
+			.and_then(|u| u.default)
+			.is_some_and(|(d, _)| d == name);
+		Ok(match (is_default, payload) {
+			(_, []) => quote!({ kind: $(quoted(name.as_str())) }),
+			(true, [tag]) => quote!({ kind: $(quoted(name.as_str())), tag: $((cx.lower)(tag)?) }),
+			_ => bail!("union variant {name:?} constructed with {} values", payload.len()),
+		})
+	}
+	fn cast(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		id: TypeId,
+		_native: &mir::NativeType,
+		value: js::Tokens,
+		_to: TypeId,
+	) -> Result<js::Tokens> {
+		Ok(quote!($(cx.names.item(id, "virtual_tag"))($value)))
 	}
 }

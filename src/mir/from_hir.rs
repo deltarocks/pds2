@@ -98,7 +98,6 @@ impl TypeKind {
 					.map(|(n, v)| (n.clone(), Type::from_hir(v)))
 					.collect(),
 			}),
-			hir::TypeKind::Void => Self::Void,
 		})
 	}
 }

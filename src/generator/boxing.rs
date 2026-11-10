@@ -25,7 +25,6 @@ pub fn visit_type(
 				layout.visit(native, v);
 			}
 		}
-		TypeKind::Void => {}
 	}
 	Ok(())
 }

@@ -1,7 +1,7 @@
 //! Apply specializers desugaring pass
 //!
 //! Runs after path resolution, before monomorphization. Every use-site reference to
-//! a *body-accepting* specializer native (`body;` in the `def_native`) invokes the
+//! a *body-accepting* specializer native invokes the
 //! registered [`AstHir`](crate::specializer::AstHir) implementation to project the
 //! use-site body into a concrete list of fields, replacing the reference with an
 //! inline `Native` whose `fields` are those projected fields. The specializer still
@@ -87,8 +87,6 @@ impl Visitor for Apply<'_> {
 			.asthir
 			.get(name.as_str())
 			.ok_or_else(|| anyhow!("no specializer implementation for {name:?}"))?;
-		// Constant configuration arguments move onto the inline native; field
-		// references would escape the use-site scope once the reference is gone.
 		let mut const_args = Vec::new();
 		let mut ref_args = Vec::new();
 		for (n, a) in &r.args {

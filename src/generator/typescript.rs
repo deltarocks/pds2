@@ -1,16 +1,17 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context as _, Result};
+use anyhow::{anyhow, bail, Context as _, Result};
 use genco::lang::{js, JavaScript};
 use genco::prelude::*;
 
-use super::common::{self, option_inner, sanitize, scalar_of, EqKind};
+use super::common::{self, option_inner, sanitize, scalar_of};
 use super::GeneratorOutput;
 use crate::ast::{FieldRefSegment, Ident};
 use crate::hir::TypeId;
-use crate::mir::{self, Field, FieldOrConst, Type, TypeKind, TypeMap, Value};
-use crate::specializer::{Names, NativeCodegenCtx, Registry, Scalar};
+use crate::mir::{self, Construction, Expr, Field, FieldOrConst, Type, TypeKind, TypeMap, Value};
+use crate::specializer::expr::Elaborator;
+use crate::specializer::{LowerCx, Names, NativeCodegen, NativeCodegenCtx, Registry, Scalar};
 
 type Tokens = js::Tokens;
 
@@ -184,11 +185,70 @@ fn args_passing(meta: &TsMeta, input: &Type) -> Tokens {
 	quote!({ $(for a in args join(, ) => $a) })
 }
 
+fn native_codegen<'m>(
+	meta: &TsMeta<'m>,
+	id: TypeId,
+) -> Result<(&'m mir::NativeType, &'m dyn NativeCodegen<JavaScript>)> {
+	let TypeKind::Native(n) = &meta.types[id].kind else {
+		bail!("{} is not a native", meta.name_str(id));
+	};
+	let (spec, _) = n
+		.specializer
+		.as_ref()
+		.ok_or_else(|| anyhow!("{} has no specializer", meta.name_str(id)))?;
+	let codegen = meta
+		.reg
+		.codegen::<JavaScript>(spec.as_str())
+		.ok_or_else(|| anyhow!("no typescript codegen for specializer {spec:?}"))?;
+	Ok((n, codegen))
+}
+
+fn lower(meta: &TsMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
+	let rec = |e: &Expr| lower(meta, e, from_locals);
+	let cx = LowerCx {
+		names: meta,
+		types: meta.types,
+		lower: &rec,
+	};
+	Ok(match expr {
+		Expr::Var(name, _) => quote!($(name.as_str())),
+		Expr::Field(f) => read_reference(meta, from_locals, f),
+		Expr::Const(v) => bail!("untyped constant {v:?}"),
+		Expr::Construct(id, c) => match (scalar_of(meta.types, *id), c) {
+			(Some(_), Construction::Literal(v)) => literal(meta.types, v, *id),
+			_ => {
+				let (n, codegen) = native_codegen(meta, *id)?;
+				codegen.construct(&cx, *id, n, c)?
+			}
+		},
+		Expr::Cast(e, to) => {
+			let from = e
+				.ty()
+				.ok_or_else(|| anyhow!("cast of an untyped expression"))?;
+			let from = Elaborator {
+				types: meta.types,
+				reg: meta.reg,
+			}
+			.resolve(from);
+			let (n, codegen) = native_codegen(meta, from)?;
+			codegen.cast(&cx, from, n, rec(e)?, *to)?
+		}
+		Expr::Eq(a, b) => {
+			let scalar = |e: &Expr| e.ty().is_some_and(|t| scalar_of(meta.types, t).is_some());
+			if scalar(a) && scalar(b) {
+				quote!(($(rec(a)?) === $(rec(b)?)))
+			} else {
+				quote!($(js::import("../pds.ts", "equal"))($(rec(a)?), $(rec(b)?)))
+			}
+		}
+	})
+}
+
 pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Registry) -> Result<()> {
 	let meta = TsMeta::new(input, reg);
-	let unions_as_tag = common::unions_as_tag(input);
 	let virtuals_used = common::virtuals_used(input);
-	let eq_impls = common::eq_impls(input);
+	let elab = Elaborator { types: input, reg };
+	let elaborated = common::elaborate(&elab)?;
 
 	let pinput = &js::import("../pds.ts", "Input");
 	let poutput = &js::import("../pds.ts", "Output");
@@ -241,31 +301,7 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 					}
 				}
 			}
-			TypeKind::Void => {
-				quote! {
-					export type Ty = null;
-					export function serialize(_0: Ty, _output: $poutput): void {}
-					export function deserialize(_input: $pinput): Ty {
-						return null;
-					}
-					export function size_of(_0: Ty): number {
-						return 0;
-					}
-				}
-			}
 			TypeKind::Native(native) => {
-				let eq_entries: Vec<(TypeId, EqKind)> = eq_impls
-					.get(id)
-					.map(|s| s.iter().copied().collect())
-					.unwrap_or_default();
-				let bool_eq = eq_entries.iter().any(|(_, k)| *k == EqKind::Bool);
-				let bool_fn = quote! {
-					$(if bool_eq =>
-						export function is_equal_bool(a: Ty, b: boolean): boolean {
-							return a === b;
-						}
-					)
-				};
 				match &native.specializer {
 					Some((specializer, variant)) => {
 						let resolve = |n: &str| {
@@ -285,10 +321,8 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 								args_passing(&meta, u)
 							}
 						};
-						let virtual_used = |name: &str| {
-							virtuals_used.contains(&(*id, Ident::new(name)))
-								|| (name == "tag" && unions_as_tag.contains(id))
-						};
+						let virtual_used =
+							|name: &str| virtuals_used.contains(&(*id, Ident::new(name)));
 						codegen
 							.generate(&NativeCodegenCtx {
 								id: *id,
@@ -300,13 +334,16 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 								args_struct: &args_struct_gen,
 								args_param: &args_param,
 								pass_args: &pass_args,
-								eq_targets: &eq_entries,
 								types: input,
+								elab: &elab,
+								exprs: elaborated.exprs(*id),
+								cast_to: elaborated.cast_to(*id),
 								virtual_used: &virtual_used,
 								read_ref: &|f, from_locals| read_reference(&meta, from_locals, f),
 								read_arg: &|v, from_locals| {
 									read_or_const_reference(&meta, from_locals, v, TypeId::default())
 								},
+								lower: &|e, from_locals| lower(&meta, e, from_locals),
 							})
 							.with_context(|| format!("typescript codegen for {:?}", ty.name))?
 					}
@@ -317,14 +354,6 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 							export const serialize = $native_import.serialize;
 							export const deserialize = $native_import.deserialize;
 							export const size_of = $native_import.size_of;
-							$(for (b, kind) in &eq_entries join($['\r']) =>
-								$(if *kind != EqKind::Bool =>
-									export function $(format!("is_equal_{}", b.raw()))(a: Ty, b: Ty): boolean {
-										return a === b;
-									}
-								)
-							)
-							$bool_fn
 						}
 					}
 				}

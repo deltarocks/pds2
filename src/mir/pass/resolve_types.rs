@@ -81,7 +81,6 @@ impl Definition {
 			mir::TypeKind::Alias(ty) => {
 				Self::resolve_type_use(self_id, ty, types, out)?;
 			}
-			mir::TypeKind::Void => {}
 		};
 		Ok(())
 	}

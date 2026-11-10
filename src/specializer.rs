@@ -1,10 +1,3 @@
-//! Specializers: Rust implementations that turn a use-site body of a native type
-//! into a concrete list of typed fields.
-//!
-//! A `def_native` declares `body;` to accept a body and `@specializer name` to pick
-//! the implementation. The `apply_specializers` pass calls [`Specializer::fields`]
-//! during HIR desugaring (after path resolution) to project the body into fields.
-
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
@@ -14,13 +7,14 @@ use genco::Tokens;
 use tracing::info;
 
 pub mod container;
+pub mod expr;
 mod typescript;
 pub mod union;
 
 use container::Container;
+use expr::{Elaborator, ValueModel};
 
 use crate::ast::{self, Ident, Statement};
-use crate::generator::common::EqKind;
 use crate::upgrade::{keys_fit, plan, NativeSig, NativeSigVariant, TagKind, UpgradeCtx};
 
 use crate::hir::{self, HirSpecializerCtx, TypeId};
@@ -64,10 +58,12 @@ pub enum Scalar {
 	U64,
 	F32,
 	F64,
+	Bool,
 }
 impl Scalar {
 	pub fn parse(s: &str) -> Option<Self> {
 		Some(match s {
+			"bool" => Self::Bool,
 			"i8" => Self::I8,
 			"u8" => Self::U8,
 			"i16" => Self::I16,
@@ -140,13 +136,20 @@ pub struct NativeCodegenCtx<'a, L: Lang> {
 	/// (empty tokens when the target takes no params); arg refs resolve against this
 	/// def's own `args`
 	pub pass_args: &'a dyn Fn(&mir::Type) -> Tokens<L>,
-	/// types this native is compared against when used as a union discriminant; a
-	/// tag-capable native (e.g. `option`) emits an `is_equal_{t}` helper per entry.
-	pub eq_targets: &'a [(TypeId, EqKind)],
 	pub types: &'a mir::TypeMap,
+	pub elab: &'a Elaborator<'a>,
+	pub exprs: &'a [mir::Expr],
+	pub cast_to: &'a [TypeId],
 	pub virtual_used: &'a dyn Fn(&str) -> bool,
 	pub read_ref: &'a dyn Fn(&mir::Field, bool) -> Tokens<L>,
 	pub read_arg: &'a dyn Fn(&mir::FieldOrConst, bool) -> Tokens<L>,
+	pub lower: &'a dyn Fn(&mir::Expr, bool) -> Result<Tokens<L>>,
+}
+
+pub struct LowerCx<'a, L: Lang> {
+	pub names: &'a dyn Names<L>,
+	pub types: &'a mir::TypeMap,
+	pub lower: &'a dyn Fn(&mir::Expr) -> Result<Tokens<L>>,
 }
 
 impl<L: Lang> NativeCodegenCtx<'_, L> {
@@ -226,6 +229,25 @@ pub trait NativeCodegen<L: Lang> {
 	) -> Option<Tokens<L>> {
 		None
 	}
+	fn construct(
+		&self,
+		_cx: &LowerCx<L>,
+		id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<Tokens<L>> {
+		bail!("{id:?} has no construction {c:?}")
+	}
+	fn cast(
+		&self,
+		_cx: &LowerCx<L>,
+		id: TypeId,
+		_native: &mir::NativeType,
+		_value: Tokens<L>,
+		to: TypeId,
+	) -> Result<Tokens<L>> {
+		bail!("{id:?} has no cast to {to:?}")
+	}
 }
 
 const VALUE: &str = "Value";
@@ -284,9 +306,16 @@ pub struct Registry {
 	pub(crate) layout: HashMap<String, Box<dyn NativeLayout>>,
 	pub(crate) codegen_rust: HashMap<String, Box<dyn NativeCodegen<Rust>>>,
 	pub(crate) codegen_ts: HashMap<String, Box<dyn NativeCodegen<JavaScript>>>,
+	pub(crate) value: HashMap<String, Box<dyn ValueModel>>,
 }
 
 impl Registry {
+	pub fn register_value(&mut self, name: &str, model: impl ValueModel + 'static) {
+		self.value.insert(name.to_owned(), Box::new(model));
+	}
+	pub fn value_model(&self, name: &str) -> Option<&dyn ValueModel> {
+		self.value.get(name).map(|b| b.as_ref())
+	}
 	pub fn register_asthir(&mut self, name: &str, specializer: impl AstHir + 'static) {
 		self.asthir.insert(name.to_owned(), Box::new(specializer));
 	}
@@ -329,6 +358,8 @@ pub fn register_protodef_types(reg: &mut Registry) {
 	reg.register_codegen::<Rust>("union", union::Union);
 	reg.register_codegen::<JavaScript>("union", union::Union);
 	reg.register_upgrade(union::Union);
+	reg.register_value("union", union::Union);
+	reg.register_value("option", OptionP);
 
 	reg.register_layout("bitfield", Bitfield);
 	reg.register_layout("bitflags", Bitflags);
@@ -1480,11 +1511,6 @@ impl NativeCodegen<Rust> for OptionP {
 			.context("option type")?;
 		let value_slot = Ident::new(VALUE);
 		let read_value = ctx.slot_new(&value_slot, quote!($(ctx.deserialize_call(value_use))?));
-		let as_ref = if ctx.boxed(&value_slot) {
-			quote!(as_deref)
-		} else {
-			quote!(as_ref)
-		};
 		let boolean =
 			(ctx.resolve)("bool").ok_or_else(|| anyhow!("option needs the `bool` native"))?;
 		let (pinput, poutput, presult) = pds_io();
@@ -1511,14 +1537,32 @@ impl NativeCodegen<Rust> for OptionP {
 				if let Some(v) = _0 { n += $(ctx.names.size_of(value))(v); }
 				n
 			}
-			// Union arm matching when an `option` is used as a discriminant: each
-			// target is the inner value type; the present value is compared to it.
-			$(for (t, _) in ctx.eq_targets.iter().filter(|(_, k)| *k != EqKind::Bool) join($['\r']) =>
-				pub fn $(format!("is_equal_{}", t.raw()))(a: &Ty, b: &$(ctx.names.ty(*t))) -> bool {
-					a.$(&as_ref)() == Some(b)
-				}
-			)
 		})
+	}
+	fn construct(
+		&self,
+		cx: &LowerCx<Rust>,
+		id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<rust::Tokens> {
+		let mir::Construction::Wrap(inner) = c else {
+			bail!("option is constructed from its value, got {c:?}");
+		};
+		let value = cx.names.slot_new(id, &Ident::new(VALUE), (cx.lower)(inner)?);
+		Ok(quote!(Some($value)))
+	}
+}
+impl ValueModel for OptionP {
+	fn construct(
+		&self,
+		cx: &Elaborator,
+		_id: TypeId,
+		native: &mir::NativeType,
+		value: &mir::Value,
+	) -> Option<mir::Construction> {
+		let inner = specialization_use(native, VALUE)?.target;
+		Some(mir::Construction::Wrap(Box::new(cx.construct(inner, value)?)))
 	}
 }
 impl Upgrade for OptionP {
@@ -1559,6 +1603,12 @@ struct BoolP;
 impl Upgrade for BoolP {
 	fn name(&self) -> String {
 		"bool".to_owned()
+	}
+	fn sig(&self) -> NativeSig {
+		NativeSig {
+			scalar: Some("bool".to_owned()),
+			..Default::default()
+		}
 	}
 }
 struct LpVec3;

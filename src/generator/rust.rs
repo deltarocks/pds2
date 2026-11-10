@@ -9,13 +9,14 @@ use std::rc::Rc;
 use crate::ast::{FieldRefSegment, Ident};
 use crate::hir::TypeId;
 use crate::mir::FieldOrConst;
-use crate::mir::{self, Field, Type, TypeKind, TypeMap};
+use crate::mir::{self, Construction, Expr, Field, Type, TypeKind, TypeMap, Value};
 
 use super::boxing::{self, Boxed};
-use super::common::{self, scalar_of, EqKind};
+use super::common::{self, scalar_of};
 use super::GeneratorOutput;
-use crate::specializer::{Names, NativeCodegenCtx, Registry, Scalar};
-use anyhow::{Context as _, Result};
+use crate::specializer::expr::Elaborator;
+use crate::specializer::{LowerCx, Names, NativeCodegen, NativeCodegenCtx, Registry, Scalar};
+use anyhow::{anyhow, bail, Context as _, Result};
 use genco::lang::Rust;
 
 #[derive(Clone)]
@@ -231,20 +232,89 @@ fn generate_args_passing(types: &RustMeta, input: &Type) -> Tokens {
 	}
 }
 
+fn literal(s: Scalar, value: &Value) -> Result<Tokens> {
+	let suffix = match s {
+		Scalar::I8 => "i8",
+		Scalar::U8 => "u8",
+		Scalar::I16 => "i16",
+		Scalar::U16 => "u16",
+		Scalar::I32 => "i32",
+		Scalar::U32 => "u32",
+		Scalar::I64 => "i64",
+		Scalar::U64 => "u64",
+		Scalar::F32 => "f32",
+		Scalar::F64 => "f64",
+		Scalar::Bool => "",
+	};
+	Ok(match (s, value) {
+		(Scalar::Bool, Value::Bool(b)) => quote!($(b.to_string())),
+		(Scalar::Bool, v) => bail!("{v:?} is not a bool literal"),
+		(_, Value::Signed(n)) => quote!($(format!("{n}_{suffix}"))),
+		(_, Value::Unsigned(n)) => quote!($(format!("{n}_{suffix}"))),
+		(s, v) => bail!("{v:?} is not a {s:?} literal"),
+	})
+}
+
+fn native_codegen<'m>(
+	meta: &RustMeta<'m>,
+	id: TypeId,
+) -> Result<(&'m mir::NativeType, &'m dyn NativeCodegen<Rust>)> {
+	let TypeKind::Native(n) = &meta.types[id].kind else {
+		bail!("{} is not a native", meta.name_str(id));
+	};
+	let (spec, _) = n
+		.specializer
+		.as_ref()
+		.ok_or_else(|| anyhow!("{} has no specializer", meta.name_str(id)))?;
+	let codegen = meta
+		.reg
+		.codegen::<Rust>(spec.as_str())
+		.ok_or_else(|| anyhow!("no rust codegen for specializer {spec:?}"))?;
+	Ok((n, codegen))
+}
+
+fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
+	let rec = |e: &Expr| lower(meta, e, from_locals);
+	let cx = LowerCx {
+		names: meta,
+		types: meta.types,
+		lower: &rec,
+	};
+	Ok(match expr {
+		Expr::Var(name, _) => quote!($(name.as_str()).clone()),
+		Expr::Field(f) => {
+			quote!(($(generate_read_reference(meta, from_locals, f, None))).clone())
+		}
+		Expr::Const(v) => bail!("untyped constant {v:?}"),
+		Expr::Construct(id, c) => match (scalar_of(meta.types, *id), c) {
+			(Some(s), Construction::Literal(v)) => literal(s, v)?,
+			_ => {
+				let (n, codegen) = native_codegen(meta, *id)?;
+				codegen.construct(&cx, *id, n, c)?
+			}
+		},
+		Expr::Cast(e, to) => {
+			let from = e
+				.ty()
+				.ok_or_else(|| anyhow!("cast of an untyped expression"))?;
+			let from = Elaborator {
+				types: meta.types,
+				reg: meta.reg,
+			}
+			.resolve(from);
+			let (n, codegen) = native_codegen(meta, from)?;
+			codegen.cast(&cx, from, n, rec(e)?, *to)?
+		}
+		Expr::Eq(a, b) => quote!(($(rec(a)?) == $(rec(b)?))),
+	})
+}
+
 pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Registry) -> Result<()> {
 	let boxed = boxing::analyze(input, reg)?;
 	let meta = RustMeta::new(input, reg, boxed);
-
-	// Unions referenced as another union's discriminant must expose `virtual_tag`
-	// even when they are external-tagged (the referencing union calls it to compute
-	// the discriminant). Inline-tag unions always expose it (for their own serialize).
-	let unions_as_tag = common::unions_as_tag(input);
 	let virtuals_used = common::virtuals_used(input);
-
-	// For every union arm, record which `is_equal_{b}` helpers its tag type must
-	// expose. Each tag-capable module emits these from its own entry; the union
-	// codegen calls them instead of inlining tag-kind-specific comparisons.
-	let eq_impls = common::eq_impls(input);
+	let elab = Elaborator { types: input, reg };
+	let elaborated = common::elaborate(&elab)?;
 
 	let mut out_module = vec![];
 
@@ -299,20 +369,6 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 						}
 					}
 				}
-				TypeKind::Void => {
-					quote! {
-						pub type Ty = ();
-						pub fn serialize(_0: &Ty, _output: &mut $poutput) -> $presult<()> {
-							Ok(())
-						}
-						pub fn deserialize(_input: &mut $pinput) -> $presult<Ty> {
-							Ok(())
-						}
-						pub fn size_of(_0: &Ty) -> usize {
-							0
-						}
-					}
-				}
 				TypeKind::Native(_) => unreachable!("handled by the native branch"),
 			};
 			mod_contents
@@ -320,8 +376,6 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 			let TypeKind::Native(native) = &ty.kind else {
 				unreachable!();
 			};
-			let eq_entries: Vec<(TypeId, EqKind)> =
-				eq_impls.get(id).map(|s| s.iter().copied().collect()).unwrap_or_default();
 			match native {
 				mir::NativeType {
 					specializer: Some((specializer, variant)),
@@ -345,10 +399,8 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 						}
 					};
 					let pass_args = |u: &Type| args_of(u.target, u);
-					let virtual_used = |name: &str| {
-						virtuals_used.contains(&(*id, Ident::new(name)))
-							|| (name == "tag" && unions_as_tag.contains(id))
-					};
+					let virtual_used =
+						|name: &str| virtuals_used.contains(&(*id, Ident::new(name)));
 					codegen
 						.generate(&NativeCodegenCtx {
 							id: *id,
@@ -360,8 +412,10 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 							args_struct: &args_struct_gen,
 							args_param: &args_param,
 							pass_args: &pass_args,
-							eq_targets: &eq_entries,
 							types: input,
+							elab: &elab,
+							exprs: elaborated.exprs(*id),
+							cast_to: elaborated.cast_to(*id),
 							virtual_used: &virtual_used,
 							read_ref: &|f, from_locals| {
 								generate_read_reference(&meta, from_locals, f, None)
@@ -369,6 +423,7 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 							read_arg: &|v, from_locals| {
 								generate_read_or_const_reference(&meta, from_locals, v, None)
 							},
+							lower: &|e, from_locals| lower(&meta, e, from_locals),
 						})
 						.with_context(|| format!("codegen for {:?}", ty.name))?
 				}
@@ -377,21 +432,8 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 						"crate::pds_native",
 						format!("pds_{}", ty.name.readable_name()),
 					);
-					// Scalar leaves used as a union discriminant compare by value.
-					let eq_fns: Vec<Tokens> = eq_entries
-						.iter()
-						.map(|(b, kind)| match kind {
-							EqKind::Bool => quote! {
-								pub fn is_equal_bool(a: &Ty, b: &bool) -> bool { a == b }
-							},
-							_ => quote! {
-								pub fn $(format!("is_equal_{}", b.raw()))(a: &Ty, b: &Ty) -> bool { a == b }
-							},
-						})
-						.collect();
 					quote! {
 						pub use $import::*;
-						$(for f in &eq_fns join($['\r']) => $f)
 					}
 				}
 			}

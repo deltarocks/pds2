@@ -1,4 +1,6 @@
+mod expr;
 mod from_hir;
+pub use expr::{Construction, Expr};
 pub use from_hir::from_hir;
 use std::{cell::Cell, collections::BTreeMap, ops::Index};
 mod pass;
@@ -38,7 +40,6 @@ pub struct NativeType {
 	pub const_args: Vec<(Ident, crate::hir::Value)>,
 	pub ref_args: Vec<(Ident, Field)>,
 	pub arg_virtuals: Vec<Ident>,
-	// carries no data (the deduplicated canonical void)
 	pub is_void: bool,
 	pub scalar: Option<Ident>,
 }
@@ -82,7 +83,6 @@ pub enum TypeKind {
 	/// (`def(root_const_field) { export; } => array(size: 3) => varint`). Generators
 	/// emit a forwarding type.
 	Alias(Type),
-	Void,
 }
 
 impl TypeKind {
@@ -110,11 +110,8 @@ impl Index<TypeId> for TypeMap {
 	}
 }
 impl TypeMap {
-	/// Whether a type carries no wire data: the canonical `is_void` native, or a bare
-	/// `Void` kind (when no `is_void` native was declared to deduplicate to).
 	pub fn is_void(&self, id: TypeId) -> bool {
 		match &self[id].kind {
-			TypeKind::Void => true,
 			TypeKind::Native(n) => n.is_void,
 			_ => false,
 		}

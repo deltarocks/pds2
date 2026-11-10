@@ -58,7 +58,6 @@ pub struct NativeSigVariant {
 	pub generics: BTreeSet<String>,
 	/// whether the native receives a chained `=> T` element type (the `Value` generic)
 	pub value_generic: bool,
-	/// whether use-sites carry a `{ ... }` body (declared via `body;`)
 	pub accepts_body: Option<&'static str>,
 }
 /// Discovered/declared signature of a native type, used to emit `def_native` blocks.
@@ -66,7 +65,7 @@ pub struct NativeSigVariant {
 pub struct NativeSig {
 	/// `@specializer` name, if the native is specializer-backed
 	pub specializer: Option<String>,
-	/// the native carries no data (`is_void;`); all void types deduplicate to it
+	/// the native carries no data (`is_void;`)
 	pub is_void: bool,
 	pub scalar: Option<String>,
 	pub default: NativeSigVariant,
