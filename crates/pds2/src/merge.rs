@@ -275,8 +275,10 @@ pub fn merge(inputs: &[(String, Block)]) -> Result<Merged> {
 			.collect(),
 	);
 	for (version, block) in inputs {
-		if let Some(protocols) = block.attributes.get(&Ident::new("protocol")) {
-			root.at(&[tag(version)]).attributes.insert(Ident::new("protocol"), protocols.clone());
+		for key in ["protocol", "legacy_protocol"] {
+			if let Some(protocols) = block.attributes.get(&Ident::new(key)) {
+				root.at(&[tag(version)]).attributes.insert(Ident::new(key), protocols.clone());
+			}
 		}
 	}
 	Ok(Merged {
@@ -285,7 +287,30 @@ pub fn merge(inputs: &[(String, Block)]) -> Result<Merged> {
 	})
 }
 
-pub fn versions(merged: &Block) -> Result<Vec<(String, Vec<i32>)>> {
+pub struct Version {
+	pub name: String,
+	pub protocols: Vec<i32>,
+	pub legacy: Vec<i32>,
+}
+
+fn numbers(block: &Block, key: &str) -> Result<Vec<i32>> {
+	let Some(values) = block.attributes.get(&Ident::new(key)) else {
+		return Ok(vec![]);
+	};
+	values
+		.iter()
+		.flat_map(|p| match p {
+			Value::List(items) => items.clone(),
+			v => vec![v.clone()],
+		})
+		.map(|p| match p {
+			Value::Int(n) => i32::try_from(n).map_err(|_| anyhow!("protocol {n} is out of range")),
+			v => bail!("`@!{key}` lists numbers, got {v:?}"),
+		})
+		.collect()
+}
+
+pub fn versions(merged: &Block) -> Result<Vec<Version>> {
 	let names = merged
 		.attributes
 		.get(&Ident::new("versions"))
@@ -303,23 +328,15 @@ pub fn versions(merged: &Block) -> Result<Vec<(String, Vec<i32>)>> {
 				}
 				_ => None,
 			});
-			let protocols = ns
-				.and_then(|ns| ns.block.attributes.get(&Ident::new("protocol")))
-				.map(|ps| {
-					ps.iter()
-						.flat_map(|p| match p {
-							Value::List(items) => items.clone(),
-							v => vec![v.clone()],
-						})
-						.map(|p| match p {
-							Value::Int(n) => i32::try_from(n).map_err(|_| anyhow!("protocol {n} is out of range")),
-							v => bail!("`@!protocol` lists numbers, got {v:?}"),
-						})
-						.collect::<Result<Vec<_>>>()
-				})
-				.transpose()?
-				.unwrap_or_default();
-			Ok((string.clone(), protocols))
+			let (protocols, legacy) = match ns {
+				Some(ns) => (numbers(&ns.block, "protocol")?, numbers(&ns.block, "legacy_protocol")?),
+				None => (vec![], vec![]),
+			};
+			Ok(Version {
+				name: string.clone(),
+				protocols,
+				legacy,
+			})
 		})
 		.collect()
 }

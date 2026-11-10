@@ -108,15 +108,9 @@ fn parse_rules(item: &Item, path: String, all: &mut BTreeSet<String>) -> Result<
 		let key = format!("{path}/{kind}({name})");
 		all.insert(key.clone());
 		match kind {
-			"added" => {
-				r.added.insert(name, change(op));
-			}
-			"removed" => {
-				r.removed.insert(name, change(op));
-			}
-			"converted" => {
-				r.converted.insert(name, change(op));
-			}
+			"added" => merge_change(r.added.entry(name).or_default(), change(op), &key)?,
+			"removed" => merge_change(r.removed.entry(name).or_default(), change(op), &key)?,
+			"converted" => merge_change(r.converted.entry(name).or_default(), change(op), &key)?,
 			"renamed" => {
 				let (_, to) = op
 					.args
@@ -130,12 +124,54 @@ fn parse_rules(item: &Item, path: String, all: &mut BTreeSet<String>) -> Result<
 			}
 			"updated" => {
 				all.remove(&key);
-				r.updated.insert(name.clone(), parse_rules(op, format!("{path}/{name}"), all)?);
+				let nested = parse_rules(op, format!("{path}/{name}"), all)?;
+				match r.updated.get_mut(&name) {
+					Some(existing) => merge_rules(existing, nested)?,
+					None => {
+						r.updated.insert(name.clone(), nested);
+					}
+				}
 			}
 			k => bail!("{path}: unknown rule `{k}`"),
 		}
 	}
 	Ok(r)
+}
+
+fn merge_change(into: &mut Change, from: Change, at: &str) -> Result<()> {
+	for (slot, new) in [(&mut into.up, from.up), (&mut into.down, from.down)] {
+		if let Some(new) = new {
+			ensure!(slot.is_none(), "{at} is given twice");
+			*slot = Some(new);
+		}
+	}
+	Ok(())
+}
+
+fn merge_rules(into: &mut Rules, from: Rules) -> Result<()> {
+	merge_change(&mut into.whole, from.whole, &into.path)?;
+	for (map, other, kind) in [
+		(&mut into.added, from.added, "added"),
+		(&mut into.removed, from.removed, "removed"),
+		(&mut into.converted, from.converted, "converted"),
+	] {
+		for (name, change) in other {
+			let at = format!("{}/{kind}({name})", into.path);
+			merge_change(map.entry(name).or_default(), change, &at)?;
+		}
+	}
+	for (old, new) in from.renamed {
+		ensure!(into.renamed.insert(old.clone(), new).is_none(), "{}/renamed({old}) is given twice", into.path);
+	}
+	for (name, nested) in from.updated {
+		match into.updated.get_mut(&name) {
+			Some(existing) => merge_rules(existing, nested)?,
+			None => {
+				into.updated.insert(name, nested);
+			}
+		}
+	}
+	Ok(())
 }
 
 pub struct Migration {
@@ -164,7 +200,12 @@ pub fn parse_migration(block: &Block) -> Result<Migration> {
 				"updated" => {
 					let full = ns.iter().chain([&name]).cloned().collect::<Vec<_>>().join("::");
 					let rules = parse_rules(head, full.clone(), all)?;
-					ensure!(out.insert(full.clone(), rules).is_none(), "{full} is updated twice");
+					match out.get_mut(&full) {
+						Some(existing) => merge_rules(existing, rules)?,
+						None => {
+							out.insert(full, rules);
+						}
+					}
 				}
 				k => bail!("unexpected `{k}` in a migration"),
 			}
@@ -188,7 +229,8 @@ struct Gen<'a> {
 	names: RustNames<'a>,
 	elab: Elaborator<'a>,
 	base: BTreeMap<String, String>,
-	fns: RefCell<BTreeMap<(usize, Dir, TypeId, TypeId, bool), String>>,
+	alias_base: BTreeMap<TypeId, String>,
+	fns: RefCell<BTreeMap<(usize, Dir, TypeId, TypeId, bool, Option<String>), String>>,
 	code: RefCell<Vec<rust::Tokens>>,
 	errors: RefCell<BTreeSet<String>>,
 	used: RefCell<BTreeSet<String>>,
@@ -270,16 +312,21 @@ impl<'a> Gen<'a> {
 		specialization_use(n, VALUE).map(|t| t.target).into_iter().collect()
 	}
 
+	fn base_name(&self, id: TypeId) -> Option<&String> {
+		let resolved = self.resolve(id);
+		self.base
+			.get(&full_name(self.types, id))
+			.or_else(|| self.base.get(&full_name(self.types, resolved)))
+			.or_else(|| self.alias_base.get(&resolved))
+	}
+
 	fn dirty(&self, step: &Step, id: TypeId) -> bool {
 		let id = self.resolve(id);
 		if let Some(d) = self.dirty.borrow().get(&(step.index, id)) {
 			return *d;
 		}
 		self.dirty.borrow_mut().insert((step.index, id), false);
-		let own = self
-			.base
-			.get(&full_name(self.types, id))
-			.is_some_and(|b| step.rules.contains_key(b));
+		let own = self.base_name(id).is_some_and(|b| step.rules.contains_key(b));
 		let d = own || self.children(id).into_iter().any(|c| self.dirty(step, c));
 		self.dirty.borrow_mut().insert((step.index, id), d);
 		d
@@ -404,6 +451,7 @@ impl<'a> Gen<'a> {
 			}
 			Value::Item(item) if item.args.is_empty() => match item.name.item.as_str() {
 				"true" => Expr::Const(mir::Value::Bool(true)),
+				"self" => Expr::Var(pds2_core::ast::Ident::new("_0"), self.resolve(src)),
 				"false" => Expr::Const(mir::Value::Bool(false)),
 				_ => Expr::Const(mir::Value::UnionDescriminator(item.name.item.clone())),
 			},
@@ -455,12 +503,7 @@ impl<'a> Gen<'a> {
 		root: bool,
 		at: &str,
 	) -> Conv {
-		let base_of = |id: TypeId| {
-			self.base
-				.get(&full_name(self.types, id))
-				.or_else(|| self.base.get(&full_name(self.types, self.resolve(id))))
-		};
-		let (bf, bt) = (base_of(from), base_of(to));
+		let (bf, bt) = (self.base_name(from), self.base_name(to));
 		let (from, to) = (self.resolve(from), self.resolve(to));
 		if let Some(r) = rules {
 			self.used(r.path.clone());
@@ -490,7 +533,7 @@ impl<'a> Gen<'a> {
 		if from == to && !root && rules.is_none() && !self.dirty(step, from) {
 			return Conv::Identity;
 		}
-		let key = (step.index, dir, from, to, root);
+		let key = (step.index, dir, from, to, root, rules.map(|r| r.path.clone()));
 		if let Some(name) = self.fns.borrow().get(&key) {
 			return Conv::Call(name.clone());
 		}
@@ -558,13 +601,26 @@ impl<'a> Gen<'a> {
 					) =>
 			{
 				let (ef, et) = (self.element(from)?, self.element(to)?);
+				let (rf, rt) = (self.resolve(ef), self.resolve(et));
+				if rf != rt && self.numeric(rf) && self.numeric(rt) && rules.is_some_and(|r| r.converted.contains_key("items")) {
+					self.used(format!("{}/converted(items)", rules.expect("checked").path));
+					let cast = self.cast(quote!(x), rt);
+					let items = quote!(v.into_iter().map(|x| $cast).collect::<Vec<_>>());
+					return Some(wrap(items));
+				}
 				match self.convert(step, dir, ef, et, rules.and_then(|r| r.updated.get("items")), false, &format!("{at}/items")) {
 					Conv::Identity => Some(wrap(quote!(v))),
-					Conv::Call(f) => Some(if root {
-						quote!(Ok(vec![v.into_iter().map(|x| $f(x, cx)).collect::<crate::pds::convert::Result<Vec<_>>>()?]))
-					} else {
-						quote!(v.into_iter().map(|x| $f(x, cx)).collect())
-					}),
+					Conv::Call(f) => {
+						let items = quote! {
+							v.into_iter()
+								.filter_map(|x| match $f(x, cx) {
+									Err(crate::pds::convert::Error::Dropped) => None,
+									r => Some(r),
+								})
+								.collect::<crate::pds::convert::Result<Vec<_>>>()
+						};
+						Some(if root { quote!(Ok(vec![$items?])) } else { items })
+					}
 				}
 			}
 			(Some("option"), Some("option")) => {
@@ -574,8 +630,27 @@ impl<'a> Gen<'a> {
 				let rebox = |t: rust::Tokens| if self.names.boxed(to, &slot) { quote!(Box::new($t)) } else { t };
 				let conv = self.convert(step, dir, ef, et, rules.and_then(|r| r.updated.get("value")), false, &format!("{at}/value"));
 				let inner = rebox(self.apply(&conv, unbox));
-				let mapped = quote!(v.map(|x| -> crate::pds::convert::Result<_> { Ok($inner) }).transpose()?);
+				let mapped = quote! {
+					match v.map(|x| -> crate::pds::convert::Result<_> { Ok($inner) }).transpose() {
+						Err(crate::pds::convert::Error::Dropped) => None,
+						r => r?,
+					}
+				};
 				Some(wrap(mapped))
+			}
+			(Some("registryEntryHolder"), Some("registryEntryHolder")) => {
+				let (fname, fty) = native(self.types, from)?.fields.first()?;
+				let (tname, tty) = native(self.types, to)?.fields.first()?;
+				let unbox = if self.names.boxed(from, fname) { quote!(*p) } else { quote!(p) };
+				let conv = self.convert(step, dir, fty.target, tty.target, rules.and_then(|r| r.updated.get(fname.as_str())), false, &format!("{at}/{}", fname.as_str()));
+				let value = self.apply(&conv, unbox);
+				let value = if self.names.boxed(to, tname) { quote!(Box::new($value)) } else { value };
+				let (fm, tm) = (self.names.ty(from), self.names.ty(to));
+				Some(wrap(quote!(match v { $(&fm)::Id(i) => $(&tm)::Id(i), $(&fm)::Inline(p) => $(&tm)::Inline($value) })))
+			}
+			(Some("registryEntryHolderSet"), Some("registryEntryHolderSet")) => {
+				let (fm, tm) = (self.names.ty(from), self.names.ty(to));
+				Some(wrap(quote!(match v { $(&fm)::Named(n) => $(&tm)::Named(n), $(&fm)::Ids(i) => $(&tm)::Ids(i) })))
 			}
 			_ if from == to && kf.is_some_and(|k| matches!(k, "buffer" | "pstring")) => Some(wrap(quote!(v))),
 			(Some(a), Some(b)) if a == b && matches!(a, "buffer" | "pstring") => Some(wrap(quote!(v))),
@@ -841,9 +916,29 @@ impl<'a> Gen<'a> {
 							quote!($f($unboxed, cx)?)
 						}
 					}
-					_ => {
-						self.error(format!("{arm_at}: use drop (packets only) or custom(...)"));
-						continue;
+					Action::Expr(_) => {
+						let bind = match (void(ty.target), self.names.boxed(from, name)) {
+							(true, _) => quote!(let _0 = &();),
+							(false, true) => quote!(let _0 = &*p;),
+							(false, false) => quote!(let _0 = &p;),
+						};
+						let value = match target {
+							Some((_, tname, tty)) if !void(tty.target) => {
+								let Some(v) = self.field_value(action, ty.target, tty.target, &arm_at) else { continue };
+								let v = if self.names.boxed(to, tname) { quote!(Box::new($v)) } else { v };
+								quote!($(&to_ty)::$(rname(tname))($v))
+							}
+							Some(_) => {
+								self.error(format!("{arm_at}: the target arm carries no data, rename it instead"));
+								continue;
+							}
+							None => {
+								let Some(v) = self.field_value(action, ty.target, to, &arm_at) else { continue };
+								v
+							}
+						};
+						let value = one(value);
+						quote!({ $bind $value })
 					}
 				};
 				arms.push(quote!($(src_pat(!void(ty.target))) => $body,));
@@ -925,15 +1020,21 @@ pub fn generate(
 	types: &TypeMap,
 	reg: &Registry,
 	merged: &Block,
-	versions: &[(String, Vec<i32>)],
+	versions: &[crate::merge::Version],
 	migrations: &[Option<Migration>],
 ) -> Result<String> {
 	let protocols: Vec<(i32, usize)> = versions
 		.iter()
 		.enumerate()
-		.flat_map(|(i, (_, ps))| ps.iter().map(move |p| (*p, i)))
+		.flat_map(|(i, v)| v.protocols.iter().map(move |p| (*p, i)))
 		.collect();
-	let versions: Vec<String> = versions.iter().map(|(v, _)| v.clone()).collect();
+	let legacy: Vec<(i32, usize)> = versions
+		.iter()
+		.enumerate()
+		.flat_map(|(i, v)| v.legacy.iter().map(move |p| (*p, i)))
+		.collect();
+	let versions: Vec<String> = versions.iter().map(|v| v.name.clone()).collect();
+	let variant_names: Vec<String> = versions.iter().map(|v| format!("V{}", v.replace(['.', '-'], "_"))).collect();
 	ensure!(
 		migrations.len() + 1 == versions.len(),
 		"{} versions need {} migrations",
@@ -971,6 +1072,26 @@ pub fn generate(
 		types,
 		names: RustNames::new(types, reg)?,
 		elab: Elaborator { types, reg },
+		alias_base: {
+			let mut found: BTreeMap<TypeId, Option<String>> = BTreeMap::new();
+			for (id, def) in &types.0 {
+				let TypeKind::Alias(_) = def.kind else { continue };
+				let Some(name) = base.get(&full_name(types, *id)) else { continue };
+				let target = Elaborator { types, reg }.resolve(*id);
+				if base.contains_key(&full_name(types, target)) || matches!(&types[target].kind, TypeKind::Native(n) if n.specializer.is_none()) {
+					continue;
+				}
+				found
+					.entry(target)
+					.and_modify(|e| {
+						if e.as_ref() != Some(name) {
+							*e = None;
+						}
+					})
+					.or_insert_with(|| Some(name.clone()));
+			}
+			found.into_iter().filter_map(|(k, v)| Some((k, v?))).collect()
+		},
 		base,
 		fns: RefCell::default(),
 		code: RefCell::default(),
@@ -1043,6 +1164,28 @@ pub fn generate(
 		bail!("migrations are incomplete:\n{}", errors.iter().cloned().collect::<Vec<_>>().join("\n"));
 	}
 	let variants: Vec<String> = root_names.iter().map(|r| root_variant(r.trim_end_matches("::packet"))).collect();
+	let mut inspect = Vec::new();
+	for (i, tag) in tags.iter().enumerate() {
+		for (root, id) in roots_of(tag) {
+			if !root_names.contains(&root) {
+				continue;
+			}
+			let variant = root_variant(root.trim_end_matches("::packet"));
+			let de = g.names.item(id, "deserialize");
+			inspect.push(quote! {
+				(Root::$(&variant), $i) => {
+					let mut input = crate::pds::Input::new(data);
+					let p = $de(&mut input).map_err(|e| format!("{e:?}"))?;
+					let name = format!("{p:?}");
+					let name = name.split(|c| c == '(' || c == ' ').next().unwrap_or_default().to_owned();
+					match input.remaining() {
+						0 => Ok(name),
+						n => Err(format!("{n} bytes left after {name}")),
+					}
+				}
+			});
+		}
+	}
 	let aliased: BTreeSet<usize> = migrations
 		.iter()
 		.enumerate()
@@ -1067,10 +1210,42 @@ pub fn generate(
 	let file: rust::Tokens = quote! {
 		pub const VERSIONS: &[&str] = &[$(for v in &versions join(, ) => $(quoted(v)))];
 
+		#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+		#[repr(usize)]
+		pub enum Version {
+			$(for t in &variant_names join(, ) => $t)
+		}
+
+		impl Version {
+			pub const ALL: &[Version] = &[$(for t in &variant_names join(, ) => Version::$t)];
+
+			pub fn name(self) -> &'static str {
+				VERSIONS[self as usize]
+			}
+
+			pub fn index(self) -> usize {
+				self as usize
+			}
+
+			pub fn at(index: usize) -> Option<Version> {
+				Self::ALL.get(index).copied()
+			}
+
+			pub fn of(name: &str) -> Option<Version> {
+				index_of(name).and_then(Self::at)
+			}
+		}
+
 		pub const PROTOCOLS: &[(i32, usize)] = &[$(for (p, i) in &protocols join(, ) => ($(*p), $(*i)))];
 
 		pub fn version_of(protocol: i32) -> Option<usize> {
 			PROTOCOLS.iter().find(|(p, _)| *p == protocol).map(|(_, v)| *v)
+		}
+
+		pub const LEGACY_PROTOCOLS: &[(i32, usize)] = &[$(for (p, i) in &legacy join(, ) => ($(*p), $(*i)))];
+
+		pub fn legacy_version_of(protocol: i32) -> Option<usize> {
+			LEGACY_PROTOCOLS.iter().find(|(p, _)| *p == protocol).map(|(_, v)| *v)
 		}
 
 		pub fn index_of(version: &str) -> Option<usize> {
@@ -1088,10 +1263,23 @@ pub fn generate(
 			$(for v in &variants join(, ) => $v)
 		}
 
+		impl Root {
+			pub fn to_client(self) -> bool {
+				matches!(self, $(for v in variants.iter().filter(|v| v.ends_with("ToClient")) join( | ) => Root::$v))
+			}
+		}
+
 		pub fn step(root: Root, from: usize, to: usize, data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
 			match (root, from, to) {
 				$(for d in dispatch => $d)
 				_ => crate::pds::convert::unconvertible(format!("no step {from} -> {to} for {root:?}")),
+			}
+		}
+
+		pub fn inspect(root: Root, version: usize, data: &[u8]) -> std::result::Result<String, String> {
+			match (root, version) {
+				$(for i in inspect => $i)
+				_ => Err(format!("{root:?} does not exist in {}", VERSIONS[version])),
 			}
 		}
 
