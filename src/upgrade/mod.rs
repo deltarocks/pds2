@@ -3,7 +3,7 @@ use crate::specializer::Registry;
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use inflector::Inflector;
 use serde_json::{Map, Value};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub mod plan;
 
@@ -692,7 +692,7 @@ fn native_block(sig: &NativeSig) -> Block {
 				.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(name.as_str())))
 				.block(Block {
 					root: false,
-					attributes: HashMap::new(),
+					attributes: Default::default(),
 					statements: body,
 				})
 				.build_values(),

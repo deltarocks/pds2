@@ -54,7 +54,7 @@ rule item() -> Item
 		  Item {
 			  name: ident,
 			  args: args.unwrap_or_default(),
-			  block: block.unwrap_or_else(|| Block { attributes: HashMap::new(), statements: vec![], root: false }),
+			  block: block.unwrap_or_else(|| Block { attributes: Default::default(), statements: vec![], root: false }),
 		  }
 	  }
 rule itemArgs() -> ItemArgs

@@ -183,6 +183,7 @@ impl Visitor for Apply<'_> {
 			arg_virtuals,
 			is_void: false,
 			scalar: None,
+			attrs: BTreeMap::new(),
 		});
 		Ok(())
 	}

@@ -98,6 +98,7 @@ impl TypeKind {
 				arg_virtuals: native.arg_virtuals.clone(),
 				is_void: native.is_void,
 				scalar: native.scalar.clone(),
+				attrs: native.attrs.clone(),
 				specialization: native
 					.specialization
 					.iter()

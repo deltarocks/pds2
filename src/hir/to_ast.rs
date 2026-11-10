@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::ast::{self, Ident, Item, ItemArgs, Path, Statement, Value};
 
 use super::{Namespace, Reference, ReferenceKind, Type, TypeKind};
@@ -40,7 +38,7 @@ impl Namespace {
 		for (name, item) in self.items {
 			match item {
 				super::NamespaceItem::Inner(ns) => out.push(Statement {
-					attributes: HashMap::new(),
+					attributes: Default::default(),
 					items: vec![ast::Value::Item(ast::Item {
 						name: Path::new_simple(Ident::new("namespace")),
 						args: ItemArgs::builder()
@@ -50,7 +48,7 @@ impl Namespace {
 					})],
 				}),
 				super::NamespaceItem::Type(t) => out.push(Statement {
-					attributes: HashMap::new(),
+					attributes: Default::default(),
 					items: {
 						ast::Item::simple_builder(if t.is_native() { "def_native" } else { "def" })
 							.argsb(ItemArgs::builder().arg(Item::new_simple(name).into()))

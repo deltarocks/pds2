@@ -10,6 +10,7 @@ pub mod format;
 pub mod generator;
 pub mod hir;
 pub mod mir;
+pub mod proto;
 pub mod specializer;
 pub mod upgrade;
 
@@ -161,6 +162,15 @@ enum Opts {
 	},
 	/// Reformat .pds definition code
 	Format { from: PathBuf },
+	/// Convert a protobuf FileDescriptorSet (`protoc --include_imports --descriptor_set_out`)
+	Proto {
+		from: PathBuf,
+		/// .proto files (as named in the set) whose types, and everything they reach, to convert
+		#[clap(long)]
+		root: Vec<String>,
+		#[clap(long)]
+		to: PathBuf,
+	},
 }
 
 #[macro_export]
@@ -295,6 +305,13 @@ fn try_main() -> anyhow::Result<()> {
 			let parsed = ast::parse(&data)?;
 			let out = ast::format(&parsed);
 			println!("{}", out);
+		}
+		Opts::Proto { from, root, to } => {
+			let data = std::fs::read(&from)?;
+			let set = protobuf_descriptor::decode(&data)
+				.map_err(|e| anyhow::anyhow!("decoding {}: {e:?}", from.display()))?;
+			std::fs::write(&to, proto::convert(&set, &root)?)?;
+			info!("wrote {}", to.display());
 		}
 		Opts::Upgrade { from, to } => {
 			let data = std::fs::read_to_string(&from)?;

@@ -8,6 +8,7 @@ use tracing::info;
 
 pub mod container;
 pub mod expr;
+pub mod message;
 mod typescript;
 pub mod union;
 
@@ -348,6 +349,10 @@ pub fn register_protodef_types(reg: &mut Registry) {
 	reg.register_asthir("registryEntryHolderSet", RegistryEntryHolderSet);
 	reg.register_asthir("entityMetadataLoop", EntityMetadataLoop);
 	reg.register_asthir("terminated", EntityMetadataLoop);
+	reg.register_asthir("message", message::Message);
+	reg.register_layout("message", message::Message);
+	reg.register_codegen::<Rust>("message", message::Message);
+	reg.register_codegen::<JavaScript>("message", message::Message);
 	reg.register_asthir("container", Container);
 	reg.register_layout("container", Container);
 	reg.register_codegen::<Rust>("container", Container);

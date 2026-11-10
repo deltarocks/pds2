@@ -1,0 +1,180 @@
+@scalar i32 @protobuf varint
+def_native(int32);
+
+@scalar bool @protobuf varint
+def_native(bool);
+
+@protobuf len
+def_native(string);
+
+def_native(void) {
+	is_void;
+};
+
+@specializer message
+def_native(message) {
+	body {
+		item(field) {
+			argument(number);
+
+			type(Value);
+		};
+
+		item(repeated) {
+			argument(number);
+
+			type(Value);
+		};
+
+		item(oneof) {
+			argument(number);
+
+			argument(group);
+
+			type(Value);
+		};
+	};
+};
+
+@specializer union
+def_native(union) {
+	body {
+		item(variant) {
+			argument(match);
+
+			type(Value) => void;
+		};
+
+		item(default) {
+			anonymous;
+
+			type(Value) => void;
+		};
+	};
+
+	variant(external) {
+		argument(tag);
+	};
+
+	variant(inline) {
+		type(Tag);
+	};
+};
+
+namespace(google) {
+	namespace(protobuf) {
+		def(FileDescriptorSet) {
+			export;
+		} => message {
+			repeated(file, number: 1) => FileDescriptorProto;
+		};
+
+		def(FileDescriptorProto) => message {
+			field(name, number: 1) => string;
+
+			field(package, number: 2) => string;
+
+			repeated(dependency, number: 3) => string;
+
+			repeated(message_type, number: 4) => DescriptorProto;
+
+			repeated(enum_type, number: 5) => EnumDescriptorProto;
+
+			field(syntax, number: 12) => string;
+		};
+
+		def(DescriptorProto) => message {
+			field(name, number: 1) => string;
+
+			repeated(field, number: 2) => FieldDescriptorProto;
+
+			repeated(nested_type, number: 3) => DescriptorProto;
+
+			repeated(enum_type, number: 4) => EnumDescriptorProto;
+
+			repeated(oneof_decl, number: 8) => OneofDescriptorProto;
+		};
+
+		def(FieldDescriptorProto) => message {
+			field(name, number: 1) => string;
+
+			field(number, number: 3) => int32;
+
+			field(label, number: 4) => FieldDescriptorProto_Label;
+
+			field(type, number: 5) => FieldDescriptorProto_Type;
+
+			field(type_name, number: 6) => string;
+
+			field(oneof_index, number: 9) => int32;
+
+			field(proto3_optional, number: 17) => bool;
+		};
+
+		def(FieldDescriptorProto_Type) => union(Tag: int32) {
+			variant(TYPE_DOUBLE, match: 1);
+
+			variant(TYPE_FLOAT, match: 2);
+
+			variant(TYPE_INT64, match: 3);
+
+			variant(TYPE_UINT64, match: 4);
+
+			variant(TYPE_INT32, match: 5);
+
+			variant(TYPE_FIXED64, match: 6);
+
+			variant(TYPE_FIXED32, match: 7);
+
+			variant(TYPE_BOOL, match: 8);
+
+			variant(TYPE_STRING, match: 9);
+
+			variant(TYPE_GROUP, match: 10);
+
+			variant(TYPE_MESSAGE, match: 11);
+
+			variant(TYPE_BYTES, match: 12);
+
+			variant(TYPE_UINT32, match: 13);
+
+			variant(TYPE_ENUM, match: 14);
+
+			variant(TYPE_SFIXED32, match: 15);
+
+			variant(TYPE_SFIXED64, match: 16);
+
+			variant(TYPE_SINT32, match: 17);
+
+			variant(TYPE_SINT64, match: 18);
+
+			default;
+		};
+
+		def(FieldDescriptorProto_Label) => union(Tag: int32) {
+			variant(LABEL_OPTIONAL, match: 1);
+
+			variant(LABEL_REQUIRED, match: 2);
+
+			variant(LABEL_REPEATED, match: 3);
+
+			default;
+		};
+
+		def(OneofDescriptorProto) => message {
+			field(name, number: 1) => string;
+		};
+
+		def(EnumDescriptorProto) => message {
+			field(name, number: 1) => string;
+
+			repeated(value, number: 2) => EnumValueDescriptorProto;
+		};
+
+		def(EnumValueDescriptorProto) => message {
+			field(name, number: 1) => string;
+
+			field(number, number: 2) => int32;
+		};
+	};
+};

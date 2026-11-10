@@ -131,14 +131,17 @@ impl Names<Rust> for RustMeta<'_> {
 /// (protodef loves fields named `type`).
 pub(crate) fn rname(i: &Ident) -> Tokens {
 	const KEYWORDS: &[&str] = &[
-		"as", "async", "await", "box", "break", "const", "continue", "crate", "do", "dyn", "else",
-		"enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod",
-		"move", "mut", "pub", "ref", "return", "static", "struct", "trait", "true", "type",
-		"unsafe", "use", "where", "while", "yield", "abstract", "become", "final", "macro",
-		"override", "priv", "try", "typeof", "unsized", "virtual",
+		"as", "async", "await", "box", "break", "const", "continue", "do", "dyn", "else", "enum",
+		"extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
+		"mut", "pub", "ref", "return", "static", "struct", "trait", "true", "type", "unsafe",
+		"use", "where", "while", "yield", "abstract", "become", "final", "macro", "override",
+		"priv", "try", "typeof", "unsized", "virtual", "gen",
 	];
+	const UNRAWABLE: &[&str] = &["self", "Self", "super", "crate"];
 	if KEYWORDS.contains(&i.as_str()) {
 		quote!($(format!("r#{}", i.as_str())))
+	} else if UNRAWABLE.contains(&i.as_str()) {
+		quote!($(format!("{}_", i.as_str())))
 	} else {
 		quote!($i)
 	}

@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use genco::{lang::Rust, prelude::*, tokens::FormatInto};
 use std::{
 	cell::RefCell,
-	collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+	collections::{BTreeMap, BTreeSet, HashSet},
 	convert::TryFrom,
 	fmt::Debug,
 	iter,
@@ -179,7 +179,7 @@ impl Block {
 	}
 }
 
-pub type Attributes = HashMap<Ident, Vec<Value>>;
+pub type Attributes = BTreeMap<Ident, Vec<Value>>;
 
 #[derive(Debug, Clone)]
 pub struct Statement {

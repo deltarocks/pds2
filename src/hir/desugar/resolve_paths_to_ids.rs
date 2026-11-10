@@ -126,6 +126,7 @@ impl TypeKind {
 				arg_virtuals: _,
 				is_void: _,
 				scalar: _,
+				attrs: _,
 			}) => {
 				if let Some(decl) = accepts_body {
 					for t in decl.default_types_mut() {

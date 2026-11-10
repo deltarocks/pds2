@@ -3,6 +3,7 @@
 use std::cell::Cell;
 
 pub mod natives;
+pub mod protobuf;
 
 pub struct Input<'i> {
 	data: &'i [u8],
@@ -44,6 +45,14 @@ impl<'i> Input<'i> {
 	}
 	pub fn rewind(&self, offset: usize) {
 		self.offset.set(offset)
+	}
+	pub fn take(&self, n: usize) -> Result<Input<'i>> {
+		if n > self.remaining() {
+			return Err(Error::NotEnoughData);
+		}
+		let start = self.offset();
+		self.offset.set(start + n);
+		Ok(Input::new(&self.data[start..start + n]))
 	}
 }
 

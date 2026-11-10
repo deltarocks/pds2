@@ -1,3 +1,5 @@
 /minecraft-protocol
 /nbt/src/gen
 /lang-tests/src/gen
+/envoy-api/src/gen
+/envoy-api/envoy.pds

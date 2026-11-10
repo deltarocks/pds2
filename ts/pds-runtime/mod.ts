@@ -67,6 +67,10 @@ export class Input {
 	read_rest(): Uint8Array {
 		return this.read_bytes(this.remaining());
 	}
+
+	take(n: number): Input {
+		return new Input(this.read_bytes(n));
+	}
 }
 
 export class Output {

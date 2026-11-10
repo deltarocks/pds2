@@ -343,6 +343,18 @@ impl Namespace {
 					} else {
 						None
 					};
+					let mut native_attrs = BTreeMap::new();
+					for (k, vs) in &attrs {
+						if matches!(k.as_str(), "specializer" | "scalar") {
+							continue;
+						}
+						let vs = vs
+							.iter()
+							.map(|v| Ident::parse(v.clone()))
+							.collect::<Result<Vec<_>>>()
+							.with_context(|| format!("attribute @{k:?}"))?;
+						native_attrs.insert(k.clone(), vs);
+					}
 
 					enum NativeStmt {
 						Param(Ident, Option<TypeKind>),
@@ -478,6 +490,7 @@ impl Namespace {
 							self,
 							specializer: Option<Ident>,
 							scalar: Option<Ident>,
+							attrs: BTreeMap<Ident, Vec<Ident>>,
 							variant: Ident,
 						) -> Type {
 							let specialization = self
@@ -513,6 +526,7 @@ impl Namespace {
 									arg_virtuals: vec![],
 									is_void: self.is_void,
 									scalar,
+									attrs,
 								}),
 								types: self.types,
 								params: self.params,
@@ -581,7 +595,7 @@ impl Namespace {
 						(
 							name,
 							NamespaceItem::Type(
-								default.into_type(specializer, scalar, Ident::new("default")),
+								default.into_type(specializer, scalar, native_attrs, Ident::new("default")),
 							),
 						)
 					} else {
@@ -603,6 +617,7 @@ impl Namespace {
 								NamespaceItem::Type(parts.into_type(
 									specializer.clone(),
 									scalar.clone(),
+									native_attrs.clone(),
 									vname,
 								)),
 							);

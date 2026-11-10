@@ -1,0 +1,806 @@
+@protobuf i64 @scalar f64 def_native(double);
+
+@protobuf i32 @scalar f32 def_native(float);
+
+@protobuf varint @scalar i64 def_native(int64);
+
+@protobuf varint @scalar u64 def_native(uint64);
+
+@protobuf varint @scalar i32 def_native(int32);
+
+@protobuf i64 @scalar u64 def_native(fixed64);
+
+@protobuf i32 @scalar u32 def_native(fixed32);
+
+@protobuf varint @scalar bool def_native(bool);
+
+@protobuf len def_native(string);
+
+@protobuf len def_native(bytes);
+
+@protobuf varint @scalar u32 def_native(uint32);
+
+@protobuf i32 @scalar i32 def_native(sfixed32);
+
+@protobuf i64 @scalar i64 def_native(sfixed64);
+
+@protobuf varint @scalar i32 def_native(sint32);
+
+@protobuf varint @scalar i64 def_native(sint64);
+
+def_native(void) {
+	is_void;
+};
+
+@specializer message
+def_native(message) {
+	body {
+		item(field) {
+			argument(number);
+
+			type(Value);
+		};
+
+		item(repeated) {
+			argument(number);
+
+			type(Value);
+		};
+
+		item(oneof) {
+			argument(number);
+
+			argument(group);
+
+			type(Value);
+		};
+	};
+};
+
+@specializer union
+def_native(union) {
+	body {
+		item(variant) {
+			argument(match);
+
+			type(Value) => void;
+		};
+
+		item(default) {
+			anonymous;
+
+			type(Value) => void;
+		};
+	};
+
+	variant(external) {
+		argument(tag);
+	};
+
+	variant(inline) {
+		type(Tag);
+	};
+};
+
+namespace(google) {
+	namespace(protobuf) {
+		def(DescriptorProto) => message {
+			field(name, number: 1) => root::string;
+
+			repeated(field, number: 2) => root::google::protobuf::FieldDescriptorProto;
+
+			repeated(extension, number: 6) => root::google::protobuf::FieldDescriptorProto;
+
+			repeated(nested_type, number: 3) => root::google::protobuf::DescriptorProto;
+
+			repeated(enum_type, number: 4) => root::google::protobuf::EnumDescriptorProto;
+
+			repeated(extension_range, number: 5)
+			=> root::google::protobuf::DescriptorProto_ExtensionRange;
+
+			repeated(oneof_decl, number: 8) => root::google::protobuf::OneofDescriptorProto;
+
+			field(options, number: 7) => root::google::protobuf::MessageOptions;
+
+			repeated(reserved_range, number: 9)
+			=> root::google::protobuf::DescriptorProto_ReservedRange;
+
+			repeated(reserved_name, number: 10) => root::string;
+
+			field(visibility, number: 11) => root::google::protobuf::SymbolVisibility;
+		};
+
+		def(DescriptorProto_ExtensionRange) => message {
+			field(start, number: 1) => root::int32;
+
+			field(end, number: 2) => root::int32;
+
+			field(options, number: 3) => root::google::protobuf::ExtensionRangeOptions;
+		};
+
+		def(DescriptorProto_ReservedRange) => message {
+			field(start, number: 1) => root::int32;
+
+			field(end, number: 2) => root::int32;
+		};
+
+		def(Edition) => union(Tag: root::int32) {
+			variant(EDITION_UNKNOWN, match: 0);
+
+			variant(EDITION_LEGACY, match: 900);
+
+			variant(EDITION_PROTO2, match: 998);
+
+			variant(EDITION_PROTO3, match: 999);
+
+			variant(EDITION_2023, match: 1000);
+
+			variant(EDITION_2024, match: 1001);
+
+			variant(EDITION_2026, match: 1002);
+
+			variant(EDITION_UNSTABLE, match: 9999);
+
+			variant(EDITION_1_TEST_ONLY, match: 1);
+
+			variant(EDITION_2_TEST_ONLY, match: 2);
+
+			variant(EDITION_99997_TEST_ONLY, match: 99997);
+
+			variant(EDITION_99998_TEST_ONLY, match: 99998);
+
+			variant(EDITION_99999_TEST_ONLY, match: 99999);
+
+			variant(EDITION_MAX, match: 2147483647);
+
+			default;
+		};
+
+		def(EnumDescriptorProto) => message {
+			field(name, number: 1) => root::string;
+
+			repeated(value, number: 2) => root::google::protobuf::EnumValueDescriptorProto;
+
+			field(options, number: 3) => root::google::protobuf::EnumOptions;
+
+			repeated(reserved_range, number: 4)
+			=> root::google::protobuf::EnumDescriptorProto_EnumReservedRange;
+
+			repeated(reserved_name, number: 5) => root::string;
+
+			field(visibility, number: 6) => root::google::protobuf::SymbolVisibility;
+		};
+
+		def(EnumDescriptorProto_EnumReservedRange) => message {
+			field(start, number: 1) => root::int32;
+
+			field(end, number: 2) => root::int32;
+		};
+
+		def(EnumOptions) => message {
+			field(allow_alias, number: 2) => root::bool;
+
+			field(deprecated, number: 3) => root::bool;
+
+			field(deprecated_legacy_json_field_conflicts, number: 6) => root::bool;
+
+			field(features, number: 7) => root::google::protobuf::FeatureSet;
+
+			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
+		};
+
+		def(EnumValueDescriptorProto) => message {
+			field(name, number: 1) => root::string;
+
+			field(number, number: 2) => root::int32;
+
+			field(options, number: 3) => root::google::protobuf::EnumValueOptions;
+		};
+
+		def(EnumValueOptions) => message {
+			field(deprecated, number: 1) => root::bool;
+
+			field(features, number: 2) => root::google::protobuf::FeatureSet;
+
+			field(debug_redact, number: 3) => root::bool;
+
+			field(feature_support, number: 4) => root::google::protobuf::FieldOptions_FeatureSupport;
+
+			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
+		};
+
+		def(ExtensionRangeOptions) => message {
+			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
+
+			repeated(declaration, number: 2)
+			=> root::google::protobuf::ExtensionRangeOptions_Declaration;
+
+			field(features, number: 50) => root::google::protobuf::FeatureSet;
+
+			field(verification, number: 3)
+			=> root::google::protobuf::ExtensionRangeOptions_VerificationState;
+		};
+
+		def(ExtensionRangeOptions_Declaration) => message {
+			field(number, number: 1) => root::int32;
+
+			field(full_name, number: 2) => root::string;
+
+			field(type, number: 3) => root::string;
+
+			field(reserved, number: 5) => root::bool;
+
+			field(repeated, number: 6) => root::bool;
+		};
+
+		def(ExtensionRangeOptions_VerificationState) => union(Tag: root::int32) {
+			variant(DECLARATION, match: 0);
+
+			variant(UNVERIFIED, match: 1);
+
+			default;
+		};
+
+		def(FeatureSet) => message {
+			field(field_presence, number: 1) => root::google::protobuf::FeatureSet_FieldPresence;
+
+			field(enum_type, number: 2) => root::google::protobuf::FeatureSet_EnumType;
+
+			field(repeated_field_encoding, number: 3)
+			=> root::google::protobuf::FeatureSet_RepeatedFieldEncoding;
+
+			field(utf8_validation, number: 4) => root::google::protobuf::FeatureSet_Utf8Validation;
+
+			field(message_encoding, number: 5) => root::google::protobuf::FeatureSet_MessageEncoding;
+
+			field(json_format, number: 6) => root::google::protobuf::FeatureSet_JsonFormat;
+
+			field(enforce_naming_style, number: 7)
+			=> root::google::protobuf::FeatureSet_EnforceNamingStyle;
+
+			field(default_symbol_visibility, number: 8)
+			=> root::google::protobuf::FeatureSet_VisibilityFeature_DefaultSymbolVisibility;
+
+			field(enforce_proto_limits, number: 9)
+			=> root::google::protobuf::FeatureSet_ProtoLimitsFeature_EnforceProtoLimits;
+		};
+
+		def(FeatureSet_EnforceNamingStyle) => union(Tag: root::int32) {
+			variant(ENFORCE_NAMING_STYLE_UNKNOWN, match: 0);
+
+			variant(STYLE2024, match: 1);
+
+			variant(STYLE_LEGACY, match: 2);
+
+			variant(STYLE2026, match: 3);
+
+			default;
+		};
+
+		def(FeatureSet_EnumType) => union(Tag: root::int32) {
+			variant(ENUM_TYPE_UNKNOWN, match: 0);
+
+			variant(OPEN, match: 1);
+
+			variant(CLOSED, match: 2);
+
+			default;
+		};
+
+		def(FeatureSet_FieldPresence) => union(Tag: root::int32) {
+			variant(FIELD_PRESENCE_UNKNOWN, match: 0);
+
+			variant(EXPLICIT, match: 1);
+
+			variant(IMPLICIT, match: 2);
+
+			variant(LEGACY_REQUIRED, match: 3);
+
+			default;
+		};
+
+		def(FeatureSet_JsonFormat) => union(Tag: root::int32) {
+			variant(JSON_FORMAT_UNKNOWN, match: 0);
+
+			variant(ALLOW, match: 1);
+
+			variant(LEGACY_BEST_EFFORT, match: 2);
+
+			default;
+		};
+
+		def(FeatureSet_MessageEncoding) => union(Tag: root::int32) {
+			variant(MESSAGE_ENCODING_UNKNOWN, match: 0);
+
+			variant(LENGTH_PREFIXED, match: 1);
+
+			variant(DELIMITED, match: 2);
+
+			default;
+		};
+
+		def(FeatureSet_ProtoLimitsFeature) => message;
+
+		def(FeatureSet_ProtoLimitsFeature_EnforceProtoLimits) => union(Tag: root::int32) {
+			variant(PROTO_LIMITS_UNKNOWN, match: 0);
+
+			variant(LEGACY_NO_EXPLICIT_LIMITS, match: 1);
+
+			variant(PROTO_LIMITS2026, match: 2);
+
+			default;
+		};
+
+		def(FeatureSet_RepeatedFieldEncoding) => union(Tag: root::int32) {
+			variant(REPEATED_FIELD_ENCODING_UNKNOWN, match: 0);
+
+			variant(PACKED, match: 1);
+
+			variant(EXPANDED, match: 2);
+
+			default;
+		};
+
+		def(FeatureSet_Utf8Validation) => union(Tag: root::int32) {
+			variant(UTF8_VALIDATION_UNKNOWN, match: 0);
+
+			variant(VERIFY, match: 2);
+
+			variant(NONE, match: 3);
+
+			default;
+		};
+
+		def(FeatureSet_VisibilityFeature) => message;
+
+		def(FeatureSet_VisibilityFeature_DefaultSymbolVisibility) => union(Tag: root::int32) {
+			variant(DEFAULT_SYMBOL_VISIBILITY_UNKNOWN, match: 0);
+
+			variant(EXPORT_ALL, match: 1);
+
+			variant(EXPORT_TOP_LEVEL, match: 2);
+
+			variant(LOCAL_ALL, match: 3);
+
+			variant(STRICT, match: 4);
+
+			default;
+		};
+
+		def(FeatureSetDefaults) => message {
+			repeated(defaults, number: 1)
+			=> root::google::protobuf::FeatureSetDefaults_FeatureSetEditionDefault;
+
+			field(minimum_edition, number: 4) => root::google::protobuf::Edition;
+
+			field(maximum_edition, number: 5) => root::google::protobuf::Edition;
+		};
+
+		def(FeatureSetDefaults_FeatureSetEditionDefault) => message {
+			field(edition, number: 3) => root::google::protobuf::Edition;
+
+			field(overridable_features, number: 4) => root::google::protobuf::FeatureSet;
+
+			field(fixed_features, number: 5) => root::google::protobuf::FeatureSet;
+		};
+
+		def(FieldDescriptorProto) => message {
+			field(name, number: 1) => root::string;
+
+			field(number, number: 3) => root::int32;
+
+			field(label, number: 4) => root::google::protobuf::FieldDescriptorProto_Label;
+
+			field(type, number: 5) => root::google::protobuf::FieldDescriptorProto_Type;
+
+			field(type_name, number: 6) => root::string;
+
+			field(extendee, number: 2) => root::string;
+
+			field(default_value, number: 7) => root::string;
+
+			field(oneof_index, number: 9) => root::int32;
+
+			field(json_name, number: 10) => root::string;
+
+			field(options, number: 8) => root::google::protobuf::FieldOptions;
+
+			field(proto3_optional, number: 17) => root::bool;
+		};
+
+		def(FieldDescriptorProto_Label) => union(Tag: root::int32) {
+			variant(LABEL_OPTIONAL, match: 1);
+
+			variant(LABEL_REPEATED, match: 3);
+
+			variant(LABEL_REQUIRED, match: 2);
+
+			default;
+		};
+
+		def(FieldDescriptorProto_Type) => union(Tag: root::int32) {
+			variant(TYPE_DOUBLE, match: 1);
+
+			variant(TYPE_FLOAT, match: 2);
+
+			variant(TYPE_INT64, match: 3);
+
+			variant(TYPE_UINT64, match: 4);
+
+			variant(TYPE_INT32, match: 5);
+
+			variant(TYPE_FIXED64, match: 6);
+
+			variant(TYPE_FIXED32, match: 7);
+
+			variant(TYPE_BOOL, match: 8);
+
+			variant(TYPE_STRING, match: 9);
+
+			variant(TYPE_GROUP, match: 10);
+
+			variant(TYPE_MESSAGE, match: 11);
+
+			variant(TYPE_BYTES, match: 12);
+
+			variant(TYPE_UINT32, match: 13);
+
+			variant(TYPE_ENUM, match: 14);
+
+			variant(TYPE_SFIXED32, match: 15);
+
+			variant(TYPE_SFIXED64, match: 16);
+
+			variant(TYPE_SINT32, match: 17);
+
+			variant(TYPE_SINT64, match: 18);
+
+			default;
+		};
+
+		def(FieldOptions) => message {
+			field(ctype, number: 1) => root::google::protobuf::FieldOptions_CType;
+
+			field(packed, number: 2) => root::bool;
+
+			field(jstype, number: 6) => root::google::protobuf::FieldOptions_JSType;
+
+			field(lazy, number: 5) => root::bool;
+
+			field(unverified_lazy, number: 15) => root::bool;
+
+			field(deprecated, number: 3) => root::bool;
+
+			field(weak, number: 10) => root::bool;
+
+			field(debug_redact, number: 16) => root::bool;
+
+			field(retention, number: 17) => root::google::protobuf::FieldOptions_OptionRetention;
+
+			repeated(targets, number: 19) => root::google::protobuf::FieldOptions_OptionTargetType;
+
+			repeated(edition_defaults, number: 20)
+			=> root::google::protobuf::FieldOptions_EditionDefault;
+
+			field(features, number: 21) => root::google::protobuf::FeatureSet;
+
+			field(feature_support, number: 22) => root::google::protobuf::FieldOptions_FeatureSupport;
+
+			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
+		};
+
+		def(FieldOptions_CType) => union(Tag: root::int32) {
+			variant(STRING, match: 0);
+
+			variant(CORD, match: 1);
+
+			variant(STRING_PIECE, match: 2);
+
+			default;
+		};
+
+		def(FieldOptions_EditionDefault) => message {
+			field(edition, number: 3) => root::google::protobuf::Edition;
+
+			field(value, number: 2) => root::string;
+		};
+
+		def(FieldOptions_FeatureSupport) => message {
+			field(edition_introduced, number: 1) => root::google::protobuf::Edition;
+
+			field(edition_deprecated, number: 2) => root::google::protobuf::Edition;
+
+			field(deprecation_warning, number: 3) => root::string;
+
+			field(edition_removed, number: 4) => root::google::protobuf::Edition;
+
+			field(removal_error, number: 5) => root::string;
+		};
+
+		def(FieldOptions_JSType) => union(Tag: root::int32) {
+			variant(JS_NORMAL, match: 0);
+
+			variant(JS_STRING, match: 1);
+
+			variant(JS_NUMBER, match: 2);
+
+			default;
+		};
+
+		def(FieldOptions_OptionRetention) => union(Tag: root::int32) {
+			variant(RETENTION_UNKNOWN, match: 0);
+
+			variant(RETENTION_RUNTIME, match: 1);
+
+			variant(RETENTION_SOURCE, match: 2);
+
+			default;
+		};
+
+		def(FieldOptions_OptionTargetType) => union(Tag: root::int32) {
+			variant(TARGET_TYPE_UNKNOWN, match: 0);
+
+			variant(TARGET_TYPE_FILE, match: 1);
+
+			variant(TARGET_TYPE_EXTENSION_RANGE, match: 2);
+
+			variant(TARGET_TYPE_MESSAGE, match: 3);
+
+			variant(TARGET_TYPE_FIELD, match: 4);
+
+			variant(TARGET_TYPE_ONEOF, match: 5);
+
+			variant(TARGET_TYPE_ENUM, match: 6);
+
+			variant(TARGET_TYPE_ENUM_ENTRY, match: 7);
+
+			variant(TARGET_TYPE_SERVICE, match: 8);
+
+			variant(TARGET_TYPE_METHOD, match: 9);
+
+			default;
+		};
+
+		def(FileDescriptorProto) => message {
+			field(name, number: 1) => root::string;
+
+			field(package, number: 2) => root::string;
+
+			repeated(dependency, number: 3) => root::string;
+
+			repeated(public_dependency, number: 10) => root::int32;
+
+			repeated(weak_dependency, number: 11) => root::int32;
+
+			repeated(option_dependency, number: 15) => root::string;
+
+			repeated(message_type, number: 4) => root::google::protobuf::DescriptorProto;
+
+			repeated(enum_type, number: 5) => root::google::protobuf::EnumDescriptorProto;
+
+			repeated(service, number: 6) => root::google::protobuf::ServiceDescriptorProto;
+
+			repeated(extension, number: 7) => root::google::protobuf::FieldDescriptorProto;
+
+			field(options, number: 8) => root::google::protobuf::FileOptions;
+
+			field(source_code_info, number: 9) => root::google::protobuf::SourceCodeInfo;
+
+			field(syntax, number: 12) => root::string;
+
+			field(edition, number: 14) => root::google::protobuf::Edition;
+		};
+
+		def(FileDescriptorSet) => message {
+			repeated(file, number: 1) => root::google::protobuf::FileDescriptorProto;
+		};
+
+		def(FileOptions) => message {
+			field(java_package, number: 1) => root::string;
+
+			field(java_outer_classname, number: 8) => root::string;
+
+			field(java_multiple_files, number: 10) => root::bool;
+
+			field(java_generate_equals_and_hash, number: 20) => root::bool;
+
+			field(java_string_check_utf8, number: 27) => root::bool;
+
+			field(optimize_for, number: 9) => root::google::protobuf::FileOptions_OptimizeMode;
+
+			field(go_package, number: 11) => root::string;
+
+			field(cc_generic_services, number: 16) => root::bool;
+
+			field(java_generic_services, number: 17) => root::bool;
+
+			field(py_generic_services, number: 18) => root::bool;
+
+			field(deprecated, number: 23) => root::bool;
+
+			field(cc_enable_arenas, number: 31) => root::bool;
+
+			field(objc_class_prefix, number: 36) => root::string;
+
+			field(csharp_namespace, number: 37) => root::string;
+
+			field(swift_prefix, number: 39) => root::string;
+
+			field(php_class_prefix, number: 40) => root::string;
+
+			field(php_namespace, number: 41) => root::string;
+
+			field(php_metadata_namespace, number: 44) => root::string;
+
+			field(ruby_package, number: 45) => root::string;
+
+			field(features, number: 50) => root::google::protobuf::FeatureSet;
+
+			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
+		};
+
+		def(FileOptions_OptimizeMode) => union(Tag: root::int32) {
+			variant(SPEED, match: 1);
+
+			variant(CODE_SIZE, match: 2);
+
+			variant(LITE_RUNTIME, match: 3);
+
+			default;
+		};
+
+		def(GeneratedCodeInfo) => message {
+			repeated(annotation, number: 1) => root::google::protobuf::GeneratedCodeInfo_Annotation;
+		};
+
+		def(GeneratedCodeInfo_Annotation) => message {
+			repeated(path, number: 1) => root::int32;
+
+			field(source_file, number: 2) => root::string;
+
+			field(begin, number: 3) => root::int32;
+
+			field(end, number: 4) => root::int32;
+
+			field(semantic, number: 5)
+			=> root::google::protobuf::GeneratedCodeInfo_Annotation_Semantic;
+		};
+
+		def(GeneratedCodeInfo_Annotation_Semantic) => union(Tag: root::int32) {
+			variant(NONE, match: 0);
+
+			variant(SET, match: 1);
+
+			variant(ALIAS, match: 2);
+
+			default;
+		};
+
+		def(MessageOptions) => message {
+			field(message_set_wire_format, number: 1) => root::bool;
+
+			field(no_standard_descriptor_accessor, number: 2) => root::bool;
+
+			field(deprecated, number: 3) => root::bool;
+
+			field(map_entry, number: 7) => root::bool;
+
+			field(deprecated_legacy_json_field_conflicts, number: 11) => root::bool;
+
+			field(features, number: 12) => root::google::protobuf::FeatureSet;
+
+			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
+		};
+
+		def(MethodDescriptorProto) => message {
+			field(name, number: 1) => root::string;
+
+			field(input_type, number: 2) => root::string;
+
+			field(output_type, number: 3) => root::string;
+
+			field(options, number: 4) => root::google::protobuf::MethodOptions;
+
+			field(client_streaming, number: 5) => root::bool;
+
+			field(server_streaming, number: 6) => root::bool;
+		};
+
+		def(MethodOptions) => message {
+			field(deprecated, number: 33) => root::bool;
+
+			field(idempotency_level, number: 34)
+			=> root::google::protobuf::MethodOptions_IdempotencyLevel;
+
+			field(features, number: 35) => root::google::protobuf::FeatureSet;
+
+			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
+		};
+
+		def(MethodOptions_IdempotencyLevel) => union(Tag: root::int32) {
+			variant(IDEMPOTENCY_UNKNOWN, match: 0);
+
+			variant(NO_SIDE_EFFECTS, match: 1);
+
+			variant(IDEMPOTENT, match: 2);
+
+			default;
+		};
+
+		def(OneofDescriptorProto) => message {
+			field(name, number: 1) => root::string;
+
+			field(options, number: 2) => root::google::protobuf::OneofOptions;
+		};
+
+		def(OneofOptions) => message {
+			field(features, number: 1) => root::google::protobuf::FeatureSet;
+
+			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
+		};
+
+		def(ServiceDescriptorProto) => message {
+			field(name, number: 1) => root::string;
+
+			repeated(method, number: 2) => root::google::protobuf::MethodDescriptorProto;
+
+			field(options, number: 3) => root::google::protobuf::ServiceOptions;
+		};
+
+		def(ServiceOptions) => message {
+			field(features, number: 34) => root::google::protobuf::FeatureSet;
+
+			field(deprecated, number: 33) => root::bool;
+
+			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
+		};
+
+		def(SourceCodeInfo) => message {
+			repeated(location, number: 1) => root::google::protobuf::SourceCodeInfo_Location;
+		};
+
+		def(SourceCodeInfo_Location) => message {
+			repeated(path, number: 1) => root::int32;
+
+			repeated(span, number: 2) => root::int32;
+
+			field(leading_comments, number: 3) => root::string;
+
+			field(trailing_comments, number: 4) => root::string;
+
+			repeated(leading_detached_comments, number: 6) => root::string;
+		};
+
+		def(SymbolVisibility) => union(Tag: root::int32) {
+			variant(VISIBILITY_UNSET, match: 0);
+
+			variant(VISIBILITY_LOCAL, match: 1);
+
+			variant(VISIBILITY_EXPORT, match: 2);
+
+			default;
+		};
+
+		def(UninterpretedOption) => message {
+			repeated(name, number: 2) => root::google::protobuf::UninterpretedOption_NamePart;
+
+			field(identifier_value, number: 3) => root::string;
+
+			field(positive_int_value, number: 4) => root::uint64;
+
+			field(negative_int_value, number: 5) => root::int64;
+
+			field(double_value, number: 6) => root::double;
+
+			field(string_value, number: 7) => root::bytes;
+
+			field(aggregate_value, number: 8) => root::string;
+		};
+
+		def(UninterpretedOption_NamePart) => message {
+			field(name_part, number: 1) => root::string;
+
+			field(is_extension, number: 2) => root::bool;
+		};
+	};
+};

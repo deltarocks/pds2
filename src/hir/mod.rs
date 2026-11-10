@@ -174,6 +174,7 @@ pub struct NativeType {
 	/// `is_void;` in the def_native block: the type carries no data.
 	pub is_void: bool,
 	pub scalar: Option<Ident>,
+	pub attrs: BTreeMap<Ident, Vec<Ident>>,
 }
 impl NativeType {
 	/// A body-accepting native is compile-time only: every use-site is inlined by its

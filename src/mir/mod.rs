@@ -44,6 +44,12 @@ pub struct NativeType {
 	pub arg_virtuals: Vec<Ident>,
 	pub is_void: bool,
 	pub scalar: Option<Ident>,
+	pub attrs: BTreeMap<Ident, Vec<Ident>>,
+}
+impl NativeType {
+	pub fn attr(&self, name: &str) -> Option<&[Ident]> {
+		self.attrs.get(&Ident::new(name)).map(Vec::as_slice)
+	}
 }
 
 #[derive(Debug, Clone)]
