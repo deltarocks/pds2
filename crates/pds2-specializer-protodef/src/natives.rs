@@ -420,7 +420,6 @@ impl NativeCodegen<Rust> for Array {
 		let perror = &rust::import("crate::pds", "Error");
 
 		let main = match ctx.variant.as_str() {
-			// length prefix read inline, as the `Count` type
 			"inline" => {
 				let count = ctx.specialization("Count").context("array count type")?;
 				quote! {
@@ -446,7 +445,6 @@ impl NativeCodegen<Rust> for Array {
 					}
 				}
 			}
-			// length supplied by the use-site (field reference or constant)
 			"sized" => {
 				ensure!(
 					!ctx.params.is_empty(),

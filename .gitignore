@@ -1,6 +1,4 @@
 /target
 /.direnv
 
-protocol.json
-protocol.pds
 *.hir
