@@ -14,57 +14,9 @@ pub enum Ty {
     TARGET_TYPE_ENUM_ENTRY,
     TARGET_TYPE_SERVICE,
     TARGET_TYPE_METHOD,
-    default(pds_int32::Ty),
+    Unknown(pds_int32::Ty),
 }
-pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    pds_int32::serialize(&virtual_tag(_0), output)?;
-    match _0 {
-        Ty::TARGET_TYPE_UNKNOWN => Ok(()),
-        Ty::TARGET_TYPE_FILE => Ok(()),
-        Ty::TARGET_TYPE_EXTENSION_RANGE => Ok(()),
-        Ty::TARGET_TYPE_MESSAGE => Ok(()),
-        Ty::TARGET_TYPE_FIELD => Ok(()),
-        Ty::TARGET_TYPE_ONEOF => Ok(()),
-        Ty::TARGET_TYPE_ENUM => Ok(()),
-        Ty::TARGET_TYPE_ENUM_ENTRY => Ok(()),
-        Ty::TARGET_TYPE_SERVICE => Ok(()),
-        Ty::TARGET_TYPE_METHOD => Ok(()),
-        Ty::default(_) => Ok(()),
-    }
-}
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    let __tagv = pds_int32::deserialize(
-        input,
-    )?;
-    let __tag = &__tagv;
-    if (__tag.clone() == 0_i32) { return Ok(Ty::TARGET_TYPE_UNKNOWN); }
-    if (__tag.clone() == 1_i32) { return Ok(Ty::TARGET_TYPE_FILE); }
-    if (__tag.clone() == 2_i32) { return Ok(Ty::TARGET_TYPE_EXTENSION_RANGE); }
-    if (__tag.clone() == 3_i32) { return Ok(Ty::TARGET_TYPE_MESSAGE); }
-    if (__tag.clone() == 4_i32) { return Ok(Ty::TARGET_TYPE_FIELD); }
-    if (__tag.clone() == 5_i32) { return Ok(Ty::TARGET_TYPE_ONEOF); }
-    if (__tag.clone() == 6_i32) { return Ok(Ty::TARGET_TYPE_ENUM); }
-    if (__tag.clone() == 7_i32) { return Ok(Ty::TARGET_TYPE_ENUM_ENTRY); }
-    if (__tag.clone() == 8_i32) { return Ok(Ty::TARGET_TYPE_SERVICE); }
-    if (__tag.clone() == 9_i32) { return Ok(Ty::TARGET_TYPE_METHOD); }
-    Ok(Ty::default(__tagv))
-}
-pub fn size_of(_0: &Ty) -> usize {
-    pds_int32::size_of(&virtual_tag(_0)) + match _0 {
-        Ty::TARGET_TYPE_UNKNOWN => 0,
-        Ty::TARGET_TYPE_FILE => 0,
-        Ty::TARGET_TYPE_EXTENSION_RANGE => 0,
-        Ty::TARGET_TYPE_MESSAGE => 0,
-        Ty::TARGET_TYPE_FIELD => 0,
-        Ty::TARGET_TYPE_ONEOF => 0,
-        Ty::TARGET_TYPE_ENUM => 0,
-        Ty::TARGET_TYPE_ENUM_ENTRY => 0,
-        Ty::TARGET_TYPE_SERVICE => 0,
-        Ty::TARGET_TYPE_METHOD => 0,
-        Ty::default(_) => 0,
-    }
-}
-pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
+pub fn number(_0: &Ty) -> pds_int32::Ty {
     match _0 {
         Ty::TARGET_TYPE_UNKNOWN => 0_i32,
         Ty::TARGET_TYPE_FILE => 1_i32,
@@ -76,6 +28,30 @@ pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
         Ty::TARGET_TYPE_ENUM_ENTRY => 7_i32,
         Ty::TARGET_TYPE_SERVICE => 8_i32,
         Ty::TARGET_TYPE_METHOD => 9_i32,
-        Ty::default(__t) => __t.clone(),
+        Ty::Unknown(n) => n.clone(),
     }
+}
+pub fn from_number(n: pds_int32::Ty) -> Ty {
+    match n {
+        0_i32 => Ty::TARGET_TYPE_UNKNOWN,
+        1_i32 => Ty::TARGET_TYPE_FILE,
+        2_i32 => Ty::TARGET_TYPE_EXTENSION_RANGE,
+        3_i32 => Ty::TARGET_TYPE_MESSAGE,
+        4_i32 => Ty::TARGET_TYPE_FIELD,
+        5_i32 => Ty::TARGET_TYPE_ONEOF,
+        6_i32 => Ty::TARGET_TYPE_ENUM,
+        7_i32 => Ty::TARGET_TYPE_ENUM_ENTRY,
+        8_i32 => Ty::TARGET_TYPE_SERVICE,
+        9_i32 => Ty::TARGET_TYPE_METHOD,
+        n => Ty::Unknown(n),
+    }
+}
+pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
+    pds_int32::serialize(&number(_0), output)
+}
+pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
+    Ok(from_number(pds_int32::deserialize(input, )?))
+}
+pub fn size_of(_0: &Ty) -> usize {
+    pds_int32::size_of(&number(_0))
 }

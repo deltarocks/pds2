@@ -1,0 +1,17 @@
+[package]
+name = "pds2"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+pds2-cli = { path = "../pds2-cli" }
+pds2-core = { path = "../pds2-core" }
+pds2-specializer-bytes = { path = "../pds2-specializer-bytes" }
+pds2-specializer-generic = { path = "../pds2-specializer-generic" }
+pds2-specializer-minecraft-data = { path = "../pds2-specializer-minecraft-data" }
+pds2-specializer-protobuf = { path = "../pds2-specializer-protobuf" }
+pds2-specializer-protodef = { path = "../pds2-specializer-protodef" }
+protobuf-descriptor = { path = "../protobuf-descriptor" }
+serde_json = "1.0"
+tracing = "0.1.44"

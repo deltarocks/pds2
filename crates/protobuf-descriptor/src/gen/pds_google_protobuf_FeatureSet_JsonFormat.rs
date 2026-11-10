@@ -7,40 +7,30 @@ pub enum Ty {
     JSON_FORMAT_UNKNOWN,
     ALLOW,
     LEGACY_BEST_EFFORT,
-    default(pds_int32::Ty),
+    Unknown(pds_int32::Ty),
 }
-pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    pds_int32::serialize(&virtual_tag(_0), output)?;
-    match _0 {
-        Ty::JSON_FORMAT_UNKNOWN => Ok(()),
-        Ty::ALLOW => Ok(()),
-        Ty::LEGACY_BEST_EFFORT => Ok(()),
-        Ty::default(_) => Ok(()),
-    }
-}
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    let __tagv = pds_int32::deserialize(
-        input,
-    )?;
-    let __tag = &__tagv;
-    if (__tag.clone() == 0_i32) { return Ok(Ty::JSON_FORMAT_UNKNOWN); }
-    if (__tag.clone() == 1_i32) { return Ok(Ty::ALLOW); }
-    if (__tag.clone() == 2_i32) { return Ok(Ty::LEGACY_BEST_EFFORT); }
-    Ok(Ty::default(__tagv))
-}
-pub fn size_of(_0: &Ty) -> usize {
-    pds_int32::size_of(&virtual_tag(_0)) + match _0 {
-        Ty::JSON_FORMAT_UNKNOWN => 0,
-        Ty::ALLOW => 0,
-        Ty::LEGACY_BEST_EFFORT => 0,
-        Ty::default(_) => 0,
-    }
-}
-pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
+pub fn number(_0: &Ty) -> pds_int32::Ty {
     match _0 {
         Ty::JSON_FORMAT_UNKNOWN => 0_i32,
         Ty::ALLOW => 1_i32,
         Ty::LEGACY_BEST_EFFORT => 2_i32,
-        Ty::default(__t) => __t.clone(),
+        Ty::Unknown(n) => n.clone(),
     }
+}
+pub fn from_number(n: pds_int32::Ty) -> Ty {
+    match n {
+        0_i32 => Ty::JSON_FORMAT_UNKNOWN,
+        1_i32 => Ty::ALLOW,
+        2_i32 => Ty::LEGACY_BEST_EFFORT,
+        n => Ty::Unknown(n),
+    }
+}
+pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
+    pds_int32::serialize(&number(_0), output)
+}
+pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
+    Ok(from_number(pds_int32::deserialize(input, )?))
+}
+pub fn size_of(_0: &Ty) -> usize {
+    pds_int32::size_of(&number(_0))
 }

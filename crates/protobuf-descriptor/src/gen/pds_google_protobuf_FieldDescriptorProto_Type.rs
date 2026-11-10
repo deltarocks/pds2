@@ -22,81 +22,9 @@ pub enum Ty {
     TYPE_SFIXED64,
     TYPE_SINT32,
     TYPE_SINT64,
-    default(pds_int32::Ty),
+    Unknown(pds_int32::Ty),
 }
-pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    pds_int32::serialize(&virtual_tag(_0), output)?;
-    match _0 {
-        Ty::TYPE_DOUBLE => Ok(()),
-        Ty::TYPE_FLOAT => Ok(()),
-        Ty::TYPE_INT64 => Ok(()),
-        Ty::TYPE_UINT64 => Ok(()),
-        Ty::TYPE_INT32 => Ok(()),
-        Ty::TYPE_FIXED64 => Ok(()),
-        Ty::TYPE_FIXED32 => Ok(()),
-        Ty::TYPE_BOOL => Ok(()),
-        Ty::TYPE_STRING => Ok(()),
-        Ty::TYPE_GROUP => Ok(()),
-        Ty::TYPE_MESSAGE => Ok(()),
-        Ty::TYPE_BYTES => Ok(()),
-        Ty::TYPE_UINT32 => Ok(()),
-        Ty::TYPE_ENUM => Ok(()),
-        Ty::TYPE_SFIXED32 => Ok(()),
-        Ty::TYPE_SFIXED64 => Ok(()),
-        Ty::TYPE_SINT32 => Ok(()),
-        Ty::TYPE_SINT64 => Ok(()),
-        Ty::default(_) => Ok(()),
-    }
-}
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    let __tagv = pds_int32::deserialize(
-        input,
-    )?;
-    let __tag = &__tagv;
-    if (__tag.clone() == 1_i32) { return Ok(Ty::TYPE_DOUBLE); }
-    if (__tag.clone() == 2_i32) { return Ok(Ty::TYPE_FLOAT); }
-    if (__tag.clone() == 3_i32) { return Ok(Ty::TYPE_INT64); }
-    if (__tag.clone() == 4_i32) { return Ok(Ty::TYPE_UINT64); }
-    if (__tag.clone() == 5_i32) { return Ok(Ty::TYPE_INT32); }
-    if (__tag.clone() == 6_i32) { return Ok(Ty::TYPE_FIXED64); }
-    if (__tag.clone() == 7_i32) { return Ok(Ty::TYPE_FIXED32); }
-    if (__tag.clone() == 8_i32) { return Ok(Ty::TYPE_BOOL); }
-    if (__tag.clone() == 9_i32) { return Ok(Ty::TYPE_STRING); }
-    if (__tag.clone() == 10_i32) { return Ok(Ty::TYPE_GROUP); }
-    if (__tag.clone() == 11_i32) { return Ok(Ty::TYPE_MESSAGE); }
-    if (__tag.clone() == 12_i32) { return Ok(Ty::TYPE_BYTES); }
-    if (__tag.clone() == 13_i32) { return Ok(Ty::TYPE_UINT32); }
-    if (__tag.clone() == 14_i32) { return Ok(Ty::TYPE_ENUM); }
-    if (__tag.clone() == 15_i32) { return Ok(Ty::TYPE_SFIXED32); }
-    if (__tag.clone() == 16_i32) { return Ok(Ty::TYPE_SFIXED64); }
-    if (__tag.clone() == 17_i32) { return Ok(Ty::TYPE_SINT32); }
-    if (__tag.clone() == 18_i32) { return Ok(Ty::TYPE_SINT64); }
-    Ok(Ty::default(__tagv))
-}
-pub fn size_of(_0: &Ty) -> usize {
-    pds_int32::size_of(&virtual_tag(_0)) + match _0 {
-        Ty::TYPE_DOUBLE => 0,
-        Ty::TYPE_FLOAT => 0,
-        Ty::TYPE_INT64 => 0,
-        Ty::TYPE_UINT64 => 0,
-        Ty::TYPE_INT32 => 0,
-        Ty::TYPE_FIXED64 => 0,
-        Ty::TYPE_FIXED32 => 0,
-        Ty::TYPE_BOOL => 0,
-        Ty::TYPE_STRING => 0,
-        Ty::TYPE_GROUP => 0,
-        Ty::TYPE_MESSAGE => 0,
-        Ty::TYPE_BYTES => 0,
-        Ty::TYPE_UINT32 => 0,
-        Ty::TYPE_ENUM => 0,
-        Ty::TYPE_SFIXED32 => 0,
-        Ty::TYPE_SFIXED64 => 0,
-        Ty::TYPE_SINT32 => 0,
-        Ty::TYPE_SINT64 => 0,
-        Ty::default(_) => 0,
-    }
-}
-pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
+pub fn number(_0: &Ty) -> pds_int32::Ty {
     match _0 {
         Ty::TYPE_DOUBLE => 1_i32,
         Ty::TYPE_FLOAT => 2_i32,
@@ -116,6 +44,38 @@ pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
         Ty::TYPE_SFIXED64 => 16_i32,
         Ty::TYPE_SINT32 => 17_i32,
         Ty::TYPE_SINT64 => 18_i32,
-        Ty::default(__t) => __t.clone(),
+        Ty::Unknown(n) => n.clone(),
     }
+}
+pub fn from_number(n: pds_int32::Ty) -> Ty {
+    match n {
+        1_i32 => Ty::TYPE_DOUBLE,
+        2_i32 => Ty::TYPE_FLOAT,
+        3_i32 => Ty::TYPE_INT64,
+        4_i32 => Ty::TYPE_UINT64,
+        5_i32 => Ty::TYPE_INT32,
+        6_i32 => Ty::TYPE_FIXED64,
+        7_i32 => Ty::TYPE_FIXED32,
+        8_i32 => Ty::TYPE_BOOL,
+        9_i32 => Ty::TYPE_STRING,
+        10_i32 => Ty::TYPE_GROUP,
+        11_i32 => Ty::TYPE_MESSAGE,
+        12_i32 => Ty::TYPE_BYTES,
+        13_i32 => Ty::TYPE_UINT32,
+        14_i32 => Ty::TYPE_ENUM,
+        15_i32 => Ty::TYPE_SFIXED32,
+        16_i32 => Ty::TYPE_SFIXED64,
+        17_i32 => Ty::TYPE_SINT32,
+        18_i32 => Ty::TYPE_SINT64,
+        n => Ty::Unknown(n),
+    }
+}
+pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
+    pds_int32::serialize(&number(_0), output)
+}
+pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
+    Ok(from_number(pds_int32::deserialize(input, )?))
+}
+pub fn size_of(_0: &Ty) -> usize {
+    pds_int32::size_of(&number(_0))
 }

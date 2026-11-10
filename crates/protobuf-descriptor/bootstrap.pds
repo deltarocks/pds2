@@ -36,28 +36,14 @@ def_native(message) {
 	};
 };
 
-@specializer union
-def_native(union) {
+@specializer enum
+def_native(enum) {
+	type(Tag);
+
 	body {
-		item(variant) {
-			argument(match);
-
-			type(Value) => void;
+		item(value) {
+			argument(number);
 		};
-
-		item(default) {
-			anonymous;
-
-			type(Value) => void;
-		};
-	};
-
-	variant(external) {
-		argument(tag);
-	};
-
-	variant(inline) {
-		type(Tag);
 	};
 };
 
@@ -111,54 +97,50 @@ namespace(google) {
 			field(proto3_optional, number: 17) => bool;
 		};
 
-		def(FieldDescriptorProto_Type) => union(Tag: int32) {
-			variant(TYPE_DOUBLE, match: 1);
+		def(FieldDescriptorProto_Type) => enum(Tag: int32) {
+			value(TYPE_DOUBLE, number: 1);
 
-			variant(TYPE_FLOAT, match: 2);
+			value(TYPE_FLOAT, number: 2);
 
-			variant(TYPE_INT64, match: 3);
+			value(TYPE_INT64, number: 3);
 
-			variant(TYPE_UINT64, match: 4);
+			value(TYPE_UINT64, number: 4);
 
-			variant(TYPE_INT32, match: 5);
+			value(TYPE_INT32, number: 5);
 
-			variant(TYPE_FIXED64, match: 6);
+			value(TYPE_FIXED64, number: 6);
 
-			variant(TYPE_FIXED32, match: 7);
+			value(TYPE_FIXED32, number: 7);
 
-			variant(TYPE_BOOL, match: 8);
+			value(TYPE_BOOL, number: 8);
 
-			variant(TYPE_STRING, match: 9);
+			value(TYPE_STRING, number: 9);
 
-			variant(TYPE_GROUP, match: 10);
+			value(TYPE_GROUP, number: 10);
 
-			variant(TYPE_MESSAGE, match: 11);
+			value(TYPE_MESSAGE, number: 11);
 
-			variant(TYPE_BYTES, match: 12);
+			value(TYPE_BYTES, number: 12);
 
-			variant(TYPE_UINT32, match: 13);
+			value(TYPE_UINT32, number: 13);
 
-			variant(TYPE_ENUM, match: 14);
+			value(TYPE_ENUM, number: 14);
 
-			variant(TYPE_SFIXED32, match: 15);
+			value(TYPE_SFIXED32, number: 15);
 
-			variant(TYPE_SFIXED64, match: 16);
+			value(TYPE_SFIXED64, number: 16);
 
-			variant(TYPE_SINT32, match: 17);
+			value(TYPE_SINT32, number: 17);
 
-			variant(TYPE_SINT64, match: 18);
-
-			default;
+			value(TYPE_SINT64, number: 18);
 		};
 
-		def(FieldDescriptorProto_Label) => union(Tag: int32) {
-			variant(LABEL_OPTIONAL, match: 1);
+		def(FieldDescriptorProto_Label) => enum(Tag: int32) {
+			value(LABEL_OPTIONAL, number: 1);
 
-			variant(LABEL_REQUIRED, match: 2);
+			value(LABEL_REQUIRED, number: 2);
 
-			variant(LABEL_REPEATED, match: 3);
-
-			default;
+			value(LABEL_REPEATED, number: 3);
 		};
 
 		def(OneofDescriptorProto) => message {

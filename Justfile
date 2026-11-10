@@ -5,7 +5,7 @@ envoy_roots := "envoy/config/cluster/v3/cluster.proto envoy/extensions/upstreams
 
 minecraft: nbt
 	rm -rf crates/minecraft-protocol/src/gen ts/minecraft-protocol/gen
-	cargo run upgrade protocol.json
+	cargo run minecraft-data upgrade protocol.json
 	cargo run compile protocol.pds rust --to crates/minecraft-protocol/src/gen
 	cargo run compile protocol.pds typescript --to ts/minecraft-protocol/gen
 
@@ -24,7 +24,7 @@ descriptor-set:
 	{{protoc}} -I crates/protobuf-descriptor --include_imports --descriptor_set_out=target/descriptor.pb google/protobuf/descriptor.proto
 
 descriptor: descriptor-set
-	cargo run proto target/descriptor.pb --root google/protobuf/descriptor.proto --to crates/protobuf-descriptor/descriptor.pds
+	cargo run protobuf convert target/descriptor.pb --root google/protobuf/descriptor.proto --to crates/protobuf-descriptor/descriptor.pds
 	just descriptor-gen crates/protobuf-descriptor/descriptor.pds
 
 bootstrap:
@@ -38,7 +38,7 @@ descriptor-gen schema:
 	mv target/descriptor-gen crates/protobuf-descriptor/src/gen
 
 descriptor-check: descriptor-set
-	cargo run proto target/descriptor.pb --root google/protobuf/descriptor.proto --to target/descriptor.check.pds
+	cargo run protobuf convert target/descriptor.pb --root google/protobuf/descriptor.proto --to target/descriptor.check.pds
 	diff crates/protobuf-descriptor/descriptor.pds target/descriptor.check.pds
 
 envoy-protos:
@@ -48,7 +48,7 @@ envoy-protos:
 
 envoy: envoy-protos
 	{{protoc}} {{envoy_includes}} --include_imports --descriptor_set_out=target/envoy.pb {{envoy_roots}}
-	cargo run proto target/envoy.pb --root envoy/config/cluster/v3/cluster.proto --root envoy/extensions/upstreams/http/v3/http_protocol_options.proto --to crates/envoy-api/envoy.pds
+	cargo run protobuf convert target/envoy.pb --root envoy/config/cluster/v3/cluster.proto --root envoy/extensions/upstreams/http/v3/http_protocol_options.proto --to crates/envoy-api/envoy.pds
 	rm -rf crates/envoy-api/src/gen ts/envoy-api/gen
 	cargo run compile crates/envoy-api/envoy.pds rust --const cluster_fixture=crates/envoy-api/cluster.txtpds2 --to crates/envoy-api/src/gen
 	cargo run compile crates/envoy-api/envoy.pds typescript --const cluster_fixture=crates/envoy-api/cluster.txtpds2 --to ts/envoy-api/gen

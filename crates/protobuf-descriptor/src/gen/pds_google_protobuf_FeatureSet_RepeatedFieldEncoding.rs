@@ -7,40 +7,30 @@ pub enum Ty {
     REPEATED_FIELD_ENCODING_UNKNOWN,
     PACKED,
     EXPANDED,
-    default(pds_int32::Ty),
+    Unknown(pds_int32::Ty),
 }
-pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    pds_int32::serialize(&virtual_tag(_0), output)?;
-    match _0 {
-        Ty::REPEATED_FIELD_ENCODING_UNKNOWN => Ok(()),
-        Ty::PACKED => Ok(()),
-        Ty::EXPANDED => Ok(()),
-        Ty::default(_) => Ok(()),
-    }
-}
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    let __tagv = pds_int32::deserialize(
-        input,
-    )?;
-    let __tag = &__tagv;
-    if (__tag.clone() == 0_i32) { return Ok(Ty::REPEATED_FIELD_ENCODING_UNKNOWN); }
-    if (__tag.clone() == 1_i32) { return Ok(Ty::PACKED); }
-    if (__tag.clone() == 2_i32) { return Ok(Ty::EXPANDED); }
-    Ok(Ty::default(__tagv))
-}
-pub fn size_of(_0: &Ty) -> usize {
-    pds_int32::size_of(&virtual_tag(_0)) + match _0 {
-        Ty::REPEATED_FIELD_ENCODING_UNKNOWN => 0,
-        Ty::PACKED => 0,
-        Ty::EXPANDED => 0,
-        Ty::default(_) => 0,
-    }
-}
-pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
+pub fn number(_0: &Ty) -> pds_int32::Ty {
     match _0 {
         Ty::REPEATED_FIELD_ENCODING_UNKNOWN => 0_i32,
         Ty::PACKED => 1_i32,
         Ty::EXPANDED => 2_i32,
-        Ty::default(__t) => __t.clone(),
+        Ty::Unknown(n) => n.clone(),
     }
+}
+pub fn from_number(n: pds_int32::Ty) -> Ty {
+    match n {
+        0_i32 => Ty::REPEATED_FIELD_ENCODING_UNKNOWN,
+        1_i32 => Ty::PACKED,
+        2_i32 => Ty::EXPANDED,
+        n => Ty::Unknown(n),
+    }
+}
+pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
+    pds_int32::serialize(&number(_0), output)
+}
+pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
+    Ok(from_number(pds_int32::deserialize(input, )?))
+}
+pub fn size_of(_0: &Ty) -> usize {
+    pds_int32::size_of(&number(_0))
 }

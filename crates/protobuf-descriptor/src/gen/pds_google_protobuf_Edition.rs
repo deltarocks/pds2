@@ -18,69 +18,9 @@ pub enum Ty {
     EDITION_99998_TEST_ONLY,
     EDITION_99999_TEST_ONLY,
     EDITION_MAX,
-    default(pds_int32::Ty),
+    Unknown(pds_int32::Ty),
 }
-pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    pds_int32::serialize(&virtual_tag(_0), output)?;
-    match _0 {
-        Ty::EDITION_UNKNOWN => Ok(()),
-        Ty::EDITION_LEGACY => Ok(()),
-        Ty::EDITION_PROTO2 => Ok(()),
-        Ty::EDITION_PROTO3 => Ok(()),
-        Ty::EDITION_2023 => Ok(()),
-        Ty::EDITION_2024 => Ok(()),
-        Ty::EDITION_2026 => Ok(()),
-        Ty::EDITION_UNSTABLE => Ok(()),
-        Ty::EDITION_1_TEST_ONLY => Ok(()),
-        Ty::EDITION_2_TEST_ONLY => Ok(()),
-        Ty::EDITION_99997_TEST_ONLY => Ok(()),
-        Ty::EDITION_99998_TEST_ONLY => Ok(()),
-        Ty::EDITION_99999_TEST_ONLY => Ok(()),
-        Ty::EDITION_MAX => Ok(()),
-        Ty::default(_) => Ok(()),
-    }
-}
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    let __tagv = pds_int32::deserialize(
-        input,
-    )?;
-    let __tag = &__tagv;
-    if (__tag.clone() == 0_i32) { return Ok(Ty::EDITION_UNKNOWN); }
-    if (__tag.clone() == 900_i32) { return Ok(Ty::EDITION_LEGACY); }
-    if (__tag.clone() == 998_i32) { return Ok(Ty::EDITION_PROTO2); }
-    if (__tag.clone() == 999_i32) { return Ok(Ty::EDITION_PROTO3); }
-    if (__tag.clone() == 1000_i32) { return Ok(Ty::EDITION_2023); }
-    if (__tag.clone() == 1001_i32) { return Ok(Ty::EDITION_2024); }
-    if (__tag.clone() == 1002_i32) { return Ok(Ty::EDITION_2026); }
-    if (__tag.clone() == 9999_i32) { return Ok(Ty::EDITION_UNSTABLE); }
-    if (__tag.clone() == 1_i32) { return Ok(Ty::EDITION_1_TEST_ONLY); }
-    if (__tag.clone() == 2_i32) { return Ok(Ty::EDITION_2_TEST_ONLY); }
-    if (__tag.clone() == 99997_i32) { return Ok(Ty::EDITION_99997_TEST_ONLY); }
-    if (__tag.clone() == 99998_i32) { return Ok(Ty::EDITION_99998_TEST_ONLY); }
-    if (__tag.clone() == 99999_i32) { return Ok(Ty::EDITION_99999_TEST_ONLY); }
-    if (__tag.clone() == 2147483647_i32) { return Ok(Ty::EDITION_MAX); }
-    Ok(Ty::default(__tagv))
-}
-pub fn size_of(_0: &Ty) -> usize {
-    pds_int32::size_of(&virtual_tag(_0)) + match _0 {
-        Ty::EDITION_UNKNOWN => 0,
-        Ty::EDITION_LEGACY => 0,
-        Ty::EDITION_PROTO2 => 0,
-        Ty::EDITION_PROTO3 => 0,
-        Ty::EDITION_2023 => 0,
-        Ty::EDITION_2024 => 0,
-        Ty::EDITION_2026 => 0,
-        Ty::EDITION_UNSTABLE => 0,
-        Ty::EDITION_1_TEST_ONLY => 0,
-        Ty::EDITION_2_TEST_ONLY => 0,
-        Ty::EDITION_99997_TEST_ONLY => 0,
-        Ty::EDITION_99998_TEST_ONLY => 0,
-        Ty::EDITION_99999_TEST_ONLY => 0,
-        Ty::EDITION_MAX => 0,
-        Ty::default(_) => 0,
-    }
-}
-pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
+pub fn number(_0: &Ty) -> pds_int32::Ty {
     match _0 {
         Ty::EDITION_UNKNOWN => 0_i32,
         Ty::EDITION_LEGACY => 900_i32,
@@ -96,6 +36,34 @@ pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
         Ty::EDITION_99998_TEST_ONLY => 99998_i32,
         Ty::EDITION_99999_TEST_ONLY => 99999_i32,
         Ty::EDITION_MAX => 2147483647_i32,
-        Ty::default(__t) => __t.clone(),
+        Ty::Unknown(n) => n.clone(),
     }
+}
+pub fn from_number(n: pds_int32::Ty) -> Ty {
+    match n {
+        0_i32 => Ty::EDITION_UNKNOWN,
+        900_i32 => Ty::EDITION_LEGACY,
+        998_i32 => Ty::EDITION_PROTO2,
+        999_i32 => Ty::EDITION_PROTO3,
+        1000_i32 => Ty::EDITION_2023,
+        1001_i32 => Ty::EDITION_2024,
+        1002_i32 => Ty::EDITION_2026,
+        9999_i32 => Ty::EDITION_UNSTABLE,
+        1_i32 => Ty::EDITION_1_TEST_ONLY,
+        2_i32 => Ty::EDITION_2_TEST_ONLY,
+        99997_i32 => Ty::EDITION_99997_TEST_ONLY,
+        99998_i32 => Ty::EDITION_99998_TEST_ONLY,
+        99999_i32 => Ty::EDITION_99999_TEST_ONLY,
+        2147483647_i32 => Ty::EDITION_MAX,
+        n => Ty::Unknown(n),
+    }
+}
+pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
+    pds_int32::serialize(&number(_0), output)
+}
+pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
+    Ok(from_number(pds_int32::deserialize(input, )?))
+}
+pub fn size_of(_0: &Ty) -> usize {
+    pds_int32::size_of(&number(_0))
 }

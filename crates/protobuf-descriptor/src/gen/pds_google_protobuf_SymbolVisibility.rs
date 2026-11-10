@@ -7,40 +7,30 @@ pub enum Ty {
     VISIBILITY_UNSET,
     VISIBILITY_LOCAL,
     VISIBILITY_EXPORT,
-    default(pds_int32::Ty),
+    Unknown(pds_int32::Ty),
 }
-pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    pds_int32::serialize(&virtual_tag(_0), output)?;
-    match _0 {
-        Ty::VISIBILITY_UNSET => Ok(()),
-        Ty::VISIBILITY_LOCAL => Ok(()),
-        Ty::VISIBILITY_EXPORT => Ok(()),
-        Ty::default(_) => Ok(()),
-    }
-}
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    let __tagv = pds_int32::deserialize(
-        input,
-    )?;
-    let __tag = &__tagv;
-    if (__tag.clone() == 0_i32) { return Ok(Ty::VISIBILITY_UNSET); }
-    if (__tag.clone() == 1_i32) { return Ok(Ty::VISIBILITY_LOCAL); }
-    if (__tag.clone() == 2_i32) { return Ok(Ty::VISIBILITY_EXPORT); }
-    Ok(Ty::default(__tagv))
-}
-pub fn size_of(_0: &Ty) -> usize {
-    pds_int32::size_of(&virtual_tag(_0)) + match _0 {
-        Ty::VISIBILITY_UNSET => 0,
-        Ty::VISIBILITY_LOCAL => 0,
-        Ty::VISIBILITY_EXPORT => 0,
-        Ty::default(_) => 0,
-    }
-}
-pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
+pub fn number(_0: &Ty) -> pds_int32::Ty {
     match _0 {
         Ty::VISIBILITY_UNSET => 0_i32,
         Ty::VISIBILITY_LOCAL => 1_i32,
         Ty::VISIBILITY_EXPORT => 2_i32,
-        Ty::default(__t) => __t.clone(),
+        Ty::Unknown(n) => n.clone(),
     }
+}
+pub fn from_number(n: pds_int32::Ty) -> Ty {
+    match n {
+        0_i32 => Ty::VISIBILITY_UNSET,
+        1_i32 => Ty::VISIBILITY_LOCAL,
+        2_i32 => Ty::VISIBILITY_EXPORT,
+        n => Ty::Unknown(n),
+    }
+}
+pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
+    pds_int32::serialize(&number(_0), output)
+}
+pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
+    Ok(from_number(pds_int32::deserialize(input, )?))
+}
+pub fn size_of(_0: &Ty) -> usize {
+    pds_int32::size_of(&number(_0))
 }

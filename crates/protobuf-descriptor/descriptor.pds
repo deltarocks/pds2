@@ -66,28 +66,14 @@ def_native(message) {
 	};
 };
 
-@specializer union
-def_native(union) {
+@specializer enum
+def_native(enum) {
+	type(Tag);
+
 	body {
-		item(variant) {
-			argument(match);
-
-			type(Value) => void;
+		item(value) {
+			argument(number);
 		};
-
-		item(default) {
-			anonymous;
-
-			type(Value) => void;
-		};
-	};
-
-	variant(external) {
-		argument(tag);
-	};
-
-	variant(inline) {
-		type(Tag);
 	};
 };
 
@@ -133,36 +119,34 @@ namespace(google) {
 			field(end, number: 2) => root::int32;
 		};
 
-		def(Edition) => union(Tag: root::int32) {
-			variant(EDITION_UNKNOWN, match: 0);
+		def(Edition) => enum(Tag: root::int32) {
+			value(EDITION_UNKNOWN, number: 0);
 
-			variant(EDITION_LEGACY, match: 900);
+			value(EDITION_LEGACY, number: 900);
 
-			variant(EDITION_PROTO2, match: 998);
+			value(EDITION_PROTO2, number: 998);
 
-			variant(EDITION_PROTO3, match: 999);
+			value(EDITION_PROTO3, number: 999);
 
-			variant(EDITION_2023, match: 1000);
+			value(EDITION_2023, number: 1000);
 
-			variant(EDITION_2024, match: 1001);
+			value(EDITION_2024, number: 1001);
 
-			variant(EDITION_2026, match: 1002);
+			value(EDITION_2026, number: 1002);
 
-			variant(EDITION_UNSTABLE, match: 9999);
+			value(EDITION_UNSTABLE, number: 9999);
 
-			variant(EDITION_1_TEST_ONLY, match: 1);
+			value(EDITION_1_TEST_ONLY, number: 1);
 
-			variant(EDITION_2_TEST_ONLY, match: 2);
+			value(EDITION_2_TEST_ONLY, number: 2);
 
-			variant(EDITION_99997_TEST_ONLY, match: 99997);
+			value(EDITION_99997_TEST_ONLY, number: 99997);
 
-			variant(EDITION_99998_TEST_ONLY, match: 99998);
+			value(EDITION_99998_TEST_ONLY, number: 99998);
 
-			variant(EDITION_99999_TEST_ONLY, match: 99999);
+			value(EDITION_99999_TEST_ONLY, number: 99999);
 
-			variant(EDITION_MAX, match: 2147483647);
-
-			default;
+			value(EDITION_MAX, number: 2147483647);
 		};
 
 		def(EnumDescriptorProto) => message {
@@ -242,12 +226,10 @@ namespace(google) {
 			field(repeated, number: 6) => root::bool;
 		};
 
-		def(ExtensionRangeOptions_VerificationState) => union(Tag: root::int32) {
-			variant(DECLARATION, match: 0);
+		def(ExtensionRangeOptions_VerificationState) => enum(Tag: root::int32) {
+			value(DECLARATION, number: 0);
 
-			variant(UNVERIFIED, match: 1);
-
-			default;
+			value(UNVERIFIED, number: 1);
 		};
 
 		def(FeatureSet) => message {
@@ -274,106 +256,88 @@ namespace(google) {
 			=> root::google::protobuf::FeatureSet_ProtoLimitsFeature_EnforceProtoLimits;
 		};
 
-		def(FeatureSet_EnforceNamingStyle) => union(Tag: root::int32) {
-			variant(ENFORCE_NAMING_STYLE_UNKNOWN, match: 0);
+		def(FeatureSet_EnforceNamingStyle) => enum(Tag: root::int32) {
+			value(ENFORCE_NAMING_STYLE_UNKNOWN, number: 0);
 
-			variant(STYLE2024, match: 1);
+			value(STYLE2024, number: 1);
 
-			variant(STYLE_LEGACY, match: 2);
+			value(STYLE_LEGACY, number: 2);
 
-			variant(STYLE2026, match: 3);
-
-			default;
+			value(STYLE2026, number: 3);
 		};
 
-		def(FeatureSet_EnumType) => union(Tag: root::int32) {
-			variant(ENUM_TYPE_UNKNOWN, match: 0);
+		def(FeatureSet_EnumType) => enum(Tag: root::int32) {
+			value(ENUM_TYPE_UNKNOWN, number: 0);
 
-			variant(OPEN, match: 1);
+			value(OPEN, number: 1);
 
-			variant(CLOSED, match: 2);
-
-			default;
+			value(CLOSED, number: 2);
 		};
 
-		def(FeatureSet_FieldPresence) => union(Tag: root::int32) {
-			variant(FIELD_PRESENCE_UNKNOWN, match: 0);
+		def(FeatureSet_FieldPresence) => enum(Tag: root::int32) {
+			value(FIELD_PRESENCE_UNKNOWN, number: 0);
 
-			variant(EXPLICIT, match: 1);
+			value(EXPLICIT, number: 1);
 
-			variant(IMPLICIT, match: 2);
+			value(IMPLICIT, number: 2);
 
-			variant(LEGACY_REQUIRED, match: 3);
-
-			default;
+			value(LEGACY_REQUIRED, number: 3);
 		};
 
-		def(FeatureSet_JsonFormat) => union(Tag: root::int32) {
-			variant(JSON_FORMAT_UNKNOWN, match: 0);
+		def(FeatureSet_JsonFormat) => enum(Tag: root::int32) {
+			value(JSON_FORMAT_UNKNOWN, number: 0);
 
-			variant(ALLOW, match: 1);
+			value(ALLOW, number: 1);
 
-			variant(LEGACY_BEST_EFFORT, match: 2);
-
-			default;
+			value(LEGACY_BEST_EFFORT, number: 2);
 		};
 
-		def(FeatureSet_MessageEncoding) => union(Tag: root::int32) {
-			variant(MESSAGE_ENCODING_UNKNOWN, match: 0);
+		def(FeatureSet_MessageEncoding) => enum(Tag: root::int32) {
+			value(MESSAGE_ENCODING_UNKNOWN, number: 0);
 
-			variant(LENGTH_PREFIXED, match: 1);
+			value(LENGTH_PREFIXED, number: 1);
 
-			variant(DELIMITED, match: 2);
-
-			default;
+			value(DELIMITED, number: 2);
 		};
 
 		def(FeatureSet_ProtoLimitsFeature) => message;
 
-		def(FeatureSet_ProtoLimitsFeature_EnforceProtoLimits) => union(Tag: root::int32) {
-			variant(PROTO_LIMITS_UNKNOWN, match: 0);
+		def(FeatureSet_ProtoLimitsFeature_EnforceProtoLimits) => enum(Tag: root::int32) {
+			value(PROTO_LIMITS_UNKNOWN, number: 0);
 
-			variant(LEGACY_NO_EXPLICIT_LIMITS, match: 1);
+			value(LEGACY_NO_EXPLICIT_LIMITS, number: 1);
 
-			variant(PROTO_LIMITS2026, match: 2);
-
-			default;
+			value(PROTO_LIMITS2026, number: 2);
 		};
 
-		def(FeatureSet_RepeatedFieldEncoding) => union(Tag: root::int32) {
-			variant(REPEATED_FIELD_ENCODING_UNKNOWN, match: 0);
+		def(FeatureSet_RepeatedFieldEncoding) => enum(Tag: root::int32) {
+			value(REPEATED_FIELD_ENCODING_UNKNOWN, number: 0);
 
-			variant(PACKED, match: 1);
+			value(PACKED, number: 1);
 
-			variant(EXPANDED, match: 2);
-
-			default;
+			value(EXPANDED, number: 2);
 		};
 
-		def(FeatureSet_Utf8Validation) => union(Tag: root::int32) {
-			variant(UTF8_VALIDATION_UNKNOWN, match: 0);
+		def(FeatureSet_Utf8Validation) => enum(Tag: root::int32) {
+			value(UTF8_VALIDATION_UNKNOWN, number: 0);
 
-			variant(VERIFY, match: 2);
+			value(VERIFY, number: 2);
 
-			variant(NONE, match: 3);
-
-			default;
+			value(NONE, number: 3);
 		};
 
 		def(FeatureSet_VisibilityFeature) => message;
 
-		def(FeatureSet_VisibilityFeature_DefaultSymbolVisibility) => union(Tag: root::int32) {
-			variant(DEFAULT_SYMBOL_VISIBILITY_UNKNOWN, match: 0);
+		def(FeatureSet_VisibilityFeature_DefaultSymbolVisibility) => enum(Tag: root::int32) {
+			value(DEFAULT_SYMBOL_VISIBILITY_UNKNOWN, number: 0);
 
-			variant(EXPORT_ALL, match: 1);
+			value(EXPORT_ALL, number: 1);
 
-			variant(EXPORT_TOP_LEVEL, match: 2);
+			value(EXPORT_TOP_LEVEL, number: 2);
 
-			variant(LOCAL_ALL, match: 3);
+			value(LOCAL_ALL, number: 3);
 
-			variant(STRICT, match: 4);
-
-			default;
+			value(STRICT, number: 4);
 		};
 
 		def(FeatureSetDefaults) => message {
@@ -417,54 +381,50 @@ namespace(google) {
 			field(proto3_optional, number: 17) => root::bool;
 		};
 
-		def(FieldDescriptorProto_Label) => union(Tag: root::int32) {
-			variant(LABEL_OPTIONAL, match: 1);
+		def(FieldDescriptorProto_Label) => enum(Tag: root::int32) {
+			value(LABEL_OPTIONAL, number: 1);
 
-			variant(LABEL_REPEATED, match: 3);
+			value(LABEL_REPEATED, number: 3);
 
-			variant(LABEL_REQUIRED, match: 2);
-
-			default;
+			value(LABEL_REQUIRED, number: 2);
 		};
 
-		def(FieldDescriptorProto_Type) => union(Tag: root::int32) {
-			variant(TYPE_DOUBLE, match: 1);
+		def(FieldDescriptorProto_Type) => enum(Tag: root::int32) {
+			value(TYPE_DOUBLE, number: 1);
 
-			variant(TYPE_FLOAT, match: 2);
+			value(TYPE_FLOAT, number: 2);
 
-			variant(TYPE_INT64, match: 3);
+			value(TYPE_INT64, number: 3);
 
-			variant(TYPE_UINT64, match: 4);
+			value(TYPE_UINT64, number: 4);
 
-			variant(TYPE_INT32, match: 5);
+			value(TYPE_INT32, number: 5);
 
-			variant(TYPE_FIXED64, match: 6);
+			value(TYPE_FIXED64, number: 6);
 
-			variant(TYPE_FIXED32, match: 7);
+			value(TYPE_FIXED32, number: 7);
 
-			variant(TYPE_BOOL, match: 8);
+			value(TYPE_BOOL, number: 8);
 
-			variant(TYPE_STRING, match: 9);
+			value(TYPE_STRING, number: 9);
 
-			variant(TYPE_GROUP, match: 10);
+			value(TYPE_GROUP, number: 10);
 
-			variant(TYPE_MESSAGE, match: 11);
+			value(TYPE_MESSAGE, number: 11);
 
-			variant(TYPE_BYTES, match: 12);
+			value(TYPE_BYTES, number: 12);
 
-			variant(TYPE_UINT32, match: 13);
+			value(TYPE_UINT32, number: 13);
 
-			variant(TYPE_ENUM, match: 14);
+			value(TYPE_ENUM, number: 14);
 
-			variant(TYPE_SFIXED32, match: 15);
+			value(TYPE_SFIXED32, number: 15);
 
-			variant(TYPE_SFIXED64, match: 16);
+			value(TYPE_SFIXED64, number: 16);
 
-			variant(TYPE_SINT32, match: 17);
+			value(TYPE_SINT32, number: 17);
 
-			variant(TYPE_SINT64, match: 18);
-
-			default;
+			value(TYPE_SINT64, number: 18);
 		};
 
 		def(FieldOptions) => message {
@@ -498,14 +458,12 @@ namespace(google) {
 			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
 		};
 
-		def(FieldOptions_CType) => union(Tag: root::int32) {
-			variant(STRING, match: 0);
+		def(FieldOptions_CType) => enum(Tag: root::int32) {
+			value(STRING, number: 0);
 
-			variant(CORD, match: 1);
+			value(CORD, number: 1);
 
-			variant(STRING_PIECE, match: 2);
-
-			default;
+			value(STRING_PIECE, number: 2);
 		};
 
 		def(FieldOptions_EditionDefault) => message {
@@ -526,48 +484,42 @@ namespace(google) {
 			field(removal_error, number: 5) => root::string;
 		};
 
-		def(FieldOptions_JSType) => union(Tag: root::int32) {
-			variant(JS_NORMAL, match: 0);
+		def(FieldOptions_JSType) => enum(Tag: root::int32) {
+			value(JS_NORMAL, number: 0);
 
-			variant(JS_STRING, match: 1);
+			value(JS_STRING, number: 1);
 
-			variant(JS_NUMBER, match: 2);
-
-			default;
+			value(JS_NUMBER, number: 2);
 		};
 
-		def(FieldOptions_OptionRetention) => union(Tag: root::int32) {
-			variant(RETENTION_UNKNOWN, match: 0);
+		def(FieldOptions_OptionRetention) => enum(Tag: root::int32) {
+			value(RETENTION_UNKNOWN, number: 0);
 
-			variant(RETENTION_RUNTIME, match: 1);
+			value(RETENTION_RUNTIME, number: 1);
 
-			variant(RETENTION_SOURCE, match: 2);
-
-			default;
+			value(RETENTION_SOURCE, number: 2);
 		};
 
-		def(FieldOptions_OptionTargetType) => union(Tag: root::int32) {
-			variant(TARGET_TYPE_UNKNOWN, match: 0);
+		def(FieldOptions_OptionTargetType) => enum(Tag: root::int32) {
+			value(TARGET_TYPE_UNKNOWN, number: 0);
 
-			variant(TARGET_TYPE_FILE, match: 1);
+			value(TARGET_TYPE_FILE, number: 1);
 
-			variant(TARGET_TYPE_EXTENSION_RANGE, match: 2);
+			value(TARGET_TYPE_EXTENSION_RANGE, number: 2);
 
-			variant(TARGET_TYPE_MESSAGE, match: 3);
+			value(TARGET_TYPE_MESSAGE, number: 3);
 
-			variant(TARGET_TYPE_FIELD, match: 4);
+			value(TARGET_TYPE_FIELD, number: 4);
 
-			variant(TARGET_TYPE_ONEOF, match: 5);
+			value(TARGET_TYPE_ONEOF, number: 5);
 
-			variant(TARGET_TYPE_ENUM, match: 6);
+			value(TARGET_TYPE_ENUM, number: 6);
 
-			variant(TARGET_TYPE_ENUM_ENTRY, match: 7);
+			value(TARGET_TYPE_ENUM_ENTRY, number: 7);
 
-			variant(TARGET_TYPE_SERVICE, match: 8);
+			value(TARGET_TYPE_SERVICE, number: 8);
 
-			variant(TARGET_TYPE_METHOD, match: 9);
-
-			default;
+			value(TARGET_TYPE_METHOD, number: 9);
 		};
 
 		def(FileDescriptorProto) => message {
@@ -648,14 +600,12 @@ namespace(google) {
 			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
 		};
 
-		def(FileOptions_OptimizeMode) => union(Tag: root::int32) {
-			variant(SPEED, match: 1);
+		def(FileOptions_OptimizeMode) => enum(Tag: root::int32) {
+			value(SPEED, number: 1);
 
-			variant(CODE_SIZE, match: 2);
+			value(CODE_SIZE, number: 2);
 
-			variant(LITE_RUNTIME, match: 3);
-
-			default;
+			value(LITE_RUNTIME, number: 3);
 		};
 
 		def(GeneratedCodeInfo) => message {
@@ -675,14 +625,12 @@ namespace(google) {
 			=> root::google::protobuf::GeneratedCodeInfo_Annotation_Semantic;
 		};
 
-		def(GeneratedCodeInfo_Annotation_Semantic) => union(Tag: root::int32) {
-			variant(NONE, match: 0);
+		def(GeneratedCodeInfo_Annotation_Semantic) => enum(Tag: root::int32) {
+			value(NONE, number: 0);
 
-			variant(SET, match: 1);
+			value(SET, number: 1);
 
-			variant(ALIAS, match: 2);
-
-			default;
+			value(ALIAS, number: 2);
 		};
 
 		def(MessageOptions) => message {
@@ -726,14 +674,12 @@ namespace(google) {
 			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
 		};
 
-		def(MethodOptions_IdempotencyLevel) => union(Tag: root::int32) {
-			variant(IDEMPOTENCY_UNKNOWN, match: 0);
+		def(MethodOptions_IdempotencyLevel) => enum(Tag: root::int32) {
+			value(IDEMPOTENCY_UNKNOWN, number: 0);
 
-			variant(NO_SIDE_EFFECTS, match: 1);
+			value(NO_SIDE_EFFECTS, number: 1);
 
-			variant(IDEMPOTENT, match: 2);
-
-			default;
+			value(IDEMPOTENT, number: 2);
 		};
 
 		def(OneofDescriptorProto) => message {
@@ -780,14 +726,12 @@ namespace(google) {
 			repeated(leading_detached_comments, number: 6) => root::string;
 		};
 
-		def(SymbolVisibility) => union(Tag: root::int32) {
-			variant(VISIBILITY_UNSET, match: 0);
+		def(SymbolVisibility) => enum(Tag: root::int32) {
+			value(VISIBILITY_UNSET, number: 0);
 
-			variant(VISIBILITY_LOCAL, match: 1);
+			value(VISIBILITY_LOCAL, number: 1);
 
-			variant(VISIBILITY_EXPORT, match: 2);
-
-			default;
+			value(VISIBILITY_EXPORT, number: 2);
 		};
 
 		def(UninterpretedOption) => message {

@@ -1,0 +1,17 @@
+[package]
+name = "pds2-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+bitflags = "2.5.0"
+dprint-core = "0.66.1"
+genco = "0.20"
+peg = "0.8.2"
+
+[features]
+trace = ["peg/trace"]
+
+[lib]
+doctest = false

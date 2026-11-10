@@ -8,44 +8,32 @@ pub enum Ty {
     EXPLICIT,
     IMPLICIT,
     LEGACY_REQUIRED,
-    default(pds_int32::Ty),
+    Unknown(pds_int32::Ty),
 }
-pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    pds_int32::serialize(&virtual_tag(_0), output)?;
-    match _0 {
-        Ty::FIELD_PRESENCE_UNKNOWN => Ok(()),
-        Ty::EXPLICIT => Ok(()),
-        Ty::IMPLICIT => Ok(()),
-        Ty::LEGACY_REQUIRED => Ok(()),
-        Ty::default(_) => Ok(()),
-    }
-}
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    let __tagv = pds_int32::deserialize(
-        input,
-    )?;
-    let __tag = &__tagv;
-    if (__tag.clone() == 0_i32) { return Ok(Ty::FIELD_PRESENCE_UNKNOWN); }
-    if (__tag.clone() == 1_i32) { return Ok(Ty::EXPLICIT); }
-    if (__tag.clone() == 2_i32) { return Ok(Ty::IMPLICIT); }
-    if (__tag.clone() == 3_i32) { return Ok(Ty::LEGACY_REQUIRED); }
-    Ok(Ty::default(__tagv))
-}
-pub fn size_of(_0: &Ty) -> usize {
-    pds_int32::size_of(&virtual_tag(_0)) + match _0 {
-        Ty::FIELD_PRESENCE_UNKNOWN => 0,
-        Ty::EXPLICIT => 0,
-        Ty::IMPLICIT => 0,
-        Ty::LEGACY_REQUIRED => 0,
-        Ty::default(_) => 0,
-    }
-}
-pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
+pub fn number(_0: &Ty) -> pds_int32::Ty {
     match _0 {
         Ty::FIELD_PRESENCE_UNKNOWN => 0_i32,
         Ty::EXPLICIT => 1_i32,
         Ty::IMPLICIT => 2_i32,
         Ty::LEGACY_REQUIRED => 3_i32,
-        Ty::default(__t) => __t.clone(),
+        Ty::Unknown(n) => n.clone(),
     }
+}
+pub fn from_number(n: pds_int32::Ty) -> Ty {
+    match n {
+        0_i32 => Ty::FIELD_PRESENCE_UNKNOWN,
+        1_i32 => Ty::EXPLICIT,
+        2_i32 => Ty::IMPLICIT,
+        3_i32 => Ty::LEGACY_REQUIRED,
+        n => Ty::Unknown(n),
+    }
+}
+pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
+    pds_int32::serialize(&number(_0), output)
+}
+pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
+    Ok(from_number(pds_int32::deserialize(input, )?))
+}
+pub fn size_of(_0: &Ty) -> usize {
+    pds_int32::size_of(&number(_0))
 }

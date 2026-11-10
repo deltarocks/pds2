@@ -7,40 +7,30 @@ pub enum Ty {
     LABEL_OPTIONAL,
     LABEL_REPEATED,
     LABEL_REQUIRED,
-    default(pds_int32::Ty),
+    Unknown(pds_int32::Ty),
 }
-pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    pds_int32::serialize(&virtual_tag(_0), output)?;
-    match _0 {
-        Ty::LABEL_OPTIONAL => Ok(()),
-        Ty::LABEL_REPEATED => Ok(()),
-        Ty::LABEL_REQUIRED => Ok(()),
-        Ty::default(_) => Ok(()),
-    }
-}
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    let __tagv = pds_int32::deserialize(
-        input,
-    )?;
-    let __tag = &__tagv;
-    if (__tag.clone() == 1_i32) { return Ok(Ty::LABEL_OPTIONAL); }
-    if (__tag.clone() == 3_i32) { return Ok(Ty::LABEL_REPEATED); }
-    if (__tag.clone() == 2_i32) { return Ok(Ty::LABEL_REQUIRED); }
-    Ok(Ty::default(__tagv))
-}
-pub fn size_of(_0: &Ty) -> usize {
-    pds_int32::size_of(&virtual_tag(_0)) + match _0 {
-        Ty::LABEL_OPTIONAL => 0,
-        Ty::LABEL_REPEATED => 0,
-        Ty::LABEL_REQUIRED => 0,
-        Ty::default(_) => 0,
-    }
-}
-pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
+pub fn number(_0: &Ty) -> pds_int32::Ty {
     match _0 {
         Ty::LABEL_OPTIONAL => 1_i32,
         Ty::LABEL_REPEATED => 3_i32,
         Ty::LABEL_REQUIRED => 2_i32,
-        Ty::default(__t) => __t.clone(),
+        Ty::Unknown(n) => n.clone(),
     }
+}
+pub fn from_number(n: pds_int32::Ty) -> Ty {
+    match n {
+        1_i32 => Ty::LABEL_OPTIONAL,
+        3_i32 => Ty::LABEL_REPEATED,
+        2_i32 => Ty::LABEL_REQUIRED,
+        n => Ty::Unknown(n),
+    }
+}
+pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
+    pds_int32::serialize(&number(_0), output)
+}
+pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
+    Ok(from_number(pds_int32::deserialize(input, )?))
+}
+pub fn size_of(_0: &Ty) -> usize {
+    pds_int32::size_of(&number(_0))
 }

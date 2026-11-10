@@ -7,40 +7,30 @@ pub enum Ty {
     RETENTION_UNKNOWN,
     RETENTION_RUNTIME,
     RETENTION_SOURCE,
-    default(pds_int32::Ty),
+    Unknown(pds_int32::Ty),
 }
-pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    pds_int32::serialize(&virtual_tag(_0), output)?;
-    match _0 {
-        Ty::RETENTION_UNKNOWN => Ok(()),
-        Ty::RETENTION_RUNTIME => Ok(()),
-        Ty::RETENTION_SOURCE => Ok(()),
-        Ty::default(_) => Ok(()),
-    }
-}
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    let __tagv = pds_int32::deserialize(
-        input,
-    )?;
-    let __tag = &__tagv;
-    if (__tag.clone() == 0_i32) { return Ok(Ty::RETENTION_UNKNOWN); }
-    if (__tag.clone() == 1_i32) { return Ok(Ty::RETENTION_RUNTIME); }
-    if (__tag.clone() == 2_i32) { return Ok(Ty::RETENTION_SOURCE); }
-    Ok(Ty::default(__tagv))
-}
-pub fn size_of(_0: &Ty) -> usize {
-    pds_int32::size_of(&virtual_tag(_0)) + match _0 {
-        Ty::RETENTION_UNKNOWN => 0,
-        Ty::RETENTION_RUNTIME => 0,
-        Ty::RETENTION_SOURCE => 0,
-        Ty::default(_) => 0,
-    }
-}
-pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
+pub fn number(_0: &Ty) -> pds_int32::Ty {
     match _0 {
         Ty::RETENTION_UNKNOWN => 0_i32,
         Ty::RETENTION_RUNTIME => 1_i32,
         Ty::RETENTION_SOURCE => 2_i32,
-        Ty::default(__t) => __t.clone(),
+        Ty::Unknown(n) => n.clone(),
     }
+}
+pub fn from_number(n: pds_int32::Ty) -> Ty {
+    match n {
+        0_i32 => Ty::RETENTION_UNKNOWN,
+        1_i32 => Ty::RETENTION_RUNTIME,
+        2_i32 => Ty::RETENTION_SOURCE,
+        n => Ty::Unknown(n),
+    }
+}
+pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
+    pds_int32::serialize(&number(_0), output)
+}
+pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
+    Ok(from_number(pds_int32::deserialize(input, )?))
+}
+pub fn size_of(_0: &Ty) -> usize {
+    pds_int32::size_of(&number(_0))
 }

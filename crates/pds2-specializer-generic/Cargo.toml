@@ -1,0 +1,9 @@
+[package]
+name = "pds2-specializer-generic"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+genco = "0.20"
+pds2-core = { path = "../pds2-core" }

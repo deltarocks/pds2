@@ -9,48 +9,34 @@ pub enum Ty {
     EXPORT_TOP_LEVEL,
     LOCAL_ALL,
     STRICT,
-    default(pds_int32::Ty),
+    Unknown(pds_int32::Ty),
 }
-pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    pds_int32::serialize(&virtual_tag(_0), output)?;
-    match _0 {
-        Ty::DEFAULT_SYMBOL_VISIBILITY_UNKNOWN => Ok(()),
-        Ty::EXPORT_ALL => Ok(()),
-        Ty::EXPORT_TOP_LEVEL => Ok(()),
-        Ty::LOCAL_ALL => Ok(()),
-        Ty::STRICT => Ok(()),
-        Ty::default(_) => Ok(()),
-    }
-}
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    let __tagv = pds_int32::deserialize(
-        input,
-    )?;
-    let __tag = &__tagv;
-    if (__tag.clone() == 0_i32) { return Ok(Ty::DEFAULT_SYMBOL_VISIBILITY_UNKNOWN); }
-    if (__tag.clone() == 1_i32) { return Ok(Ty::EXPORT_ALL); }
-    if (__tag.clone() == 2_i32) { return Ok(Ty::EXPORT_TOP_LEVEL); }
-    if (__tag.clone() == 3_i32) { return Ok(Ty::LOCAL_ALL); }
-    if (__tag.clone() == 4_i32) { return Ok(Ty::STRICT); }
-    Ok(Ty::default(__tagv))
-}
-pub fn size_of(_0: &Ty) -> usize {
-    pds_int32::size_of(&virtual_tag(_0)) + match _0 {
-        Ty::DEFAULT_SYMBOL_VISIBILITY_UNKNOWN => 0,
-        Ty::EXPORT_ALL => 0,
-        Ty::EXPORT_TOP_LEVEL => 0,
-        Ty::LOCAL_ALL => 0,
-        Ty::STRICT => 0,
-        Ty::default(_) => 0,
-    }
-}
-pub fn virtual_tag(_0: &Ty) -> pds_int32::Ty {
+pub fn number(_0: &Ty) -> pds_int32::Ty {
     match _0 {
         Ty::DEFAULT_SYMBOL_VISIBILITY_UNKNOWN => 0_i32,
         Ty::EXPORT_ALL => 1_i32,
         Ty::EXPORT_TOP_LEVEL => 2_i32,
         Ty::LOCAL_ALL => 3_i32,
         Ty::STRICT => 4_i32,
-        Ty::default(__t) => __t.clone(),
+        Ty::Unknown(n) => n.clone(),
     }
+}
+pub fn from_number(n: pds_int32::Ty) -> Ty {
+    match n {
+        0_i32 => Ty::DEFAULT_SYMBOL_VISIBILITY_UNKNOWN,
+        1_i32 => Ty::EXPORT_ALL,
+        2_i32 => Ty::EXPORT_TOP_LEVEL,
+        3_i32 => Ty::LOCAL_ALL,
+        4_i32 => Ty::STRICT,
+        n => Ty::Unknown(n),
+    }
+}
+pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
+    pds_int32::serialize(&number(_0), output)
+}
+pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
+    Ok(from_number(pds_int32::deserialize(input, )?))
+}
+pub fn size_of(_0: &Ty) -> usize {
+    pds_int32::size_of(&number(_0))
 }
