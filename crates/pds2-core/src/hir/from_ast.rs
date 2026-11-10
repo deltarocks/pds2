@@ -248,6 +248,7 @@ pub fn parse_ast(ast: Block, reg: &Registry) -> Result<Namespace> {
 	super::desugar::infer_generics(&mut ns, reg).context("inferring generics")?;
 
 	super::desugar::apply_specializers(&mut ns, reg).context("applying specializers")?;
+	super::desugar::check_levels(&ns).context("checking reference levels")?;
 
 	// Make monomorphization only see scope-free references in bindings
 	super::desugar::extract_nested_types(id.clone(), &mut ns, reg)?;

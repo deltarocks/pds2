@@ -69,6 +69,27 @@ mod tests {
 	}
 
 	#[test]
+	fn def_arguments_reach_nested_fields_elements_arms_and_defs() {
+		use pds_Arguments as t;
+		let one = [1, 5, 6, 7, 0, 8, 9, 10, 11, 12, 13, 14];
+		let two = [
+			2, 0, 5, 0, 6, 0, 7, 0, 0, 8, 0, 9, 0, 10, 0, 11, 0, 12, 0, 13, 14,
+		];
+		let default_arm = [1, 5, 6, 7, 3, 9, 10, 11, 12, 13, 14];
+		let unknown_tag = [3, 5, 6, 7, 0, 8, 9, 10, 11, 12, 13, 14];
+		let v = roundtrip(t::deserialize, t::serialize, &one).unwrap();
+		assert_eq!(v.nested.forwarded.choice, pds_Choice::Ty::one(10));
+		assert_eq!(v.nested.deep.inner.choice, pds_Choice::Ty::one(9));
+		let v = roundtrip(t::deserialize, t::serialize, &two).unwrap();
+		assert_eq!(v.nested.forwarded.choice, pds_Choice::Ty::two(10));
+		assert_eq!(v.nested.wrapped.choice, pds_Choice::Ty::two(13));
+		let choices = [pds_Choice::Ty::two(11), pds_Choice::Ty::two(12)];
+		assert_eq!(v.nested.choices, choices);
+		roundtrip(t::deserialize, t::serialize, &default_arm).unwrap();
+		assert!(roundtrip(t::deserialize, t::serialize, &unknown_tag).is_none());
+	}
+
+	#[test]
 	fn union_tags_compare_by_construction_or_cast() {
 		use pds_Tagged as t;
 		for bytes in [&[1, 0][..], &[2, 9, 5, 1, 3, 4], &[7, 0], &[2, 9, 5, 1, 6]] {
@@ -136,6 +157,7 @@ mod tests {
 		encoded_like_runtime!(pds_sample_holders, pds_encoded_holders);
 		encoded_like_runtime!(pds_sample_loop, pds_encoded_loop);
 		encoded_like_runtime!(pds_sample_top_bits, pds_encoded_top_bits);
+		encoded_like_runtime!(pds_sample_arguments, pds_encoded_arguments);
 		let widened = pds_encoded_widened::value();
 		let v = roundtrip(pds_Widened::deserialize, pds_Widened::serialize, &widened).unwrap();
 		assert_eq!(v.items, vec![1, 2, 3, 0xffff]);
@@ -154,5 +176,6 @@ mod tests {
 		assert_eq!(pds_decoded_holders::value(), pds_sample_holders::value());
 		assert_eq!(pds_decoded_loop::value(), pds_sample_loop::value());
 		assert_eq!(pds_decoded_top_bits::value(), pds_sample_top_bits::value());
+		assert_eq!(pds_decoded_arguments::value(), pds_sample_arguments::value());
 	}
 }

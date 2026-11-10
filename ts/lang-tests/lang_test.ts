@@ -1,5 +1,6 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { Input, Output } from "./pds.ts";
+import * as pds_Arguments from "./gen/pds_Arguments.ts";
 import * as pds_BoundWords from "./gen/pds_BoundWords.ts";
 import * as pds_Choices from "./gen/pds_Choices.ts";
 import * as pds_Counted from "./gen/pds_Counted.ts";
@@ -41,6 +42,9 @@ import * as decoded_blob from "./gen/pds_decoded_blob.ts";
 import * as decoded_holders from "./gen/pds_decoded_holders.ts";
 import * as decoded_loop from "./gen/pds_decoded_loop.ts";
 import * as decoded_top_bits from "./gen/pds_decoded_top_bits.ts";
+import * as sample_arguments from "./gen/pds_sample_arguments.ts";
+import * as encoded_arguments from "./gen/pds_encoded_arguments.ts";
+import * as decoded_arguments from "./gen/pds_decoded_arguments.ts";
 
 type Codec<T> = {
 	deserialize(input: Input): T;
@@ -76,6 +80,18 @@ Deno.test("typed terminator reads whole values", () => {
 Deno.test("typed def arguments take constants and fields", () => {
 	roundtrip(pds_Choices, [1, 5, 0, 7]);
 	roundtrip(pds_Choices, [2, 0, 9, 0, 7]);
+});
+
+Deno.test("def arguments reach nested fields, elements, arms and defs", () => {
+	const one = roundtrip(pds_Arguments, [1, 5, 6, 7, 0, 8, 9, 10, 11, 12, 13, 14]);
+	assertEquals(one.nested.forwarded.choice, { kind: "one", value: 10 });
+	assertEquals(one.nested.deep.inner.choice, { kind: "one", value: 9 });
+	const bytes = [2, 0, 5, 0, 6, 0, 7, 0, 0, 8, 0, 9, 0, 10, 0, 11, 0, 12, 0, 13, 14];
+	const two = roundtrip(pds_Arguments, bytes);
+	assertEquals(two.nested.wrapped.choice, { kind: "two", value: 13 });
+	assertEquals(two.nested.choices, [{ kind: "two", value: 11 }, { kind: "two", value: 12 }]);
+	roundtrip(pds_Arguments, [1, 5, 6, 7, 3, 9, 10, 11, 12, 13, 14]);
+	assertThrows(() => roundtrip(pds_Arguments, [3, 5, 6, 7, 0, 8, 9, 10, 11, 12, 13, 14]));
 });
 
 Deno.test("union tags compare by construction or cast", () => {
@@ -115,6 +131,7 @@ Deno.test("compile-time serialization matches generated serializers", () => {
 		[sample_holders, encoded_holders],
 		[sample_loop, encoded_loop],
 		[sample_top_bits, encoded_top_bits],
+		[sample_arguments, encoded_arguments],
 	];
 	for (const [codec, encoded] of cases) {
 		const out = new Output();
@@ -138,6 +155,7 @@ Deno.test("compile-time deserialization matches values", () => {
 		[decoded_holders, sample_holders],
 		[decoded_loop, sample_loop],
 		[decoded_top_bits, sample_top_bits],
+		[decoded_arguments, sample_arguments],
 	];
 	for (const [decoded, sample] of cases) {
 		assertEquals(decoded.value(), sample.value());

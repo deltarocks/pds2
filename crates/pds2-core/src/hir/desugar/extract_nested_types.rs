@@ -115,10 +115,6 @@ impl Visitor for ReferenceCollector {
 		if r.up == 0 {
 			return Ok(());
 		}
-		if matches!(r.path.0.first(), Some(FieldRefSegment::Arg(_))) {
-			// already rewired to a param by a previous (inner) extraction
-			return Ok(());
-		}
 		let mut orig = r.clone();
 		orig.up = orig.up.saturating_sub(1);
 		let mut name: Ident = r.name().as_str().into();

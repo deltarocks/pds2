@@ -212,6 +212,68 @@ def(Choices) {
 	field(fixed) => Choice(k: 2);
 };
 
+def(Forward) {
+	argument(k) => u8;
+} => container {
+	field(choice) => Choice(k: ../$k);
+};
+
+def(Wrapped) {
+	type(Value);
+
+	argument(k) => u8;
+} => container {
+	field(choice) => Choice(k: ../$k);
+
+	field(value) => Value;
+};
+
+def(Nested) {
+	argument(k) => u8;
+} => container {
+	field(field) => union(tag: ../$k) {
+		variant(one, match: 1) => u8;
+
+		variant(two, match: 2) => u16;
+	};
+
+	field(elements) => array(count: 2) => union(tag: ../../$k) {
+		variant(one, match: 1) => u8;
+
+		variant(two, match: 2) => u16;
+	};
+
+	field(arm) => union(Tag: u8) {
+		variant(tagged, match: 0) => union(tag: ../../$k) {
+			variant(one, match: 1) => u8;
+
+			variant(two, match: 2) => u16;
+		};
+
+		default;
+	};
+
+	field(deep) => container {
+		field(inner) => container {
+			field(choice) => Choice(k: ../../../$k);
+		};
+	};
+
+	field(forwarded) => Forward(k: ../$k);
+
+	field(choices) => array(count: 2) => Choice(k: ../../$k);
+
+	field(wrapped) => Wrapped(Value: u8, k: ../$k);
+};
+
+def(Arguments) {
+	export;
+} => container {
+	field(k) => u8;
+
+	field(nested) => Nested(k: ../k);
+};
+
 def(Kind) => union(Tag: u8) {
 	variant(a, match: 1);
 
@@ -392,4 +454,40 @@ def(decoded_loop) => const(value: Loop(deserialized(serialized(Loop([1, 2, 254])
 
 def(decoded_top_bits) => const(
 	value: TopBits(deserialized(serialized(TopBits([(slot: 1, v: 10), (slot: 5, v: 300)])))),
+);
+
+def(sample_arguments) => const(
+	value: Arguments(
+		k: 2,
+		nested: (
+			field: (two: 5),
+			elements: [(two: 6), (two: 7)],
+			arm: (tagged: (two: 8)),
+			deep: (inner: (choice: (two: 9))),
+			forwarded: (choice: (two: 10)),
+			choices: [(two: 11), (two: 12)],
+			wrapped: (choice: (two: 13), value: 14),
+		),
+	),
+);
+
+def(encoded_arguments) => const(
+	value: serialized(
+		Arguments(
+			k: 2,
+			nested: (
+				field: (two: 5),
+				elements: [(two: 6), (two: 7)],
+				arm: (tagged: (two: 8)),
+				deep: (inner: (choice: (two: 9))),
+				forwarded: (choice: (two: 10)),
+				choices: [(two: 11), (two: 12)],
+				wrapped: (choice: (two: 13), value: 14),
+			),
+		),
+	),
+) => bytes;
+
+def(decoded_arguments) => const(
+	value: Arguments(deserialized(b"\x02\x00\x05\x00\x06\x00\x07\x00\x00\x08\x00\x09\x00\x0a\x00\x0b\x00\x0c\x00\x0d\x0e")),
 );
