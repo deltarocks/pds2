@@ -127,62 +127,6 @@ impl Traverse for Namespace {
 	}
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ContainerFieldType {
-	// Normal field = typed name
-	Normal(TypeKind),
-	// Virtual field = can't read, during write field reference is written instead.
-	Virtual(FieldRef, TypeKind),
-	//
-	Delegate(Ident),
-}
-impl Traverse for ContainerFieldType {
-	fn traverse(
-		&mut self,
-		visitor: &mut impl Visitor,
-		skip: TraverseSkip,
-		reg: &Registry,
-	) -> Result<()> {
-		match self {
-			ContainerFieldType::Normal(t) => t.traverse(visitor, skip, reg)?,
-			ContainerFieldType::Virtual(f, t) => {
-				visitor.visit_field_ref(f)?;
-				t.traverse(visitor, skip, reg)?
-			}
-			ContainerFieldType::Delegate(_) => {}
-		}
-		Ok(())
-	}
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Container {
-	/// Virtual containers
-	pub virt: bool,
-	pub fields: Vec<(Ident, ContainerFieldType)>,
-	pub delegate_all: Option<Ident>,
-}
-impl Traverse for Container {
-	fn traverse(
-		&mut self,
-		visitor: &mut impl Visitor,
-		skip: TraverseSkip,
-		reg: &Registry,
-	) -> Result<()> {
-		for (n, f) in self.fields.iter_mut() {
-			let res = f.traverse(visitor, skip, reg);
-			match f {
-				ContainerFieldType::Normal(_) => res.with_context(|| format!("field({n:?})"))?,
-				ContainerFieldType::Virtual(_, _) => {
-					res.with_context(|| format!("virtual_field({n:?})"))?
-				}
-				ContainerFieldType::Delegate(_) => todo!(),
-			}
-		}
-		Ok(())
-	}
-}
-
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
 pub enum Value {
 	Number(i128),
@@ -197,47 +141,6 @@ impl Traverse for Value {
 		_skip: TraverseSkip,
 		_reg: &Registry,
 	) -> Result<()> {
-		Ok(())
-	}
-}
-
-/// Where a union's discriminant comes from.
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
-pub enum UnionTag {
-	/// an already-read field of an enclosing container (`union(tag: ../kind)`)
-	External(FieldRef),
-	/// read inline by the union itself, immediately before the value
-	/// (`union(tagType: varint)`); the union is self-contained
-	Inline(Box<TypeKind>),
-}
-
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
-pub struct Union {
-	pub tag: UnionTag,
-	// TODO: Conditional value? To make Union a replacement for match statement of some sort.
-	pub values: Vec<(Value, Ident, TypeKind)>,
-	pub default: Option<Box<TypeKind>>,
-}
-impl Traverse for Union {
-	fn traverse(
-		&mut self,
-		visitor: &mut impl Visitor,
-		skip: TraverseSkip,
-		reg: &Registry,
-	) -> Result<()> {
-		match &mut self.tag {
-			UnionTag::External(f) => visitor.visit_field_ref(f).context("union tag")?,
-			UnionTag::Inline(t) => t.traverse(visitor, skip, reg).context("union tag type")?,
-		}
-		for (v, a, ele) in self.values.iter_mut() {
-			v.traverse(visitor, skip, reg).context("union key")?;
-			ele.traverse(visitor, skip, reg)
-				.with_context(|| format!("union value {a:?}"))?;
-		}
-		if let Some(ele) = &mut self.default {
-			ele.traverse(visitor, skip, reg)
-				.with_context(|| format!("union default value"))?;
-		}
 		Ok(())
 	}
 }
@@ -266,6 +169,8 @@ pub struct NativeType {
 	/// was inlined (`registryEntryHolder(baseName: "patternId") { ... }`); inlining
 	/// leaves no reference to hold them, and only constants are scope-free
 	pub const_args: Vec<(Ident, Value)>,
+	pub ref_args: Vec<(Ident, FieldRef)>,
+	pub arg_virtuals: Vec<Ident>,
 	/// `is_void;` in the def_native block: the type carries no data. All inline void
 	/// kinds and other is_void natives are deduplicated to the first such def.
 	pub is_void: bool,
@@ -300,6 +205,11 @@ impl Traverse for NativeType {
 		for (n, t) in self.specialization.iter_mut() {
 			t.traverse(visitor, skip, reg)
 				.with_context(|| format!("type({n:?})"))?;
+		}
+		for (n, r) in self.ref_args.iter_mut() {
+			visitor
+				.visit_field_ref(r)
+				.with_context(|| format!("argument {n:?}"))?;
 		}
 		for f in self.body.iter_mut() {
 			for (n, a) in f.args.iter_mut() {
@@ -532,8 +442,6 @@ impl Traverse for Reference {
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
 pub enum TypeKind {
 	Void,
-	Container(Container),
-	Union(Union),
 	Reference(Reference),
 	Native(NativeType),
 }
@@ -557,10 +465,8 @@ impl Traverse for TypeKind {
 			let skip = skip - TraverseSkip::TOPLEVEL_TYPEKIND;
 			match self {
 				TypeKind::Void => {}
-				TypeKind::Container(c) => c.traverse(visitor, skip, reg)?,
 				TypeKind::Reference(r) => r.traverse(visitor, skip, reg)?,
 				TypeKind::Native(n) => n.traverse(visitor, skip, reg)?,
-				TypeKind::Union(c) => c.traverse(visitor, skip, reg)?,
 			}
 		}
 

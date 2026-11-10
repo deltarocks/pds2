@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use crate::{
-	ast::{Block, FieldRef, Ident, Item, ParseValue, Statement, Value},
+	ast::{Block, Ident, Item, ParseValue, Statement, Value},
 	hir::{
-		BodyDecl, BodyField, BodyItemDecl, Container, ContainerFieldType, FieldRefOrConst, NamespaceItem,
-		NativeType, Reference, ReferenceKind, Union, UnionTag, Value as HirValue,
+		BodyDecl, BodyField, BodyItemDecl, FieldRefOrConst, NamespaceItem,
+		NativeType, Reference, ReferenceKind, Value as HirValue,
 	},
 	specializer::Registry,
 };
@@ -226,151 +226,12 @@ impl Type {
 	}
 }
 
-impl Union {
-	fn from_ast(item: Item) -> Result<TypeKind> {
-		let tag = item
-			.args
-			.either::<Item, FieldRef>("tagType", "tag")
-			.context("union tag")?;
-		item.args.verify_unused()?;
-
-		let mut fields = Vec::new();
-		let mut default = None::<TypeKind>;
-
-		for stmt in item.block.statements {
-			let (_attrs, item, mut items) = stmt.pop_item()?;
-			match item.name.expect_simple_name()?.as_str() {
-				"variant" => {
-					let name: Ident = item.args.arg(0, "field name")?;
-					let value: Value = item.args.named("match")?;
-					item.args.verify_unused()?;
-					let value = match i128::parse(value.clone()) {
-						Ok(n) => HirValue::Number(n),
-						Err(_) => match bool::parse(value.clone()) {
-							Ok(b) => HirValue::Bool(b),
-							Err(_) => match value {
-								Value::String { string, is_block: _ } => {
-									HirValue::UnionDescriminator(Ident::new(&string))
-								},
-								_ => bail!("union match value should be a number, boolean, or discriminator string")
-							},
-						},
-					};
-					if items.is_empty() {
-						fields.push((value, name, TypeKind::Void));
-					} else {
-						let type_item = items
-							.remove(0)
-							.into_item()
-							.ok_or_else(|| anyhow!("field item should be item"))?;
-						fields.push((
-							value,
-							name,
-							TypeKind::from_ast(type_item, items).context("union item type")?,
-						));
-					}
-				}
-				"default" => {
-					let v = if items.is_empty() {
-						TypeKind::Void
-					} else {
-						let type_item = items
-							.remove(0)
-							.into_item()
-							.ok_or_else(|| anyhow!("field item should be item"))?;
-
-						TypeKind::from_ast(type_item, items).context("union item type")?
-					};
-					if default.is_some() {
-						bail!("union default value was set twice");
-					}
-					default = Some(v);
-				}
-				v => bail!("unknown union field type: {}", v),
-			}
-		}
-
-		let tag = match tag {
-			Ok(t) => UnionTag::Inline(Box::new(
-				TypeKind::from_ast(t, vec![]).context("union tag type")?,
-			)),
-			Err(f) => UnionTag::External(f),
-		};
-		Ok(TypeKind::Union(Self {
-			tag,
-			values: fields,
-			default: default.map(Box::new),
-		}))
-	}
-}
-
-impl Container {
-	fn from_ast(item: Item) -> Result<Self> {
-		let virt = item.args.named("virtual").unwrap_or(false);
-		item.args.verify_unused()?;
-
-		let mut fields = Vec::new();
-
-		for stmt in item.block.statements {
-			let (_attrs, item, mut items) = stmt.pop_item()?;
-			let (name, field) = match item.name.expect_simple_name()?.as_str() {
-				"field" => {
-					let name: Ident = item.args.arg(0, "field name")?;
-					item.args.verify_unused()?;
-
-					if items.is_empty() {
-						bail!("no field type")
-					}
-					let type_item = items
-						.remove(0)
-						.into_item()
-						.ok_or_else(|| anyhow!("field item should be item"))?;
-					(
-						name.clone(),
-						ContainerFieldType::Normal(
-							TypeKind::from_ast(type_item, items)
-								.with_context(|| format!("container field <{name:?}>"))?,
-						),
-					)
-				}
-				"virtual_field" => {
-					let name: Ident = item.args.arg(0, "virtual field name")?;
-					let value = item.args.named("value")?;
-					item.args.verify_unused()?;
-
-					let type_item = items
-						.remove(0)
-						.into_item()
-						.ok_or_else(|| anyhow!("field item should be item"))?;
-					(
-						name,
-						ContainerFieldType::Virtual(value, TypeKind::from_ast(type_item, items)?),
-					)
-				}
-				v => bail!("unknown container field type: {}", v),
-			};
-			fields.push((name, field))
-		}
-
-		Ok(Container {
-			virt,
-			fields,
-			delegate_all: None,
-		})
-	}
-}
-
 impl TypeKind {
 	fn from_ast(value: Item, mut items: Vec<Value>) -> Result<Self> {
 		if let Some(simple) = value.name.simple_name() {
 			let kind = match simple.as_str() {
-				"container" => {
-					ensure!(items.is_empty(), "container has no items");
-					TypeKind::Container(Container::from_ast(value).context("parsing container")?)
-				}
-				"union" => {
-					ensure!(items.is_empty(), "union has no items");
-					Union::from_ast(value).context("parsing union")?
+				"void" if value.args.is_empty() && value.block.is_empty() && items.is_empty() => {
+					TypeKind::Void
 				}
 				_ => {
 					// ensure!(items.is_empty(), "unexpected values");
@@ -625,6 +486,8 @@ impl Namespace {
 									specialization,
 									body: vec![],
 									const_args: vec![],
+									ref_args: vec![],
+									arg_virtuals: vec![],
 									is_void: self.is_void,
 									scalar,
 								}),

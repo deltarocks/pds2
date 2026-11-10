@@ -8,6 +8,7 @@ use super::{
 	RegistryEntryHolderSet, Scalar, TopBitSetTerminatedArray, VALUE,
 };
 use crate::ast::Ident;
+use crate::generator::common::EqKind;
 use crate::hir::{self, TypeId};
 use crate::mir;
 
@@ -238,9 +239,14 @@ impl NativeCodegen<JavaScript> for OptionP {
 				}
 				return n;
 			}
-			$(for t in ctx.eq_targets join($['\r']) =>
+			$(for (t, _) in ctx.eq_targets.iter().filter(|(_, k)| *k != EqKind::Bool) join($['\r']) =>
 				export function $(format!("is_equal_{}", t.raw()))(a: Ty, b: $(ctx.names.ty(*t))): boolean {
 					return a !== null && $(&inner_a) === b;
+				}
+			)
+			$(if ctx.eq_targets.iter().any(|(_, k)| *k == EqKind::Bool) =>
+				export function is_equal_bool(a: Ty, b: boolean): boolean {
+					return a === b;
 				}
 			)
 		})

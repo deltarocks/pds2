@@ -16,25 +16,6 @@ pub fn visit_type(
 	v: &mut dyn SlotVisitor,
 ) -> Result<()> {
 	match &types[id].kind {
-		TypeKind::Container { fields, .. } => {
-			for f in fields.iter().filter(|f| f.load_from.is_none()) {
-				v.slot(&f.name, f.ty.target, Embed::Boxable(BoxCost::High));
-			}
-		}
-		TypeKind::Union {
-			tag_type,
-			matches,
-			default,
-			..
-		} => {
-			for (_, name, ty) in matches {
-				v.slot(name, ty.target, Embed::Boxable(BoxCost::Low));
-			}
-			if let Some((name, ty)) = default {
-				v.slot(&Ident::new("@tag"), *tag_type, Embed::Fixed);
-				v.slot(name, ty.target, Embed::Boxable(BoxCost::Low));
-			}
-		}
 		TypeKind::Alias(t) => v.slot(&Ident::new("@alias"), t.target, Embed::Fixed),
 		TypeKind::Native(native) => {
 			if let Some((specializer, _)) = &native.specializer {

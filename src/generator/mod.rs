@@ -6,9 +6,9 @@ use crate::mir;
 use crate::specializer::Registry;
 
 mod boxing;
-mod common;
-mod rust;
-mod typescript;
+pub(crate) mod common;
+pub(crate) mod rust;
+pub(crate) mod typescript;
 
 pub type GeneratorOutput = HashMap<PathBuf, String>;
 pub type Generator =

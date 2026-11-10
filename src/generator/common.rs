@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use crate::ast::{FieldRefSegment, Ident};
 use crate::hir::TypeId;
 use crate::mir::{self, Field, FieldOrConst, TypeKind, TypeMap, Value};
-use crate::specializer::Scalar;
+use crate::specializer::{container, union, Scalar};
 
 /// Sanitize an arbitrary string (`minecraft:foo`) into an identifier, mirroring the
 /// upgrade-side variant naming.
@@ -50,6 +50,17 @@ pub enum EqKind {
 	Bool,
 }
 
+pub fn local(name: &Ident) -> String {
+	format!("f_{}", name.as_str())
+}
+
+pub fn eq_fn_name(other: TypeId, kind: EqKind) -> String {
+	match kind {
+		EqKind::Bool => "is_equal_bool".to_owned(),
+		_ => format!("is_equal_{}", other.raw()),
+	}
+}
+
 /// The inner value type of an `option` native, if `id` is one.
 pub fn option_inner(input: &TypeMap, id: TypeId) -> Option<TypeId> {
 	if let TypeKind::Native(nt) = &input[id].kind {
@@ -64,36 +75,16 @@ pub fn option_inner(input: &TypeMap, id: TypeId) -> Option<TypeId> {
 	None
 }
 
-/// Follow `delegate_all` wrappers down to the type that actually distinguishes a
-/// union's arms (mapper unions sit inside a virtual wrapper struct).
-pub fn resolve_tag_inner(input: &TypeMap, tag_type: TypeId) -> TypeId {
-	let mut t = tag_type;
-	while let TypeKind::Container {
-		fields,
-		delegate_all: Some(d),
-		..
-	} = &input[t].kind
-	{
-		t = fields
-			.iter()
-			.find(|f| &f.name == d)
-			.expect("delegate target exists")
-			.ty
-			.target;
-	}
-	t
-}
-
 /// The `(b type id, comparison kind)` an arm `value` needs from `tag_inner`'s
 /// module, or `None` when the value can never match this tag type (the arm is
 /// dead) -- the union codegen falls back to a discriminant check or a literal
 /// `false` in that case.
 pub fn eq_target(input: &TypeMap, tag_inner: TypeId, value: &Value) -> Option<(TypeId, EqKind)> {
-	let kind = &input[tag_inner].kind;
+	let union = union::view_of(input, tag_inner);
 	match value {
 		Value::Signed(_) | Value::Unsigned(_) => {
-			if let TypeKind::Union { tag_type, .. } = kind {
-				Some((*tag_type, EqKind::VirtualTag))
+			if let Some(u) = &union {
+				Some((u.tag_type, EqKind::VirtualTag))
 			} else if let Some(inner) = option_inner(input, tag_inner) {
 				Some((inner, EqKind::OptionInner))
 			} else {
@@ -103,26 +94,22 @@ pub fn eq_target(input: &TypeMap, tag_inner: TypeId, value: &Value) -> Option<(T
 		Value::Bool(_) => Some((tag_inner, EqKind::Bool)),
 		Value::String(_) => None,
 		Value::UnionDescriminator(id) => {
-			if let TypeKind::Union { matches, .. } = kind {
-				// only a value-less arm can be compared by constructing the variant
-				let void = matches.iter().any(|(_, n, vt)| {
-					sanitize(n.as_str()) == sanitize(id.as_str()) && input.is_void(vt.target)
-				});
-				void.then_some((tag_inner, EqKind::SelfEq))
-			} else {
-				None
-			}
+			let u = union?;
+			// only a value-less arm can be compared by constructing the variant
+			let void = u.arms.iter().any(|(_, n, vt)| {
+				sanitize(n.as_str()) == sanitize(id.as_str()) && input.is_void(vt.target)
+			});
+			void.then_some((tag_inner, EqKind::SelfEq))
 		}
 	}
 }
 
 pub fn unions_as_tag(input: &TypeMap) -> HashSet<TypeId> {
 	let mut out = HashSet::new();
-	for def in input.0.values() {
-		if let TypeKind::Union { tag_type, .. } = &def.kind {
-			let inner = resolve_tag_inner(input, *tag_type);
-			if matches!(input[inner].kind, TypeKind::Union { .. }) {
-				out.insert(inner);
+	for id in input.0.keys() {
+		if let Some(u) = union::view_of(input, *id) {
+			if union::view_of(input, u.tag_type).is_some() {
+				out.insert(u.tag_type);
 			}
 		}
 	}
@@ -131,15 +118,11 @@ pub fn unions_as_tag(input: &TypeMap) -> HashSet<TypeId> {
 
 pub fn eq_impls(input: &TypeMap) -> BTreeMap<TypeId, BTreeSet<(TypeId, EqKind)>> {
 	let mut out: BTreeMap<TypeId, BTreeSet<(TypeId, EqKind)>> = BTreeMap::new();
-	for def in input.0.values() {
-		if let TypeKind::Union {
-			tag_type, matches, ..
-		} = &def.kind
-		{
-			let inner = resolve_tag_inner(input, *tag_type);
-			for (value, _, _) in matches {
-				if let Some(t) = eq_target(input, inner, value) {
-					out.entry(inner).or_default().insert(t);
+	for id in input.0.keys() {
+		if let Some(u) = union::view_of(input, *id) {
+			for (value, _, _) in &u.arms {
+				if let Some(t) = eq_target(input, u.tag_type, value) {
+					out.entry(u.tag_type).or_default().insert(t);
 				}
 			}
 		}
@@ -170,9 +153,9 @@ fn value_eq(a: &Value, b: &Value) -> bool {
 }
 
 pub fn tag_repr(input: &TypeMap, tag_ty: TypeId, value: &Value) -> Option<TagRepr> {
-	match &input[tag_ty].kind {
-		TypeKind::Alias(t) => tag_repr(input, t.target, value),
-		TypeKind::Union { matches, .. } => matches
+	if let Some(u) = union::view_of(input, tag_ty) {
+		return u
+			.arms
 			.iter()
 			.find(|(v, n, ty)| {
 				input.is_void(ty.target)
@@ -183,8 +166,13 @@ pub fn tag_repr(input: &TypeMap, tag_ty: TypeId, value: &Value) -> Option<TagRep
 						other => value_eq(v, other),
 					}
 			})
-			.map(|(_, n, _)| TagRepr::Variant(tag_ty, n.clone())),
-		TypeKind::Container { .. } => None,
+			.map(|(_, n, _)| TagRepr::Variant(tag_ty, (*n).clone()));
+	}
+	if container::is_container(input, tag_ty) {
+		return None;
+	}
+	match &input[tag_ty].kind {
+		TypeKind::Alias(t) => tag_repr(input, t.target, value),
 		_ if option_inner(input, tag_ty).is_some() => match value {
 			Value::UnionDescriminator(_) => None,
 			_ => Some(TagRepr::OptionSome(tag_ty)),
@@ -196,41 +184,32 @@ pub fn tag_repr(input: &TypeMap, tag_ty: TypeId, value: &Value) -> Option<TagRep
 	}
 }
 
-pub fn tag_referenced(input: &TypeMap) -> HashSet<TypeId> {
+pub fn virtuals_used(input: &TypeMap) -> HashSet<(TypeId, Ident)> {
 	let mut out = HashSet::new();
 	let mut scan = |f: &Field| {
 		for item in &f.0 {
-			if matches!(&item.segment, FieldRefSegment::Virtual(n) if n.as_str() == "tag") {
-				out.insert(item.from.get());
+			if let FieldRefSegment::Virtual(n) = &item.segment {
+				out.insert((item.from.get(), n.clone()));
 			}
 		}
 	};
 	for def in input.0.values() {
 		let mut uses: Vec<&mir::Type> = Vec::new();
 		match &def.kind {
-			TypeKind::Container { fields, .. } => {
-				for f in fields {
-					if let Some(from) = &f.load_from {
-						scan(from);
-					}
-					uses.push(&f.ty);
-				}
-			}
-			TypeKind::Union {
-				tag,
-				matches,
-				default,
-				..
-			} => {
-				if let mir::UnionTag::External(f) = tag {
-					scan(f);
-				}
-				uses.extend(matches.iter().map(|(_, _, t)| t));
-				uses.extend(default.iter().map(|(_, t)| t));
-			}
 			TypeKind::Native(n) => {
 				uses.extend(n.specialization.iter().map(|(_, t)| t));
 				uses.extend(n.fields.iter().map(|(_, t)| t));
+				uses.extend(n.virtual_fields.iter().map(|(_, t)| t));
+				for (_, f) in &n.ref_args {
+					scan(f);
+				}
+				for item in &n.body {
+					for (_, a) in &item.args {
+						if let FieldOrConst::Field(f) = a {
+							scan(f);
+						}
+					}
+				}
 			}
 			TypeKind::Alias(t) => uses.push(t),
 			TypeKind::Void => {}

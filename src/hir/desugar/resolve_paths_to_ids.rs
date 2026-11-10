@@ -117,30 +117,6 @@ impl TypeKind {
 					}
 				}
 			}
-			TypeKind::Container(c) => {
-				for (_, v) in c.fields.iter_mut() {
-					match v {
-						crate::hir::ContainerFieldType::Normal(t) => {
-							t.resolve_paths_to_ids(paths)?
-						}
-						crate::hir::ContainerFieldType::Virtual(_, p) => {
-							p.resolve_paths_to_ids(paths)?
-						}
-						crate::hir::ContainerFieldType::Delegate(_) => {}
-					}
-				}
-			}
-			TypeKind::Union(u) => {
-				if let crate::hir::UnionTag::Inline(t) = &mut u.tag {
-					t.resolve_paths_to_ids(paths)?
-				}
-				for (_, _, ele) in u.values.iter_mut() {
-					ele.resolve_paths_to_ids(paths)?
-				}
-				if let Some(d) = u.default.as_mut() {
-					d.resolve_paths_to_ids(paths)?
-				}
-			}
 			TypeKind::Native(NativeType {
 				specializer: _,
 				variant: _,
@@ -150,6 +126,8 @@ impl TypeKind {
 				specialization,
 				body: _,
 				const_args: _,
+				ref_args: _,
+				arg_virtuals: _,
 				is_void: _,
 				scalar: _,
 			}) => {

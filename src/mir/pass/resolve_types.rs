@@ -15,10 +15,6 @@ struct TypeUsageCollector {
 	has_valid: bool,
 }
 impl TypeUsageCollector {
-	fn used_internal(&mut self, id: TypeId, name: &'static str, ty: TypeId) {
-		let name = format!("internal<{name}>");
-		self.used(id, &Ident::new(&name), ty);
-	}
 	fn used(&mut self, id: TypeId, name: &Ident, ty: TypeId) {
 		if !ty.is_valid() {
 			self.has_invalid = true;
@@ -34,10 +30,6 @@ impl TypeUsageCollector {
 	fn reset_validity(&mut self) {
 		self.has_invalid = false;
 		self.has_valid = false;
-	}
-	fn find_internal_type(&self, id: TypeId, name: &'static str) -> Result<TypeId> {
-		let name = format!("internal<{name}>");
-		self.find_type(id, &Ident::new(&name))
 	}
 	fn find_type(&self, id: TypeId, name: &Ident) -> Result<TypeId> {
 		let possible = self.data.get(&id).and_then(|args| args.get(name));
@@ -63,42 +55,28 @@ impl Definition {
 		out: &mut TypeUsageCollector,
 	) -> Result<()> {
 		match &self.kind {
-			mir::TypeKind::Container { fields, .. } => {
-				for field in fields.iter() {
-					Self::resolve_type_use(self_id, &field.ty, types, out)?;
-					if let Some(from) = &field.load_from {
-						Self::resolve_ref(self_id, types, from)
-							.with_context(|| format!("failed to resolve {:?}", from))?;
+			mir::TypeKind::Native(native) => {
+				for (_, sub) in native
+					.specialization
+					.iter()
+					.chain(native.virtual_fields.iter())
+					.chain(native.fields.iter())
+				{
+					Self::resolve_type_use(self_id, sub, types, out)?;
+				}
+				for (n, r) in &native.ref_args {
+					Self::resolve_ref(self_id, types, r)
+						.with_context(|| format!("argument {n:?}"))?;
+				}
+				for item in &native.body {
+					for (n, a) in &item.args {
+						if let Some(f) = a.as_field() {
+							Self::resolve_ref(self_id, types, f).with_context(|| {
+								format!("body item {:?} argument {n:?}", item.kind)
+							})?;
+						}
 					}
 				}
-			}
-			mir::TypeKind::Union {
-				tag,
-				tag_type: _,
-				matches,
-				default,
-			} => {
-				match tag {
-					mir::UnionTag::External(tag) => {
-						out.used_internal(
-							self_id,
-							"tag_type",
-							Self::resolve_ref(self_id, types, tag)?,
-						);
-					}
-					mir::UnionTag::Inline(ty) => {
-						Self::resolve_type_use(self_id, ty, types, out)?;
-					}
-				}
-				for (_, _, ty) in matches {
-					Self::resolve_type_use(self_id, ty, types, out)?;
-				}
-				if let Some(default) = default {
-					Self::resolve_type_use(self_id, &default.1, types, out)?;
-				}
-			}
-			mir::TypeKind::Native(_native) => {
-				// Handled at use level, see `resolve_type_use`
 			}
 			mir::TypeKind::Alias(ty) => {
 				Self::resolve_type_use(self_id, ty, types, out)?;
@@ -110,56 +88,17 @@ impl Definition {
 
 	/// Resolve the argument references of a single type-use (`target` plus the
 	/// `args` bound to its params) in `scope`.
-	///
-	/// Native types are transparent at their use site: they are monomorphized per
-	/// use and their specialization carries the bindings for the contained
-	/// types' params (e.g. `array`'s `Value`), with references scoped to the
-	/// enclosing container. So when the target is native we recurse into its
-	/// specialization/fields, keeping the same `scope`, instead of relying on the
-	/// native def being visited on its own (where the scope would be wrong).
 	fn resolve_type_use(
 		scope: TypeId,
 		ty: &mir::Type,
 		types: &TypeMap,
 		out: &mut TypeUsageCollector,
 	) -> Result<()> {
-		Self::resolve_type_use_inner(scope, scope, ty, types, out, &mut HashSet::new())
-	}
-
-	/// `scope` resolves field paths (`./x`): the enclosing container of the use-site.
-	/// `arg_scope` resolves `$param` references: the def whose params are in scope —
-	/// inside a native's specialization that is the native itself (its params were
-	/// closure-converted from the use-site), outside it equals `scope`.
-	fn resolve_type_use_inner(
-		scope: TypeId,
-		arg_scope: TypeId,
-		ty: &mir::Type,
-		types: &TypeMap,
-		out: &mut TypeUsageCollector,
-		visited: &mut HashSet<TypeId>,
-	) -> Result<()> {
 		for (name, arg) in &ty.args {
 			let Some(arg) = arg.as_field() else {
 				continue;
 			};
-			let from = match arg.0.first().map(|i| &i.segment) {
-				Some(FieldRefSegment::Arg(_)) => arg_scope,
-				_ => scope,
-			};
-			out.used(ty.target, name, Self::resolve_ref(from, types, arg)?);
-		}
-		if !visited.insert(ty.target) {
-			return Ok(());
-		}
-		if let mir::TypeKind::Native(native) = &types[ty.target].kind {
-			for (_, sub) in native
-				.specialization
-				.iter()
-				.chain(native.virtual_fields.iter())
-				.chain(native.fields.iter())
-			{
-				Self::resolve_type_use_inner(scope, ty.target, sub, types, out, visited)?;
-			}
+			out.used(ty.target, name, Self::resolve_ref(scope, types, arg)?);
 		}
 		Ok(())
 	}
@@ -198,7 +137,10 @@ impl Definition {
 					}
 				}
 				FieldRefSegment::Down { .. } | FieldRefSegment::Virtual(_) => {
-					cur = types[cur].resolve_ref_single(item.segment.clone(), types)?;
+					cur = types[cur].resolve_ref_single(cur, item.segment.clone(), types)?;
+					if !cur.is_valid() {
+						return Ok(cur);
+					}
 					if item.to.get().is_valid() {
 						assert!(item.to.get() == cur);
 					} else {
@@ -210,42 +152,22 @@ impl Definition {
 		Ok(cur)
 	}
 
-	fn resolve_ref_single(&self, segment: FieldRefSegment, types: &TypeMap) -> Result<TypeId> {
+	fn resolve_ref_single(
+		&self,
+		self_id: TypeId,
+		segment: FieldRefSegment,
+		types: &TypeMap,
+	) -> Result<TypeId> {
 		Ok(match (segment, &self.kind) {
-			(
-				segment @ (FieldRefSegment::Virtual(_)
-				| FieldRefSegment::Down {
-					ignore_delegation: false,
-					..
-				}),
-				mir::TypeKind::Container {
-					delegate_all: Some(to),
-					fields,
-					..
-				},
-			) => {
-				let target = fields
-					.iter()
-					.find(|f| &f.name == to)
-					.ok_or_else(|| anyhow!("delegate_all field not found: {:?}", to))?
-					.ty
-					.target;
-				types[target]
-					.resolve_ref_single(segment, types)
-					.with_context(|| format!("failed to resolve delegated to {:?}", to))?
-			}
-			(FieldRefSegment::Down { to, .. }, mir::TypeKind::Container { fields, .. }) => {
-				fields
-					.iter()
-					.find(|f| f.name == to)
-					.ok_or_else(|| anyhow!("field not found: {:?} in container {:?}", to, fields))?
-					.ty
-					.target
-			}
-			(FieldRefSegment::Virtual(name), mir::TypeKind::Union { tag_type, .. })
-				if name.as_str() == "tag" =>
+			(FieldRefSegment::Virtual(name), mir::TypeKind::Native(native))
+				if native.arg_virtuals.contains(&name) =>
 			{
-				*tag_type
+				let (_, r) = native
+					.ref_args
+					.iter()
+					.find(|(n, _)| n == &name)
+					.ok_or_else(|| anyhow!("virtual {name:?} has no argument to take its type from"))?;
+				Self::resolve_ref(self_id, types, r)?
 			}
 			(
 				FieldRefSegment::Virtual(name),
@@ -278,27 +200,6 @@ impl Definition {
 	fn propogate_types(&mut self, i: TypeId, collector: &TypeUsageCollector) -> Result<()> {
 		for (name, param) in self.params.iter_mut() {
 			*param = collector.find_type(i, name)?;
-		}
-		match &mut self.kind {
-			mir::TypeKind::Container {
-				virt: _,
-				fields: _,
-				delegate_all: _,
-			} => {}
-			mir::TypeKind::Union {
-				tag,
-				tag_type,
-				matches: _,
-				default: _,
-			} => {
-				// inline tags know their type from construction
-				if matches!(tag, mir::UnionTag::External(_)) {
-					*tag_type = collector.find_internal_type(i, "tag_type")?
-				}
-			}
-			mir::TypeKind::Native(_native_type) => {}
-			mir::TypeKind::Alias(_) => {}
-			mir::TypeKind::Void => {}
 		}
 		Ok(())
 	}
@@ -337,11 +238,6 @@ pub fn resolve_types(types: &mut TypeMap) -> Result<()> {
 					if !collector.find_type(*i, name)?.is_valid() {
 						unresolved.push(format!("{:?} argument {name:?}", d.name));
 					}
-				}
-				if matches!(d.kind, mir::TypeKind::Union { .. })
-					&& !collector.find_internal_type(*i, "tag_type")?.is_valid()
-				{
-					unresolved.push(format!("{:?} tag type", d.name));
 				}
 			}
 			bail!(

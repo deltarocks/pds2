@@ -2,7 +2,6 @@ use crate::{
 	ast::{FieldRef, Ident, Path},
 	hir::{self, FieldRefOrConst, Reference, ReferenceKind, TypeId},
 	mir::{self, FieldItem},
-	should_be_desugared,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -40,8 +39,8 @@ impl Value {
 		match hir {
 			hir::Value::Number(n) => Self::Signed(*n),
 			hir::Value::Bool(b) => Self::Bool(*b),
-			hir::Value::String(_) => todo!(),
-			hir::Value::UnionDescriminator(ident) => todo!(),
+			hir::Value::String(s) => Self::String(s.clone()),
+			hir::Value::UnionDescriminator(ident) => Self::UnionDescriminator(ident.clone()),
 		}
 	}
 }
@@ -49,71 +48,6 @@ impl Value {
 impl TypeKind {
 	fn from_hir(hir: &hir::TypeKind) -> Result<Self> {
 		Ok(match hir {
-			hir::TypeKind::Container(c) => Self::Container {
-				virt: c.virt,
-				fields: c
-					.fields
-					.iter()
-					.map(|(name, f)| {
-						Ok(match f {
-							hir::ContainerFieldType::Normal(t) => mir::ContainerField {
-								name: name.clone(),
-								ty: Type::from_hir(t),
-								load_from: None,
-							},
-							hir::ContainerFieldType::Virtual(r, t) => mir::ContainerField {
-								name: name.clone(),
-								ty: Type::from_hir(t),
-								load_from: Some(Field::from_hir(r)),
-							},
-							hir::ContainerFieldType::Delegate(_) => should_be_desugared!(f),
-						})
-					})
-					.collect::<Result<_>>()?,
-				delegate_all: c.delegate_all.clone(),
-			},
-			hir::TypeKind::Union(u) => {
-				let (tag, tag_type) = match &u.tag {
-					hir::UnionTag::External(f) => (
-						super::UnionTag::External(Field::from_hir(f)),
-						TypeId::default(),
-					),
-					hir::UnionTag::Inline(t) => {
-						let t = Type::from_hir(t);
-						let target = t.target;
-						(super::UnionTag::Inline(t), target)
-					}
-				};
-				Self::Union {
-					tag,
-					tag_type,
-					matches: u
-						.values
-						.iter()
-						.map(|(value, map, ty)| {
-							(
-							match value {
-								hir::Value::Number(n) => Value::Signed(*n),
-								hir::Value::Bool(b) => Value::Bool(*b),
-								hir::Value::String(n) => Value::String(n.clone()),
-								hir::Value::UnionDescriminator(id) => {
-									Value::UnionDescriminator(id.clone())
-								}
-							},
-								map.clone(),
-								Type::from_hir(ty),
-							)
-						})
-						.collect(),
-					default: u.default.as_ref().map(|d| {
-						let mut name = "default".to_owned();
-						while u.values.iter().any(|(_, n, _)| n.as_str() == name) {
-							name.push('_');
-						}
-						(Ident::new(&name), Type::from_hir(d))
-					}),
-				}
-			}
 			// An exported alias def surviving replace_aliases: keep it as a named
 			// forwarding type.
 			hir::TypeKind::Reference(Reference {
@@ -136,8 +70,26 @@ impl TypeKind {
 					.specializer
 					.clone()
 					.map(|s| (s, native.variant.clone())),
-				body: native.body.clone(),
+				body: native
+					.body
+					.iter()
+					.map(|b| mir::BodyItem {
+						kind: b.kind.clone(),
+						name: b.name.clone(),
+						args: b
+							.args
+							.iter()
+							.map(|(n, a)| (n.clone(), FieldOrConst::from_hir(a)))
+							.collect(),
+					})
+					.collect(),
 				const_args: native.const_args.clone(),
+				ref_args: native
+					.ref_args
+					.iter()
+					.map(|(n, r)| (n.clone(), Field::from_hir(r)))
+					.collect(),
+				arg_virtuals: native.arg_virtuals.clone(),
 				is_void: native.is_void,
 				scalar: native.scalar.clone(),
 				specialization: native

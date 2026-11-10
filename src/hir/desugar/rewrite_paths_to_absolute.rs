@@ -33,8 +33,8 @@ use std::collections::HashSet;
 use crate::{
 	ast::Ident,
 	hir::{
-		Container, ContainerFieldType, Namespace, NamespaceItem, Reference, ReferenceKind, Type,
-		TypeKind, Union,
+		Namespace, NamespaceItem, Reference, ReferenceKind, Type,
+		TypeKind,
 	},
 };
 
@@ -46,8 +46,6 @@ impl TypeKind {
 		paths: &HashSet<Vec<Ident>>,
 	) {
 		match self {
-			TypeKind::Container(c) => c.rewrite_paths_to_absolute(current_ns, generics, paths),
-			TypeKind::Union(u) => u.rewrite_paths_to_absolute(current_ns, generics, paths),
 			TypeKind::Reference(Reference {
 				ty: ty @ ReferenceKind::Path(_),
 				types,
@@ -123,45 +121,6 @@ impl Type {
 		}
 		self.kind
 			.rewrite_paths_to_absolute(current_ns, &generics, paths);
-	}
-}
-
-impl Container {
-	pub(crate) fn rewrite_paths_to_absolute(
-		&mut self,
-		current_ns: &[Ident],
-		generics: &HashSet<Ident>,
-		paths: &HashSet<Vec<Ident>>,
-	) {
-		for (_, v) in self.fields.iter_mut() {
-			match v {
-				ContainerFieldType::Normal(n) => {
-					n.rewrite_paths_to_absolute(current_ns, generics, paths)
-				}
-				ContainerFieldType::Virtual(_, n) => {
-					n.rewrite_paths_to_absolute(current_ns, generics, paths)
-				}
-				ContainerFieldType::Delegate(_) => {}
-			}
-		}
-	}
-}
-impl Union {
-	pub(crate) fn rewrite_paths_to_absolute(
-		&mut self,
-		current_ns: &[Ident],
-		generics: &HashSet<Ident>,
-		paths: &HashSet<Vec<Ident>>,
-	) {
-		if let crate::hir::UnionTag::Inline(t) = &mut self.tag {
-			t.rewrite_paths_to_absolute(current_ns, generics, paths);
-		}
-		for (_, _, v) in self.values.iter_mut() {
-			v.rewrite_paths_to_absolute(current_ns, generics, paths);
-		}
-		if let Some(d) = self.default.as_mut() {
-			d.rewrite_paths_to_absolute(current_ns, generics, paths);
-		}
 	}
 }
 

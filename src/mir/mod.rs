@@ -22,13 +22,6 @@ pub struct Definition {
 }
 
 #[derive(Debug)]
-pub struct ContainerField {
-	pub name: Ident,
-	pub ty: Type,
-	pub load_from: Option<Field>,
-}
-
-#[derive(Debug)]
 pub struct NativeType {
 	// Which user defined function should be called to generate parser for this type,
 	// and which def_native overload variant it should dispatch on ("default" unless
@@ -40,36 +33,50 @@ pub struct NativeType {
 	pub virtual_fields: Vec<(Ident, Type)>,
 	pub fields: Vec<(Ident, Type)>,
 	// The consumed use-site body (codegen metadata: bitfield sizes, flag order, ...)
-	pub body: Vec<crate::hir::BodyField>,
+	pub body: Vec<BodyItem>,
 	// Constant configuration arguments from the use-site (registryEntryHolder baseName)
 	pub const_args: Vec<(Ident, crate::hir::Value)>,
+	pub ref_args: Vec<(Ident, Field)>,
+	pub arg_virtuals: Vec<Ident>,
 	// carries no data (the deduplicated canonical void)
 	pub is_void: bool,
 	pub scalar: Option<Ident>,
 }
 
-/// Where a union reads its discriminant from.
-#[derive(Debug)]
-pub enum UnionTag {
-	/// a field of the enclosing container, passed in as an argument
-	External(Field),
-	/// read inline by the union itself, immediately before the value
-	Inline(Type),
+#[derive(Debug, Clone)]
+pub struct BodyItem {
+	pub kind: Ident,
+	pub name: Option<Ident>,
+	pub args: Vec<(Ident, FieldOrConst)>,
+}
+impl BodyItem {
+	pub fn expect_name(&self) -> anyhow::Result<&Ident> {
+		self.name
+			.as_ref()
+			.ok_or_else(|| anyhow::anyhow!("body item {:?} needs a name", self.kind))
+	}
+	pub fn arg(&self, name: &str) -> Option<&FieldOrConst> {
+		self.args
+			.iter()
+			.find(|(n, _)| n.as_str() == name)
+			.map(|(_, v)| v)
+	}
+	pub fn constant(&self, name: &str) -> Option<&Value> {
+		match self.arg(name)? {
+			FieldOrConst::Const(v) => Some(v),
+			FieldOrConst::Field(_) => None,
+		}
+	}
+	pub fn field(&self, name: &str) -> Option<&Field> {
+		match self.arg(name)? {
+			FieldOrConst::Field(f) => Some(f),
+			FieldOrConst::Const(_) => None,
+		}
+	}
 }
 
 #[derive(Debug)]
 pub enum TypeKind {
-	Container {
-		virt: bool,
-		fields: Vec<ContainerField>,
-		delegate_all: Option<Ident>,
-	},
-	Union {
-		tag: UnionTag,
-		tag_type: TypeId,
-		matches: Vec<(Value, Ident, Type)>,
-		default: Option<(Ident, Type)>,
-	},
 	Native(NativeType),
 	/// An exported named alias to another type, possibly binding its arguments
 	/// (`def(root_const_field) { export; } => array(size: 3) => varint`). Generators
@@ -161,7 +168,7 @@ pub enum FieldOrConst {
 	Const(Value),
 }
 impl FieldOrConst {
-	fn as_field(&self) -> Option<&Field> {
+	pub fn as_field(&self) -> Option<&Field> {
 		match self {
 			FieldOrConst::Field(field) => Some(field),
 			FieldOrConst::Const(_) => None,

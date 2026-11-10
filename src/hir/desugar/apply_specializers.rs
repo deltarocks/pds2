@@ -19,10 +19,10 @@ use anyhow::{anyhow, Context, Result};
 use crate::{
 	ast::{Ident, Path},
 	hir::{
-		BodyDecl, HirSpecializerCtx, NamespaceItem, NativeType, Traverse, TraverseSkip, TypeId,
-		TypeKind, Visitor,
+		BodyDecl, FieldRefOrConst, HirSpecializerCtx, NamespaceItem, NativeType, Traverse,
+		TraverseSkip, TypeId, TypeKind, Visitor,
 	},
-	specializer::Registry,
+	specializer::{Projection, Registry},
 };
 
 use super::super::Namespace;
@@ -89,16 +89,14 @@ impl Visitor for Apply<'_> {
 			.ok_or_else(|| anyhow!("no specializer implementation for {name:?}"))?;
 		// Constant configuration arguments move onto the inline native; field
 		// references would escape the use-site scope once the reference is gone.
-		let const_args = r
-			.args
-			.iter()
-			.map(|(n, a)| match a {
-				crate::hir::FieldRefOrConst::Const(c) => Ok((n.clone(), c.clone())),
-				crate::hir::FieldRefOrConst::FieldRef(f) => Err(anyhow!(
-					"body-accepting native cannot take a field-reference argument: {n:?} = {f:?}"
-				)),
-			})
-			.collect::<Result<Vec<_>>>()?;
+		let mut const_args = Vec::new();
+		let mut ref_args = Vec::new();
+		for (n, a) in &r.args {
+			match a {
+				FieldRefOrConst::Const(c) => const_args.push((n.clone(), c.clone())),
+				FieldRefOrConst::FieldRef(f) => ref_args.push((n.clone(), f.clone())),
+			}
+		}
 
 		let resolve = |n: &str| {
 			self.by_path
@@ -109,14 +107,19 @@ impl Visitor for Apply<'_> {
 				})
 				.copied()
 		};
-		let fields = specializer
-			.fields(&HirSpecializerCtx {
-				variant,
-				body: &r.body,
-				types: &r.types,
-				args: &r.args,
-				resolve: &resolve,
-			})
+		let ctx = HirSpecializerCtx {
+			variant,
+			body: &r.body,
+			types: &r.types,
+			args: &r.args,
+			resolve: &resolve,
+		};
+		let Projection {
+			fields,
+			virtual_fields,
+			arg_virtuals,
+		} = specializer
+			.project(&ctx)
 			.with_context(|| format!("specializer {name:?}"))?;
 
 		let specialization = r
@@ -129,12 +132,14 @@ impl Visitor for Apply<'_> {
 		*ty = TypeKind::Native(NativeType {
 			specializer: Some(name.clone()),
 			variant: variant.clone(),
-			virtual_fields: vec![],
+			virtual_fields,
 			fields,
 			accepts_body: None,
 			specialization,
 			body,
 			const_args,
+			ref_args,
+			arg_virtuals,
 			is_void: false,
 			scalar: None,
 		});
@@ -171,7 +176,7 @@ mod tests {
 			parse_ast, BodyField, FieldRefOrConst, HirSpecializerCtx, Namespace, NamespaceItem,
 			ReferenceKind, TypeKind, Value,
 		},
-		specializer::{AstHir, Registry},
+		specializer::{register_protodef_types, AstHir, Registry},
 	};
 
 	struct Probe;
@@ -183,6 +188,13 @@ mod tests {
 
 	const DECL: &str = r#"
 		def_native(u8);
+		@specializer container
+		def_native(container) {
+			body {
+				item(field) { type(Value); };
+				item(virtual_field) { argument(value); type(Value); };
+			};
+		};
 		@specializer probe
 		def_native(probe) {
 			body {
@@ -202,6 +214,7 @@ mod tests {
 
 	fn compile(body: &str) -> Result<Namespace> {
 		let mut reg = Registry::default();
+		register_protodef_types(&mut reg);
 		reg.register_asthir("probe", Probe);
 		let src = format!(
 			"{DECL} def(T) => container {{ field(n) => u8; field(p) => probe {{ {body} }}; }};"
@@ -217,7 +230,9 @@ mod tests {
 					NamespaceItem::Inner(inner) => walk(inner, out),
 					NamespaceItem::Type(t) => {
 						if let TypeKind::Native(n) = &t.kind {
-							if n.accepts_body.is_none() && !n.body.is_empty() {
+							if n.accepts_body.is_none()
+								&& n.specializer.as_ref().is_some_and(|s| s.as_str() == "probe")
+							{
 								out.extend(n.body.iter().cloned());
 							}
 						}

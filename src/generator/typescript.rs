@@ -5,7 +5,7 @@ use anyhow::{Context as _, Result};
 use genco::lang::{js, JavaScript};
 use genco::prelude::*;
 
-use super::common::{self, eq_target, option_inner, sanitize, scalar_of, EqKind, TagRepr};
+use super::common::{self, option_inner, sanitize, scalar_of, EqKind};
 use super::GeneratorOutput;
 use crate::ast::{FieldRefSegment, Ident};
 use crate::hir::TypeId;
@@ -66,32 +66,30 @@ impl<'a> TsMeta<'a> {
 			_ => self.types.is_void(id) || option_inner(self.types, id).is_some(),
 		}
 	}
-	fn is_equal(&self, id: TypeId, other: TypeId, kind: EqKind) -> Tokens {
-		match kind {
-			EqKind::Bool => self.item(id, "is_equal_bool"),
-			_ => self.item(id, format!("is_equal_{}", other.raw())),
-		}
-	}
 	fn literal(&self, value: &Value, ty: TypeId) -> Tokens {
-		let wide = matches!(
-			ty.is_valid().then(|| scalar_of(self.types, ty)).flatten(),
-			Some(Scalar::I64 | Scalar::U64)
-		);
-		let int = |n: String| -> Tokens {
-			if wide {
-				quote!($(format!("{n}n")))
-			} else {
-				quote!($n)
-			}
-		};
-		match value {
-			Value::Signed(n) => int(n.to_string()),
-			Value::Unsigned(n) => int(n.to_string()),
-			Value::Bool(b) => quote!($(b.to_string())),
-			Value::String(s) => quote!($(quoted(s.as_str()))),
-			Value::UnionDescriminator(id) => {
-				quote!({ kind: $(quoted(sanitize(id.as_str()))) })
-			}
+		literal(self.types, value, ty)
+	}
+}
+
+pub(crate) fn literal(types: &TypeMap, value: &Value, ty: TypeId) -> Tokens {
+	let wide = matches!(
+		ty.is_valid().then(|| scalar_of(types, ty)).flatten(),
+		Some(Scalar::I64 | Scalar::U64)
+	);
+	let int = |n: String| -> Tokens {
+		if wide {
+			quote!($(format!("{n}n")))
+		} else {
+			quote!($n)
+		}
+	};
+	match value {
+		Value::Signed(n) => int(n.to_string()),
+		Value::Unsigned(n) => int(n.to_string()),
+		Value::Bool(b) => quote!($(b.to_string())),
+		Value::String(s) => quote!($(quoted(s.as_str()))),
+		Value::UnionDescriminator(id) => {
+			quote!({ kind: $(quoted(sanitize(id.as_str()))) })
 		}
 	}
 }
@@ -131,6 +129,9 @@ impl Names<JavaScript> for TsMeta<'_> {
 	fn scalar(&self, id: TypeId) -> Option<Scalar> {
 		scalar_of(self.types, id)
 	}
+	fn item(&self, id: TypeId, name: &str) -> Tokens {
+		TsMeta::item(self, id, name)
+	}
 }
 
 fn read_reference(meta: &TsMeta, from_locals: bool, input: &Field) -> Tokens {
@@ -140,7 +141,7 @@ fn read_reference(meta: &TsMeta, from_locals: bool, input: &Field) -> Tokens {
 			FieldRefSegment::Arg(name) => quote!(args.$(name.as_str())),
 			FieldRefSegment::Down { to, .. } => {
 				if i == 0 && from_locals {
-					quote!($(format!("f_{}", to.as_str())))
+					quote!($(common::local(to)))
 				} else {
 					quote!($expr.$(to.as_str()))
 				}
@@ -186,13 +187,11 @@ fn args_passing(meta: &TsMeta, input: &Type) -> Tokens {
 pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Registry) -> Result<()> {
 	let meta = TsMeta::new(input, reg);
 	let unions_as_tag = common::unions_as_tag(input);
-	let tag_referenced = common::tag_referenced(input);
+	let virtuals_used = common::virtuals_used(input);
 	let eq_impls = common::eq_impls(input);
 
 	let pinput = &js::import("../pds.ts", "Input");
 	let poutput = &js::import("../pds.ts", "Output");
-	let perror = &js::import("../pds.ts", "PdsError");
-	let pequal = &js::import("../pds.ts", "equal");
 
 	let mut modules = Vec::new();
 	for (id, ty) in &input.0 {
@@ -227,313 +226,7 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 				quote!(, $(args_passing(&meta, use_)))
 			}
 		};
-		let assert_tag_call = |siblings: &[mir::ContainerField],
-		                       field: &mir::ContainerField|
-		 -> Tokens {
-			if field.load_from.is_some() {
-				return quote!();
-			}
-			let TypeKind::Union {
-				tag: mir::UnionTag::External(tagref),
-				matches,
-				default,
-				..
-			} = &input[field.ty.target].kind
-			else {
-				return quote!();
-			};
-			if matches.is_empty() && default.is_none() {
-				return quote!();
-			}
-			let Some(FieldRefSegment::Arg(tag_param)) = tagref.0.first().map(|i| &i.segment) else {
-				return quote!();
-			};
-			let Some((_, val)) = field.ty.args.iter().find(|(n, _)| n == tag_param) else {
-				return quote!();
-			};
-			if let FieldOrConst::Field(f) = val {
-				match f.0.first().map(|i| &i.segment) {
-					Some(FieldRefSegment::Arg(_)) => return quote!(),
-					Some(FieldRefSegment::Down { to, .. })
-						if siblings
-							.iter()
-							.any(|s| &s.name == to && s.load_from.is_some()) =>
-					{
-						return quote!()
-					}
-					_ => {}
-				}
-			}
-			quote! {
-				$(meta.item(field.ty.target, "assert_tag"))(_0.$(field.name.as_str()), $(read_or_const_reference(&meta, false, val, TypeId::default())));
-			}
-		};
-
 		let body: Tokens = match &ty.kind {
-			TypeKind::Container { fields, .. } => {
-				let stored: Vec<&mir::ContainerField> =
-					fields.iter().filter(|f| f.load_from.is_none()).collect();
-				let value_of = |field: &mir::ContainerField| -> Tokens {
-					match &field.load_from {
-						None => quote!(_0.$(field.name.as_str())),
-						Some(from) => read_reference(&meta, false, from),
-					}
-				};
-				quote! {
-					$args_struct
-					export type Ty = {
-						$(for f in &stored join($['\r']) => $(f.name.as_str()): $(Names::ty(&meta, f.ty.target));)
-					};
-					export function serialize(_0: Ty, output: $poutput): void {
-						$(for f in fields.iter() join($['\r']) =>
-							$(assert_tag_call(fields, f))
-							$(meta.item(f.ty.target, "serialize"))($(value_of(f)), output);
-						)
-					}
-					export function deserialize(input: $pinput$(if has_args => , $(args_param()))): Ty {
-						$(for f in fields.iter() join($['\r']) =>
-							const $(format!("f_{}", f.name.as_str())) = $(meta.item(f.ty.target, "deserialize"))(input$(args_of(f.ty.target, &f.ty)));
-						)
-						$(for f in fields.iter().filter(|f| f.load_from.is_some()) join($['\r']) =>
-							if (!$pequal($(format!("f_{}", f.name.as_str())), $(read_reference(&meta, true, f.load_from.as_ref().unwrap())))) {
-								throw new $perror("InvalidValue", $(quoted(format!("virtual field {} does not match its value source", f.name.as_str()))));
-							}
-						)
-						return {
-							$(for f in &stored join($['\r']) => $(f.name.as_str()): $(format!("f_{}", f.name.as_str())),)
-						};
-					}
-					export function size_of(_0: Ty): number {
-						return 0$(for f in fields.iter() => $[' ']+ $(meta.item(f.ty.target, "size_of"))($(value_of(f))));
-					}
-				}
-			}
-			TypeKind::Union {
-				tag,
-				tag_type,
-				matches,
-				default,
-			} => {
-				let is_inline = matches!(tag, mir::UnionTag::Inline(_));
-				let is_empty = matches.is_empty() && default.is_none();
-				let tag_ty = *tag_type;
-				let mut tag_access = quote!(__tag);
-				let mut tag_inner = tag_ty;
-				while let TypeKind::Container {
-					fields,
-					delegate_all: Some(d),
-					..
-				} = &input[tag_inner].kind
-				{
-					let f = fields
-						.iter()
-						.find(|f| &f.name == d)
-						.expect("delegate target exists");
-					tag_access = quote!($tag_access.$(d.as_str()));
-					tag_inner = f.ty.target;
-				}
-				let tag_access = &tag_access;
-				let cond = |value: &Value| -> Tokens {
-					if let Some((b, kind)) = eq_target(input, tag_inner, value) {
-						let call = meta.is_equal(tag_inner, b, kind);
-						return quote!($call($tag_access, $(meta.literal(value, b))));
-					}
-					panic!(
-						"union arm value {value:?} cannot match tag type {:?}",
-						meta.raw_names[&tag_inner]
-					)
-				};
-				let tag_value = |value: &Value| -> Tokens {
-					match common::tag_repr(input, tag_ty, value) {
-						Some(TagRepr::Literal) => meta.literal(value, tag_ty),
-						Some(TagRepr::OptionSome(opt)) => {
-							let inner = option_inner(input, opt).unwrap_or_default();
-							meta.slot_new(opt, &Ident::new("Value"), meta.literal(value, inner))
-						}
-						Some(TagRepr::Variant(_, n)) => quote!({ kind: $(quoted(n.as_str())) }),
-						None => {
-							quote!((() => { throw new $perror("InvalidValue", "reconstructing a non-scalar tag"); })())
-						}
-					}
-				};
-				let read_tag = match tag {
-					mir::UnionTag::External(f) => {
-						let tag_param = match f.0.first().map(|i| &i.segment) {
-							Some(FieldRefSegment::Arg(name)) => name.clone(),
-							other => anyhow::bail!(
-								"union tag should be an argument by codegen: {other:?} in {:?}",
-								ty.name
-							),
-						};
-						quote!(const __tag = args.$(tag_param.as_str());)
-					}
-					mir::UnionTag::Inline(t) => quote! {
-						const __tag = $(meta.item(t.target, "deserialize"))(input$(args_of(t.target, t)));
-					},
-				};
-				let write_tag = match tag {
-					mir::UnionTag::External(_) => quote!(),
-					mir::UnionTag::Inline(t) => quote! {
-						$(meta.item(t.target, "serialize"))(virtual_tag(_0), output);
-					},
-				};
-				let tag_own_size = match tag {
-					mir::UnionTag::External(_) => quote!(0),
-					mir::UnionTag::Inline(t) => {
-						quote!($(meta.item(t.target, "size_of"))(virtual_tag(_0)))
-					}
-				};
-
-				let mut variants: Vec<Tokens> = Vec::new();
-				let mut ser: Vec<Tokens> = Vec::new();
-				let mut size: Vec<Tokens> = Vec::new();
-				let mut vtag: Vec<Tokens> = Vec::new();
-				let mut asserts: Vec<Tokens> = Vec::new();
-				let mut de: Vec<Tokens> = Vec::new();
-				for (value, variant, vty) in matches {
-					let kind: Tokens = quote!($(quoted(variant.as_str())));
-					if input.is_void(vty.target) {
-						variants.push(quote!({ kind: $(&kind) }));
-						ser.push(quote!(case $(&kind): return;));
-						size.push(quote!(case $(&kind): return __n;));
-						de.push(quote! {
-							if ($(cond(value))) {
-								return { kind: $(&kind) };
-							}
-						});
-					} else {
-						variants.push(
-							quote!({ kind: $(&kind); value: $(Names::ty(&meta, vty.target)) }),
-						);
-						ser.push(
-							quote!(case $(&kind): $(meta.item(vty.target, "serialize"))(_0.value, output); return;),
-						);
-						size.push(
-							quote!(case $(&kind): return __n + $(meta.item(vty.target, "size_of"))(_0.value);),
-						);
-						de.push(quote! {
-							if ($(cond(value))) {
-								return { kind: $(&kind), value: $(meta.item(vty.target, "deserialize"))(input$(args_of(vty.target, vty))) };
-							}
-						});
-					}
-					vtag.push(quote!(case $(&kind): return $(tag_value(value));));
-					asserts.push(quote!(case $(&kind): ok = $(cond(value)); break;));
-				}
-				let de_default = if let Some((dname, dty)) = default {
-					let kind: Tokens = quote!($(quoted(dname.as_str())));
-					if input.is_void(dty.target) {
-						variants.push(quote!({ kind: $(&kind); tag: $(Names::ty(&meta, tag_ty)) }));
-						ser.push(quote!(case $(&kind): return;));
-						size.push(quote!(case $(&kind): return __n;));
-						vtag.push(quote!(case $(&kind): return _0.tag;));
-						quote!(return { kind: $(&kind), tag: __tag };)
-					} else {
-						variants.push(quote!({ kind: $(&kind); tag: $(Names::ty(&meta, tag_ty)); value: $(Names::ty(&meta, dty.target)) }));
-						ser.push(
-							quote!(case $(&kind): $(meta.item(dty.target, "serialize"))(_0.value, output); return;),
-						);
-						size.push(
-							quote!(case $(&kind): return __n + $(meta.item(dty.target, "size_of"))(_0.value);),
-						);
-						vtag.push(quote!(case $(&kind): return _0.tag;));
-						quote!(return { kind: $(&kind), tag: __tag, value: $(meta.item(dty.target, "deserialize"))(input$(args_of(dty.target, dty))) };)
-					}
-				} else {
-					quote!(throw new $perror("InvalidValue", "no union arm matches the tag");)
-				};
-
-				let my_eq = eq_impls.get(id).cloned().unwrap_or_default();
-				let eq_fns: Vec<Tokens> = my_eq
-					.iter()
-					.map(|(b, kind)| match kind {
-						EqKind::SelfEq => quote! {
-							export function $(format!("is_equal_{}", b.raw()))(a: Ty, b: Ty): boolean {
-								return a.kind === b.kind;
-							}
-						},
-						EqKind::VirtualTag => quote! {
-							export function $(format!("is_equal_{}", b.raw()))(a: Ty, b: $(Names::ty(&meta, *b))): boolean {
-								return virtual_tag(a) === b;
-							}
-						},
-						EqKind::OptionInner => quote!(),
-						EqKind::Bool => quote! {
-							export function is_equal_bool(a: Ty, b: boolean): boolean {
-								return Number(virtual_tag(a)) === Number(b);
-							}
-						},
-					})
-					.collect();
-
-				let expose_tag =
-					is_inline || unions_as_tag.contains(id) || tag_referenced.contains(id);
-				if is_empty {
-					quote! {
-						$args_struct
-						export type Ty = never;
-						export function serialize(_0: Ty, _output: $poutput): void {
-							throw new $perror("InvalidValue", "empty union");
-						}
-						export function deserialize(input: $pinput$(if has_args => , $(args_param()))): Ty {
-							$read_tag
-							throw new $perror("InvalidValue", "empty union");
-						}
-						export function size_of(_0: Ty): number {
-							throw new $perror("InvalidValue", "empty union");
-						}
-						$(if expose_tag =>
-							export function virtual_tag(_0: Ty): $(Names::ty(&meta, tag_ty)) {
-								throw new $perror("InvalidValue", "empty union");
-							}
-						)
-						$(for f in &eq_fns join($['\r']) => $f)
-					}
-				} else {
-					quote! {
-						$args_struct
-						export type Ty =
-							$(for v in &variants join($['\r']) => | $v)
-						;
-						export function serialize(_0: Ty, output: $poutput): void {
-							$write_tag
-							switch (_0.kind) {
-								$(for a in &ser join($['\r']) => $a)
-							}
-						}
-						export function deserialize(input: $pinput$(if has_args => , $(args_param()))): Ty {
-							$read_tag
-							$(for b in &de join($['\r']) => $b)
-							$de_default
-						}
-						export function size_of(_0: Ty): number {
-							const __n = $tag_own_size;
-							switch (_0.kind) {
-								$(for a in &size join($['\r']) => $a)
-							}
-						}
-						$(if !is_inline =>
-							export function assert_tag(_0: Ty, __tag: $(Names::ty(&meta, tag_ty))): void {
-								let ok = true;
-								switch (_0.kind) {
-									$(for a in &asserts join($['\r']) => $a)
-								}
-								if (!ok) {
-									throw new $perror("InvalidValue", "union variant does not match its external tag");
-								}
-							}
-						)
-						$(if expose_tag =>
-							export function virtual_tag(_0: Ty): $(Names::ty(&meta, tag_ty)) {
-								switch (_0.kind) {
-									$(for a in &vtag join($['\r']) => $a)
-								}
-							}
-						)
-						$(for f in &eq_fns join($['\r']) => $f)
-					}
-				}
-			}
 			TypeKind::Alias(target) => {
 				quote! {
 					export type Ty = $(Names::ty(&meta, target.target));
@@ -565,11 +258,6 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 					.get(id)
 					.map(|s| s.iter().copied().collect())
 					.unwrap_or_default();
-				let eq_ids: Vec<TypeId> = eq_entries
-					.iter()
-					.filter(|(_, k)| *k != EqKind::Bool)
-					.map(|(b, _)| *b)
-					.collect();
 				let bool_eq = eq_entries.iter().any(|(_, k)| *k == EqKind::Bool);
 				let bool_fn = quote! {
 					$(if bool_eq =>
@@ -597,7 +285,11 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 								args_passing(&meta, u)
 							}
 						};
-						let body = codegen
+						let virtual_used = |name: &str| {
+							virtuals_used.contains(&(*id, Ident::new(name)))
+								|| (name == "tag" && unions_as_tag.contains(id))
+						};
+						codegen
 							.generate(&NativeCodegenCtx {
 								id: *id,
 								variant,
@@ -608,13 +300,15 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 								args_struct: &args_struct_gen,
 								args_param: &args_param,
 								pass_args: &pass_args,
-								eq_targets: &eq_ids,
+								eq_targets: &eq_entries,
+								types: input,
+								virtual_used: &virtual_used,
+								read_ref: &|f, from_locals| read_reference(&meta, from_locals, f),
+								read_arg: &|v, from_locals| {
+									read_or_const_reference(&meta, from_locals, v, TypeId::default())
+								},
 							})
-							.with_context(|| format!("typescript codegen for {:?}", ty.name))?;
-						quote! {
-							$body
-							$bool_fn
-						}
+							.with_context(|| format!("typescript codegen for {:?}", ty.name))?
 					}
 					None => {
 						let native_import = &js::import("../pds_native.ts", meta.name_str(*id));

@@ -1,71 +1,12 @@
 use std::collections::HashMap;
 
-use crate::{
-	ast::{self, Ident, Item, ItemArgs, Path, Statement, Value},
-	hir::ContainerFieldType,
-};
+use crate::ast::{self, Ident, Item, ItemArgs, Path, Statement, Value};
 
 use super::{Namespace, Reference, ReferenceKind, Type, TypeKind};
 
 impl TypeKind {
 	fn to_ast(self) -> Vec<ast::Value> {
 		match self {
-			super::TypeKind::Container(c) => Item::simple_builder("container")
-				.argsb(if c.virt {
-					ItemArgs::builder().named("virtual", Item::new_simple("true").into())
-				} else {
-					ItemArgs::builder()
-				})
-				.block({
-					let mut out = Vec::new();
-
-					for (name, ty) in c.fields {
-						match ty {
-							ContainerFieldType::Normal(t) => out.push(ast::Statement {
-								attributes: Default::default(),
-								items: Item::simple_builder("field")
-									.argsb(ItemArgs::builder().arg(Item::new_simple(name).into()))
-									.then(t.to_ast()),
-							}),
-							ContainerFieldType::Virtual(r, t) => out.push(ast::Statement {
-								attributes: Default::default(),
-								items: Item::simple_builder("virtual_field")
-									.argsb(
-										ItemArgs::builder()
-											.arg(Item::new_simple(name).into())
-											.named("value", r.into()),
-									)
-									.then(t.to_ast()),
-							}),
-							ContainerFieldType::Delegate(to) => out.push(ast::Statement {
-								attributes: Default::default(),
-								items: Item::simple_builder("delegate_field")
-									.argsb(
-										ItemArgs::builder()
-											.arg(Item::new_simple(name).into())
-											.named("to", Item::new_simple(to).into()),
-									)
-									.build_values(),
-							}),
-						}
-					}
-
-					if let Some(to) = c.delegate_all {
-						out.push(ast::Statement {
-							attributes: Default::default(),
-							items: Item::simple_builder("delegate_all")
-								.argsb(ItemArgs::builder().named("to", Item::new_simple(to).into()))
-								.build_values(),
-						})
-					}
-
-					ast::Block {
-						attributes: Default::default(),
-						statements: out,
-						root: false,
-					}
-				})
-				.build_values(),
 			super::TypeKind::Reference(Reference {
 				ty: ReferenceKind::Path(r),
 				..

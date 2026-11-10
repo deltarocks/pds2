@@ -13,9 +13,14 @@ use genco::prelude::*;
 use genco::Tokens;
 use tracing::info;
 
+pub mod container;
 mod typescript;
+pub mod union;
+
+use container::Container;
 
 use crate::ast::{self, Ident, Statement};
+use crate::generator::common::EqKind;
 use crate::upgrade::{keys_fit, plan, NativeSig, NativeSigVariant, TagKind, UpgradeCtx};
 
 use crate::hir::{self, HirSpecializerCtx, TypeId};
@@ -23,7 +28,22 @@ use crate::mir;
 
 /// Object-safe: registered per native, invoked during AST->HIR to produce type fields.
 pub trait AstHir {
-	fn fields(&self, ctx: &HirSpecializerCtx) -> Result<Vec<(Ident, hir::TypeKind)>>;
+	fn fields(&self, _ctx: &HirSpecializerCtx) -> Result<Vec<(Ident, hir::TypeKind)>> {
+		Ok(vec![])
+	}
+	fn project(&self, ctx: &HirSpecializerCtx) -> Result<Projection> {
+		Ok(Projection {
+			fields: self.fields(ctx)?,
+			..Default::default()
+		})
+	}
+}
+
+#[derive(Default)]
+pub struct Projection {
+	pub fields: Vec<(Ident, hir::TypeKind)>,
+	pub virtual_fields: Vec<(Ident, hir::TypeKind)>,
+	pub arg_virtuals: Vec<Ident>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -74,6 +94,7 @@ pub trait Names<L: Lang> {
 	fn slot_ty(&self, owner: TypeId, slot: &Ident, target: TypeId) -> Tokens<L>;
 	fn slot_new(&self, owner: TypeId, slot: &Ident, value: Tokens<L>) -> Tokens<L>;
 	fn scalar(&self, id: TypeId) -> Option<Scalar>;
+	fn item(&self, id: TypeId, name: &str) -> Tokens<L>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -121,7 +142,11 @@ pub struct NativeCodegenCtx<'a, L: Lang> {
 	pub pass_args: &'a dyn Fn(&mir::Type) -> Tokens<L>,
 	/// types this native is compared against when used as a union discriminant; a
 	/// tag-capable native (e.g. `option`) emits an `is_equal_{t}` helper per entry.
-	pub eq_targets: &'a [TypeId],
+	pub eq_targets: &'a [(TypeId, EqKind)],
+	pub types: &'a mir::TypeMap,
+	pub virtual_used: &'a dyn Fn(&str) -> bool,
+	pub read_ref: &'a dyn Fn(&mir::Field, bool) -> Tokens<L>,
+	pub read_arg: &'a dyn Fn(&mir::FieldOrConst, bool) -> Tokens<L>,
 }
 
 impl<L: Lang> NativeCodegenCtx<'_, L> {
@@ -295,6 +320,15 @@ pub fn register_protodef_types(reg: &mut Registry) {
 	reg.register_asthir("registryEntryHolderSet", RegistryEntryHolderSet);
 	reg.register_asthir("entityMetadataLoop", EntityMetadataLoop);
 	reg.register_asthir("terminated", EntityMetadataLoop);
+	reg.register_asthir("container", Container);
+	reg.register_layout("container", Container);
+	reg.register_codegen::<Rust>("container", Container);
+	reg.register_codegen::<JavaScript>("container", Container);
+	reg.register_asthir("union", union::Union);
+	reg.register_layout("union", union::Union);
+	reg.register_codegen::<Rust>("union", union::Union);
+	reg.register_codegen::<JavaScript>("union", union::Union);
+	reg.register_upgrade(union::Union);
 
 	reg.register_layout("bitfield", Bitfield);
 	reg.register_layout("bitflags", Bitflags);
@@ -508,43 +542,62 @@ impl BitfieldEntry {
 		format!("{}{}", if self.signed { "i" } else { "u" }, self.bits)
 	}
 }
-fn bitfield_entries(body: &[hir::BodyField]) -> Result<Vec<BitfieldEntry>> {
-	let mut out = Vec::new();
-	for f in body {
-		let name = f.expect_name()?;
-		let size = match f.constant("size") {
-			Some(hir::Value::Number(n)) if *n > 0 => *n,
-			_ => bail!("bitfield field {name:?} needs a positive integer `size`"),
-		};
-		let signed = match f.constant("signed") {
-			Some(hir::Value::Bool(b)) => *b,
-			None => false,
-			Some(other) => {
-				bail!("bitfield field {name:?}: `signed` should be a boolean, got {other:?}")
-			}
-		};
-		let bits = match size {
-			0..=8 => 8,
-			9..=16 => 16,
-			17..=32 => 32,
-			33..=64 => 64,
-			_ => bail!("bitfield field {name:?} larger than 64 bits"),
-		};
-		out.push(BitfieldEntry {
-			name: name.clone(),
-			size: size as u32,
-			signed,
-			bits,
-		});
-	}
-	Ok(out)
+fn bitfield_entry(name: &Ident, size: Option<i128>, signed: Option<bool>) -> Result<BitfieldEntry> {
+	let size = match size {
+		Some(n) if n > 0 => n,
+		_ => bail!("bitfield field {name:?} needs a positive integer `size`"),
+	};
+	let Some(signed) = signed else {
+		bail!("bitfield field {name:?}: `signed` should be a boolean");
+	};
+	let bits = match size {
+		0..=8 => 8,
+		9..=16 => 16,
+		17..=32 => 32,
+		33..=64 => 64,
+		_ => bail!("bitfield field {name:?} larger than 64 bits"),
+	};
+	Ok(BitfieldEntry {
+		name: name.clone(),
+		size: size as u32,
+		signed,
+		bits,
+	})
+}
+
+fn bitfield_entries(body: &[mir::BodyItem]) -> Result<Vec<BitfieldEntry>> {
+	body.iter()
+		.map(|f| {
+			let size = match f.constant("size") {
+				Some(mir::Value::Signed(n)) => Some(*n),
+				Some(mir::Value::Unsigned(n)) => i128::try_from(*n).ok(),
+				_ => None,
+			};
+			let signed = match f.constant("signed") {
+				Some(mir::Value::Bool(b)) => Some(*b),
+				_ => None,
+			};
+			bitfield_entry(f.expect_name()?, size, signed)
+		})
+		.collect()
 }
 
 impl AstHir for Bitfield {
 	fn fields(&self, ctx: &HirSpecializerCtx) -> Result<Vec<(Ident, hir::TypeKind)>> {
-		bitfield_entries(ctx.body)?
-			.into_iter()
-			.map(|e| Ok((e.name.clone(), ctx.native(&e.prim())?)))
+		ctx.body
+			.iter()
+			.map(|f| {
+				let size = match f.constant("size") {
+					Some(hir::Value::Number(n)) => Some(*n),
+					_ => None,
+				};
+				let signed = match f.constant("signed") {
+					Some(hir::Value::Bool(b)) => Some(*b),
+					_ => None,
+				};
+				let e = bitfield_entry(f.expect_name()?, size, signed)?;
+				Ok((e.name.clone(), ctx.native(&e.prim())?))
+			})
 			.collect()
 	}
 }
@@ -1460,7 +1513,7 @@ impl NativeCodegen<Rust> for OptionP {
 			}
 			// Union arm matching when an `option` is used as a discriminant: each
 			// target is the inner value type; the present value is compared to it.
-			$(for t in ctx.eq_targets join($['\r']) =>
+			$(for (t, _) in ctx.eq_targets.iter().filter(|(_, k)| *k != EqKind::Bool) join($['\r']) =>
 				pub fn $(format!("is_equal_{}", t.raw()))(a: &Ty, b: &$(ctx.names.ty(*t))) -> bool {
 					a.$(&as_ref)() == Some(b)
 				}
@@ -1584,14 +1637,13 @@ impl Upgrade for RestBuffer {
 		"restBuffer".to_owned()
 	}
 }
-struct Container;
 impl Upgrade for Container {
 	fn name(&self) -> String {
 		"container".to_owned()
 	}
 	fn sig(&self) -> NativeSig {
 		NativeSig {
-			specializer: None,
+			specializer: Some("container".to_owned()),
 			default: NativeSigVariant {
 				args: BTreeSet::new(),
 				generics: BTreeSet::new(),

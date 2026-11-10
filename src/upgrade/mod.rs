@@ -416,7 +416,7 @@ fn upgrade_mapper(obj: &Map<String, Value>, ctx: &mut UpgradeCtx) -> Result<Vec<
 		let name = name
 			.as_str()
 			.ok_or_else(|| anyhow!("mapper mapping value should be string"))?;
-		// `variant` with no chained type is a `void` arm — the tag is read via `tagType`.
+		// `variant` with no chained type is a `void` arm — the tag is read via `Tag`.
 		statements.push(simple_stmt(
 			Item::simple_builder("variant")
 				.argsb(
@@ -430,7 +430,7 @@ fn upgrade_mapper(obj: &Map<String, Value>, ctx: &mut UpgradeCtx) -> Result<Vec<
 	statements.push(simple_stmt(Item::simple_builder("default").build_values()));
 
 	Ok(Item::simple_builder("union")
-		.argsb(ItemArgs::builder().named("tagType", upgrade_type_single(ty, ctx)?))
+		.argsb(ItemArgs::builder().named("Tag",upgrade_type_single(ty, ctx)?))
 		.block(Block {
 			attributes: Default::default(),
 			statements,
@@ -498,7 +498,7 @@ pub fn merge_mapper_switch(
 	statements.extend(default_stmt(switch, false, ctx)?);
 
 	Ok(Item::simple_builder("union")
-		.argsb(ItemArgs::builder().named("tagType", tag_ty))
+		.argsb(ItemArgs::builder().named("Tag",tag_ty))
 		.block(Block {
 			attributes: Default::default(),
 			statements,
@@ -524,7 +524,7 @@ pub fn merge_scalar_switch(
 	}
 	statements.extend(default_stmt(switch, bool_exhaustive(fields), ctx)?);
 	Ok(Item::simple_builder("union")
-		.argsb(ItemArgs::builder().named("tagType", tag_ty))
+		.argsb(ItemArgs::builder().named("Tag",tag_ty))
 		.block(Block {
 			attributes: Default::default(),
 			statements,
@@ -719,11 +719,15 @@ fn upgrade_namespace(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::Block> 
 
 fn upgrade_namespace_inner(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::Block> {
 	let mut statements = Vec::new();
+	let mut declared = BTreeSet::new();
 	if let Some(types) = value.get("types") {
 		for (k, v) in types.as_object().unwrap() {
 			if v == "native" {
-				// builtin pds heads, not declarable natives
-				if matches!(k.as_str(), "container" | "switch" | "mapper") {
+				let k = match k.as_str() {
+					"switch" | "mapper" => "union",
+					k => k,
+				};
+				if !declared.insert(k) {
 					continue;
 				}
 				let sig = ctx
@@ -733,7 +737,7 @@ fn upgrade_namespace_inner(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::B
 					.ok_or_else(|| anyhow!("upgrader for native type {k} is not registered"))?;
 				let sig = sig.sig();
 				let mut builder = Item::simple_builder("def_native")
-					.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(k.as_str())));
+					.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(k)));
 				let block = native_block(&sig);
 				if !block.statements.is_empty() {
 					builder = builder.block(block);
@@ -835,7 +839,7 @@ mod tests {
 		.unwrap();
 		assert_has(
 			&out,
-			"def(p) => union(tagType: varint) { variant(v0, match: 0) => u8; default; };",
+			"def(p) => union(Tag: varint) { variant(v0, match: 0) => u8; default; };",
 		);
 	}
 
@@ -860,7 +864,7 @@ mod tests {
 			{ "name": "v", "type": ["switch", { "compareTo": "has", "fields": { "true": "u8", "false": "void" } }] }
 		]] }))
 		.unwrap();
-		assert_has(&out, "def(p) => union(tagType: bool) { variant(false, match: false) => void; variant(true, match: true) => u8; };");
+		assert_has(&out, "def(p) => union(Tag: bool) { variant(false, match: false) => void; variant(true, match: true) => u8; };");
 	}
 
 	#[test]
@@ -886,7 +890,7 @@ mod tests {
 			{ "name": "y", "type": ["switch", { "compareTo": "m", "fields": { "0": "varint", "2": "u8" } }] }
 		]] }))
 		.unwrap();
-		assert_has(&out, "def(p) => union(tagType: varint) { variant(v0, match: 0) => varint; variant(v2, match: 2) => container { field(x) => u8; field(y) => u8; }; default; };");
+		assert_has(&out, "def(p) => union(Tag: varint) { variant(v0, match: 0) => varint; variant(v2, match: 2) => container { field(x) => u8; field(y) => u8; }; default; };");
 	}
 
 	#[test]
@@ -915,7 +919,7 @@ mod tests {
 		.unwrap();
 		assert_has(
 			&out,
-			"def(p) => union(tagType: varint) { variant(v1, match: 1) => u8; default; };",
+			"def(p) => union(Tag: varint) { variant(v1, match: 1) => u8; default; };",
 		);
 	}
 
