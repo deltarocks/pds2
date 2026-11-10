@@ -165,9 +165,7 @@ fn generate_read_or_const_reference(
 		Expr::Const(mir::Value::String(s)) => {
 			return quote!(&$(quoted(s.as_str())).to_owned())
 		}
-		Expr::Const(mir::Value::UnionDescriminator(id)) => {
-			unreachable!("union discriminator constant {id:?} as an argument")
-		}
+		Expr::Const(v) => unreachable!("untyped constant {v:?} as an argument"),
 		e => {
 			let value = lower(types, e, from_locals).expect("validated before codegen");
 			return quote!(&($value));
@@ -250,13 +248,19 @@ fn literal(s: Scalar, value: &Value) -> Result<Tokens> {
 		Scalar::U64 => "u64",
 		Scalar::F32 => "f32",
 		Scalar::F64 => "f64",
-		Scalar::Bool => "",
+		Scalar::Bool | Scalar::String | Scalar::Bytes => "",
 	};
+	let bytes = |b: &[u8]| quote!(vec![$(for x in b join(, ) => $(format!("{x}_u8")))]);
 	Ok(match (s, value) {
 		(Scalar::Bool, Value::Bool(b)) => quote!($(b.to_string())),
-		(Scalar::Bool, v) => bail!("{v:?} is not a bool literal"),
-		(_, Value::Signed(n)) => quote!($(format!("{n}_{suffix}"))),
-		(_, Value::Unsigned(n)) => quote!($(format!("{n}_{suffix}"))),
+		(Scalar::String, Value::String(v)) => quote!(String::from($(quoted(v.as_str())))),
+		(Scalar::Bytes, Value::String(v)) => bytes(v.as_bytes()),
+		(Scalar::Bytes, Value::Bytes(v)) => bytes(v),
+		(Scalar::F32 | Scalar::F64, Value::Float(f)) if f.is_finite() => {
+			quote!($(format!("{f:?}_{suffix}")))
+		}
+		(s, Value::Signed(n)) if s.is_number() => quote!($(format!("{n}_{suffix}"))),
+		(s, Value::Unsigned(n)) if s.is_number() => quote!($(format!("{n}_{suffix}"))),
 		(s, v) => bail!("{v:?} is not a {s:?} literal"),
 	})
 }
@@ -292,6 +296,13 @@ fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 			quote!(($(generate_read_reference(meta, from_locals, f, None))).clone())
 		}
 		Expr::Const(v) => bail!("untyped constant {v:?}"),
+		Expr::Record(_) => bail!("untyped record"),
+		Expr::Serialized(_) => bail!("serialized(...) was not evaluated"),
+		Expr::List(items) => {
+			let items = items.iter().map(rec).collect::<Result<Vec<_>>>()?;
+			quote!(vec![$(for i in items join(, ) => $i)])
+		}
+		Expr::Construct(id, _) if meta.types.is_void(*id) => quote!(()),
 		Expr::Construct(id, c) => match (scalar_of(meta.types, *id), c) {
 			(Some(s), Construction::Literal(v)) => literal(s, v)?,
 			_ => {
@@ -308,7 +319,7 @@ fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 				reg: meta.reg,
 			}
 			.resolve(from);
-			let numeric = |t: TypeId| scalar_of(meta.types, t).is_some_and(|s| s != Scalar::Bool);
+			let numeric = |t: TypeId| scalar_of(meta.types, t).is_some_and(Scalar::is_number);
 			if numeric(from) && numeric(*to) {
 				quote!((($(rec(e)?)) as $(meta.ty(*to))))
 			} else {
@@ -323,7 +334,9 @@ fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 			let (a, b) = (rec(a)?, rec(b)?);
 			match scalar_of(meta.types, ty) {
 				Some(Scalar::F32 | Scalar::F64) => quote!(($a $(op.symbol()) $b)),
-				Some(Scalar::Bool) | None => bail!("arithmetic on a non-number"),
+				Some(Scalar::Bool | Scalar::String | Scalar::Bytes) | None => {
+					bail!("arithmetic on a non-number")
+				}
 				Some(_) => {
 					let method = match op {
 						BinOp::Add => "wrapping_add",

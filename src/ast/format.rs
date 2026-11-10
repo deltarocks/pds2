@@ -146,6 +146,39 @@ impl Value {
 				}
 				out.push_string(format!("{:?}", v))
 			}
+			Value::Float(v) => {
+				if let Some(before_block) = before_block {
+					out.push_info(before_block);
+				}
+				out.push_string(format!("{:?}", v.0))
+			}
+			Value::Bytes(b) => {
+				if let Some(before_block) = before_block {
+					out.push_info(before_block);
+				}
+				let mut s = String::from("b\"");
+				for c in b {
+					match c {
+						b'"' | b'\\' => s.extend(['\\', *c as char]),
+						0x20..=0x7e => s.push(*c as char),
+						c => s.push_str(&format!("\\x{c:02x}")),
+					}
+				}
+				s.push('"');
+				out.push_string(s);
+			}
+			Value::List(items) => {
+				if let Some(before_block) = before_block {
+					out.push_info(before_block);
+				}
+				print_list(out, "[", "]", items.iter().map(|v| (None, v)));
+			}
+			Value::Record(fields) => {
+				if let Some(before_block) = before_block {
+					out.push_info(before_block);
+				}
+				print_list(out, "(", ")", fields.iter().map(|(k, v)| (Some(k), v)));
+			}
 			Value::Item(i) => {
 				i.print(out, before_block);
 			}
@@ -187,81 +220,93 @@ impl Value {
 	}
 }
 
+fn print_list<'v>(
+	out: &mut PrintItems,
+	open: &'static str,
+	close: &'static str,
+	entries: impl Iterator<Item = (Option<&'v Ident>, &'v Value)>,
+) {
+	let start = LineNumber::new("args start");
+	let end = LineNumber::new("args end");
+	out.push_str_runtime_width_computed(open);
+	out.push_signal(Signal::StartNewLineGroup);
+	out.push_info(start);
+	let condition = Rc::new(move |ctx: &mut ConditionResolverContext| {
+		condition_helpers::is_multiple_lines(ctx, start, end)
+	});
+	out.push_condition(Condition::new(
+		"args_start_multiline",
+		ConditionProperties {
+			condition: condition.clone(),
+			true_path: {
+				let mut items = PrintItems::new();
+				items.push_signal(Signal::NewLine);
+				items.push_signal(Signal::StartIndent);
+				Some(items)
+			},
+			false_path: None,
+		},
+	));
+
+	let arg_nl_condition = Condition::new(
+		"args_split",
+		ConditionProperties {
+			condition: condition.clone(),
+			true_path: {
+				let mut items = PrintItems::new();
+				items.push_signal(Signal::NewLine);
+				Some(items)
+			},
+			false_path: {
+				let mut items = PrintItems::new();
+				items.push_signal(Signal::SpaceOrNewLine);
+				Some(items)
+			},
+		},
+	);
+	let mut first = Some(());
+	for (k, v) in entries {
+		if first.take().is_none() {
+			out.push_str_runtime_width_computed(",");
+			out.push_condition(arg_nl_condition.clone());
+		}
+		if let Some(k) = k {
+			out.push_string(k.0.to_string());
+			out.push_str_runtime_width_computed(": ");
+		}
+		v.print(out, None);
+	}
+	out.push_condition(Condition::new(
+		"args_end_multiline",
+		ConditionProperties {
+			condition: condition.clone(),
+			true_path: {
+				let mut items = PrintItems::new();
+				items.push_signal(Signal::FinishIndent);
+				items.push_signal(Signal::NewLine);
+				Some(items)
+			},
+			false_path: None,
+		},
+	));
+
+	out.push_info(end);
+	out.push_signal(Signal::FinishNewLineGroup);
+	out.push_str_runtime_width_computed(close);
+}
+
 impl ItemArgs {
 	fn print(&self, out: &mut PrintItems) {
 		if !self.is_empty() {
-			let start = LineNumber::new("args start");
-			let end = LineNumber::new("args end");
-			out.push_str_runtime_width_computed("(");
-			out.push_signal(Signal::StartNewLineGroup);
-			out.push_info(start);
-			let condition = Rc::new(move |ctx: &mut ConditionResolverContext| {
-				condition_helpers::is_multiple_lines(ctx, start, end)
-			});
-			out.push_condition(Condition::new(
-				"args_start_multiline",
-				ConditionProperties {
-					condition: condition.clone(),
-					true_path: {
-						let mut items = PrintItems::new();
-						items.push_signal(Signal::NewLine);
-						items.push_signal(Signal::StartIndent);
-						Some(items)
-					},
-					false_path: None,
-				},
-			));
-
-			let arg_nl_condition = Condition::new(
-				"args_split",
-				ConditionProperties {
-					condition: condition.clone(),
-					true_path: {
-						let mut items = PrintItems::new();
-						items.push_signal(Signal::NewLine);
-						Some(items)
-					},
-					false_path: {
-						let mut items = PrintItems::new();
-						items.push_signal(Signal::SpaceOrNewLine);
-						Some(items)
-					},
-				},
+			print_list(
+				out,
+				"(",
+				")",
+				self.unnamed
+					.iter()
+					.map(|v| (None, v))
+					.chain(self.named.iter().map(|(k, v)| (Some(k), v))),
 			);
-			let mut first = Some(());
-			for arg in self.unnamed.iter() {
-				if first.take().is_none() {
-					out.push_str_runtime_width_computed(",");
-					out.push_condition(arg_nl_condition.clone());
-				}
-				arg.print(out, None);
-			}
-			for (k, v) in self.named.iter() {
-				if first.take().is_none() {
-					out.push_str_runtime_width_computed(",");
-					out.push_condition(arg_nl_condition.clone());
-				}
-				out.push_string(k.0.to_string());
-				out.push_str_runtime_width_computed(": ");
-				v.print(out, None);
-			}
-			out.push_condition(Condition::new(
-				"args_end_multiline",
-				ConditionProperties {
-					condition: condition.clone(),
-					true_path: {
-						let mut items = PrintItems::new();
-						items.push_signal(Signal::FinishIndent);
-						items.push_signal(Signal::NewLine);
-						Some(items)
-					},
-					false_path: None,
-				},
-			));
-
-			out.push_info(end);
-			out.push_signal(Signal::FinishNewLineGroup);
-			out.push_str_runtime_width_computed(")");
 		}
 	}
 }
@@ -314,5 +359,18 @@ mod tests {
 			let out = super::format(&crate::ast::parse(src).unwrap());
 			assert_eq!(squash(&out), squash(src));
 		}
+	}
+
+	#[test]
+	fn data_literals_roundtrip_through_the_formatter() {
+		for src in [
+			"def(a) => x(v: (name: \"n\", weight: -1.5, big: 1e300, tags: [a, (b: 2)], empty: ()));",
+			"def(a) => x(v: T(raw: b\"\\x12\\x02q\\\"\\\\\", xs: []));",
+		] {
+			let out = super::format(&crate::ast::parse(src).unwrap());
+			assert_eq!(squash(&out), squash(src));
+		}
+		assert!(crate::ast::parse("def(a) => x(v: (k: 1, k: 2));").is_err());
+		assert!(crate::ast::parse("def(a) => x(k: 1, k: 2);").is_err());
 	}
 }

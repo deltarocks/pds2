@@ -148,6 +148,10 @@ enum Opts {
 		#[clap(long)]
 		print_mir: bool,
 
+		/// Add `def(NAME) => const(value: <FILE contents>);`, FILE being a single expression
+		#[clap(long = "const", value_name = "NAME=FILE")]
+		consts: Vec<String>,
+
 		/// Where to write generated files to
 		#[clap(long)]
 		to: Option<PathBuf>,
@@ -248,11 +252,21 @@ fn try_main() -> anyhow::Result<()> {
 			print_ast,
 			print_hir,
 			print_mir,
-
+			consts,
 			to,
 		} => {
 			let data = std::fs::read_to_string(from)?;
-			let parsed = ast::parse(&data)?;
+			let mut parsed = ast::parse(&data)?;
+			for c in consts {
+				let (name, file) = c
+					.split_once('=')
+					.ok_or_else(|| anyhow::anyhow!("--const {c:?} should be NAME=FILE"))?;
+				let value = std::fs::read_to_string(file)?;
+				ast::parse_expr(&value).map_err(|e| anyhow::anyhow!("parsing {file}: {e}"))?;
+				let def = ast::parse(&format!("def({name}) => const(value: {value});"))
+					.map_err(|e| anyhow::anyhow!("--const {name:?}: {e}"))?;
+				parsed.statements.extend(def.statements);
+			}
 
 			if print_ast {
 				dbg!(&parsed);

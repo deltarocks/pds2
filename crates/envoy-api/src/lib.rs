@@ -56,6 +56,16 @@ mod tests {
 	}
 
 	#[test]
+	fn text_fixture_encodes_like_protoc() {
+		let value = crate::gen::pds_cluster_fixture::value();
+		let mut out = Output::new();
+		cluster::serialize(&value, &mut out).unwrap();
+		assert_eq!(out.into_inner(), fixture());
+		let decoded = cluster::deserialize(&mut Input::new(&fixture())).unwrap();
+		assert_eq!(decoded, value);
+	}
+
+	#[test]
 	fn unknown_fields_are_skipped() {
 		let mut out = Output::new();
 		crate::pds::protobuf::write_key(&mut out, 1, 2);

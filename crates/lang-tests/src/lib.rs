@@ -76,4 +76,68 @@ mod tests {
 		}
 		assert!(roundtrip(t::deserialize, t::serialize, &[8, 0]).is_none());
 	}
+
+	fn encodes<T: PartialEq + std::fmt::Debug>(
+		value: T,
+		de: fn(&mut Input) -> Result<T>,
+		ser: fn(&T, &mut Output) -> Result<()>,
+		bytes: &[u8],
+	) {
+		let mut out = Output::new();
+		ser(&value, &mut out).unwrap();
+		assert_eq!(out.into_inner(), bytes);
+		assert_eq!(roundtrip(de, ser, bytes), Some(value));
+	}
+
+	#[test]
+	fn constants_construct_schema_values() {
+		use pds_sample_choices as choices;
+		use pds_sample_counted as counted;
+		use pds_sample_default as default;
+		use pds_sample_flags as flags;
+		use pds_sample_tagged as tagged;
+		use pds_sample_words as words;
+		encodes(counted::value(), counted::deserialize, counted::serialize, &[3, 7, 8]);
+		encodes(
+			words::value(),
+			words::deserialize,
+			words::serialize,
+			&[0, 1, 0xff, 0, 0xff, 0xff],
+		);
+		encodes(choices::value(), choices::deserialize, choices::serialize, &[2, 0, 9, 0, 7]);
+		encodes(tagged::value(), tagged::deserialize, tagged::serialize, &[2, 9, 5, 1, 3, 4]);
+		encodes(default::value(), default::deserialize, default::serialize, &[7, 0]);
+		let mut out = Output::new();
+		flags::serialize(&flags::value(), &mut out).unwrap();
+		assert_eq!(out.into_inner(), [1, 0, 1]);
+	}
+
+	macro_rules! encoded_like_runtime {
+		($sample:ident, $encoded:ident) => {{
+			let value = $sample::value();
+			let mut out = Output::new();
+			$sample::serialize(&value, &mut out).unwrap();
+			assert_eq!(out.into_inner(), $encoded::value(), stringify!($encoded));
+			let back = roundtrip($sample::deserialize, $sample::serialize, &$encoded::value());
+			assert_eq!(back, Some(value), stringify!($encoded));
+		}};
+	}
+
+	#[test]
+	fn compile_time_serialization_matches_generated_serializers() {
+		encoded_like_runtime!(pds_sample_counted, pds_encoded_counted);
+		encoded_like_runtime!(pds_sample_words, pds_encoded_words);
+		encoded_like_runtime!(pds_sample_choices, pds_encoded_choices);
+		encoded_like_runtime!(pds_sample_tagged, pds_encoded_tagged);
+		encoded_like_runtime!(pds_sample_default, pds_encoded_default);
+		encoded_like_runtime!(pds_sample_packed, pds_encoded_packed);
+		encoded_like_runtime!(pds_sample_flagset, pds_encoded_flagset);
+		encoded_like_runtime!(pds_sample_blob, pds_encoded_blob);
+		encoded_like_runtime!(pds_sample_holders, pds_encoded_holders);
+		encoded_like_runtime!(pds_sample_loop, pds_encoded_loop);
+		encoded_like_runtime!(pds_sample_top_bits, pds_encoded_top_bits);
+		let widened = pds_encoded_widened::value();
+		let v = roundtrip(pds_Widened::deserialize, pds_Widened::serialize, &widened).unwrap();
+		assert_eq!(v.items, vec![1, 2, 3, 0xffff]);
+	}
 }

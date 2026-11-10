@@ -1,4 +1,4 @@
-use crate::ast::{BinOp, FieldRef, Ident, Path};
+use crate::ast::{BinOp, FieldRef, Float, Ident, Path};
 use crate::specializer::Registry;
 use std::{cell::Cell, collections::BTreeMap};
 mod from_ast;
@@ -130,8 +130,10 @@ impl Traverse for Namespace {
 #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq)]
 pub enum Value {
 	Number(i128),
+	Float(Float),
 	Bool(bool),
 	String(String),
+	Bytes(Vec<u8>),
 	UnionDescriminator(Ident),
 }
 impl Traverse for Value {
@@ -284,11 +286,17 @@ pub enum Expr {
 	Const(Value),
 	Binary(BinOp, Box<Expr>, Box<Expr>),
 	Cast(Box<Expr>, Box<TypeKind>),
+	Record(Vec<(Ident, Expr)>),
+	List(Vec<Expr>),
+	Serialized(Box<Expr>),
 }
 impl Expr {
 	pub fn types_mut(&mut self) -> Vec<&mut TypeKind> {
 		match self {
 			Expr::Field(_) | Expr::Const(_) => vec![],
+			Expr::Record(fields) => fields.iter_mut().flat_map(|(_, e)| e.types_mut()).collect(),
+			Expr::List(items) => items.iter_mut().flat_map(Expr::types_mut).collect(),
+			Expr::Serialized(e) => e.types_mut(),
 			Expr::Binary(_, a, b) => {
 				let mut out = a.types_mut();
 				out.extend(b.types_mut());
@@ -320,6 +328,20 @@ impl Traverse for Expr {
 				e.traverse(visitor, skip, reg)?;
 				t.traverse(visitor, skip, reg)
 			}
+			Expr::Record(fields) => {
+				for (n, e) in fields {
+					e.traverse(visitor, skip, reg)
+						.with_context(|| format!("field {n:?}"))?;
+				}
+				Ok(())
+			}
+			Expr::List(items) => {
+				for e in items {
+					e.traverse(visitor, skip, reg)?;
+				}
+				Ok(())
+			}
+			Expr::Serialized(e) => e.traverse(visitor, skip, reg),
 		}
 	}
 }

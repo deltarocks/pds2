@@ -1,14 +1,18 @@
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
+use super::encode::{Encoder, Encoding, Val};
+use super::expr::{Elaborator, ValueModel};
 use super::union::{self, TagView, UnionView};
-use super::{AstHir, BoxCost, Embed, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor};
+use super::{
+	AstHir, BoxCost, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor,
+};
 use crate::ast::{FieldRefSegment, Ident};
 use crate::generator::common::local;
 use crate::generator::rust::rname;
 use crate::hir::{self, HirSpecializerCtx, TypeId};
-use crate::mir::{self, Expr, TypeKind, TypeMap};
+use crate::mir::{self, Construction, Expr, TypeKind, TypeMap};
 
 pub struct Container;
 
@@ -64,6 +68,76 @@ impl AstHir for Container {
 				Ok((name.clone(), ty))
 			})
 			.collect()
+	}
+}
+
+impl ValueModel for Container {
+	fn construct(
+		&self,
+		cx: &Elaborator,
+		id: TypeId,
+		native: &mir::NativeType,
+		value: &Expr,
+	) -> Result<Construction> {
+		let Expr::Record(given) = value else {
+			bail!("{} is written as a record `(field: value, ...)`", cx.name(id));
+		};
+		let fields = view(native).ok_or_else(|| anyhow!("malformed container"))?;
+		let stored: Vec<&ContainerField> = fields.iter().filter(|f| f.load_from.is_none()).collect();
+		for (n, _) in given {
+			ensure!(
+				stored.iter().any(|f| f.name == n),
+				"{} has no stored field {n:?}",
+				cx.name(id)
+			);
+		}
+		let mut out = Vec::new();
+		for f in stored {
+			let e = match given.iter().find(|(n, _)| n == f.name) {
+				Some((_, e)) => cx
+					.coerce(e.clone(), f.ty.target)
+					.with_context(|| format!("field {:?}", f.name))?,
+				None if cx.types.is_void(f.ty.target) => cx.build(f.ty.target, &Expr::Record(vec![]))?,
+				None => bail!("{} needs field {:?}", cx.name(id), f.name),
+			};
+			out.push((f.name.clone(), e));
+		}
+		Ok(Construction::Record(out))
+	}
+}
+
+impl Encoder for Container {
+	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
+		let fields = view(v.native).ok_or_else(|| anyhow!("malformed container"))?;
+		let scope = v.scope();
+		for f in &fields {
+			self.field(cx, v, f.name)
+				.and_then(|value| cx.encode_use(f.ty, &value, &scope, out))
+				.with_context(|| format!("field {:?}", f.name))?;
+		}
+		Ok(())
+	}
+	fn field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
+		let fields = view(v.native).ok_or_else(|| anyhow!("malformed container"))?;
+		let f = fields
+			.iter()
+			.find(|f| f.name == name)
+			.ok_or_else(|| anyhow!("{} has no field {name:?}", cx.name(v.id)))?;
+		match f.load_from {
+			Some(from) => cx.typed(cx.eval(from, &v.scope())?, f.ty.target),
+			None => record_of(v.c)?
+				.iter()
+				.find(|(n, _)| n == name)
+				.map(|(_, e)| e.clone())
+				.ok_or_else(|| anyhow!("{} value lacks field {name:?}", cx.name(v.id))),
+		}
+	}
+}
+
+fn record_of(c: &Construction) -> Result<&[(Ident, Expr)]> {
+	match c {
+		Construction::Record(fields) => Ok(fields),
+		c => bail!("container is constructed from a record, got {c:?}"),
 	}
 }
 
@@ -202,6 +276,20 @@ impl NativeCodegen<Rust> for Container {
 			}
 		})
 	}
+	fn construct(
+		&self,
+		cx: &LowerCx<Rust>,
+		id: TypeId,
+		_native: &mir::NativeType,
+		c: &Construction,
+	) -> Result<rust::Tokens> {
+		let mut parts = Vec::new();
+		for (n, e) in record_of(c)? {
+			let value = cx.names.slot_new(id, n, (cx.lower)(e)?);
+			parts.push(quote!($(rname(n)): $value));
+		}
+		Ok(quote!($(cx.names.ty(id)) { $(for p in parts join(, ) => $p) }))
+	}
 }
 
 impl NativeCodegen<JavaScript> for Container {
@@ -264,5 +352,18 @@ impl NativeCodegen<JavaScript> for Container {
 				return 0$(for f in fields.iter() => $[' ']+ $(names.size_of(f.ty.target))($(value_of(f))));
 			}
 		})
+	}
+	fn construct(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &Construction,
+	) -> Result<js::Tokens> {
+		let mut parts = Vec::new();
+		for (n, e) in record_of(c)? {
+			parts.push(quote!($(n.as_str()): $((cx.lower)(e)?)));
+		}
+		Ok(quote!({ $(for p in parts join(, ) => $p) }))
 	}
 }

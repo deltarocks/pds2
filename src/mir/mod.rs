@@ -97,8 +97,10 @@ impl TypeKind {
 pub enum Value {
 	Unsigned(u128),
 	Signed(i128),
+	Float(f64),
 	Bool(bool),
 	String(String),
+	Bytes(Vec<u8>),
 	UnionDescriminator(Ident),
 }
 

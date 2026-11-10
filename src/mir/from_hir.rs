@@ -39,6 +39,8 @@ impl Value {
 	fn from_hir(hir: &hir::Value) -> Self {
 		match hir {
 			hir::Value::Number(n) => Self::Signed(*n),
+			hir::Value::Float(f) => Self::Float(f.0),
+			hir::Value::Bytes(b) => Self::Bytes(b.clone()),
 			hir::Value::Bool(b) => Self::Bool(*b),
 			hir::Value::String(s) => Self::String(s.clone()),
 			hir::Value::UnionDescriminator(ident) => Self::UnionDescriminator(ident.clone()),
@@ -161,6 +163,14 @@ impl Expr {
 			hir::Expr::Binary(op, a, b) => {
 				Expr::Binary(*op, Box::new(Expr::from_hir(a)), Box::new(Expr::from_hir(b)))
 			}
+			hir::Expr::Record(fields) => Expr::Record(
+				fields
+					.iter()
+					.map(|(n, e)| (n.clone(), Expr::from_hir(e)))
+					.collect(),
+			),
+			hir::Expr::List(items) => Expr::List(items.iter().map(Expr::from_hir).collect()),
+			hir::Expr::Serialized(e) => Expr::Serialized(Box::new(Expr::from_hir(e))),
 			hir::Expr::Cast(e, t) => {
 				Expr::Cast(Box::new(Expr::from_hir(e)), Type::from_hir(t).target)
 			}

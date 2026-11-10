@@ -1,13 +1,17 @@
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
+use super::encode::{write_varint, Encoder, Encoding, Val};
+use super::expr::{Elaborator, ValueModel};
 use super::union::{self, TagView};
-use super::{AstHir, BoxCost, Embed, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor};
+use super::{
+	AstHir, BoxCost, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor,
+};
 use crate::ast::Ident;
 use crate::generator::rust::rname;
 use crate::hir::{self, HirSpecializerCtx, TypeId};
-use crate::mir::{self, TypeKind, TypeMap, Value};
+use crate::mir::{self, Construction, Expr, TypeKind, TypeMap, Value};
 
 pub struct Message;
 
@@ -133,6 +137,138 @@ impl NativeLayout for Message {
 			v.slot(f.name, f.ty.target, embed);
 		}
 	}
+}
+
+impl ValueModel for Message {
+	fn construct(
+		&self,
+		cx: &Elaborator,
+		id: TypeId,
+		native: &mir::NativeType,
+		value: &Expr,
+	) -> Result<Construction> {
+		let Expr::Record(given) = value else {
+			bail!("{} is written as a record `(field: value, ...)`", cx.name(id));
+		};
+		let fields = view(native).ok_or_else(|| anyhow!("malformed message"))?;
+		let mut groups = Vec::new();
+		let mut out = Vec::new();
+		for (n, e) in given {
+			let f = fields
+				.iter()
+				.find(|f| f.name == n)
+				.ok_or_else(|| anyhow!("{} has no field {n:?}", cx.name(id)))?;
+			let e = match f.label {
+				Label::Repeated => {
+					let Expr::List(items) = e else {
+						bail!("repeated field {n:?} is written as a list `[...]`");
+					};
+					Expr::List(
+						items
+							.iter()
+							.enumerate()
+							.map(|(i, item)| {
+								cx.coerce(item.clone(), f.ty.target)
+									.with_context(|| format!("item {i}"))
+							})
+							.collect::<Result<_>>()
+							.with_context(|| format!("field {n:?}"))?,
+					)
+				}
+				Label::Oneof(g) => {
+					ensure!(!groups.contains(&g), "oneof {g:?} is set twice, by {n:?}");
+					groups.push(g);
+					cx.coerce(e.clone(), f.ty.target)
+						.with_context(|| format!("field {n:?}"))?
+				}
+				Label::Single => cx
+					.coerce(e.clone(), f.ty.target)
+					.with_context(|| format!("field {n:?}"))?,
+			};
+			out.push((n.clone(), e));
+		}
+		Ok(Construction::Record(out))
+	}
+}
+
+impl Encoder for Message {
+	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
+		let Plan {
+			fields,
+			wires,
+			by_number,
+			..
+		} = plan(cx.types(), v.native)?;
+		let given = entries(&fields, v.c)?;
+		let scope = v.scope();
+		let key = |out: &mut Vec<u8>, number: u32, wire: u8| {
+			write_varint(out, (u64::from(number) << 3) | u64::from(wire))
+		};
+		let framed = |out: &mut Vec<u8>, ty: &mir::Type, value: &Expr| -> Result<()> {
+			let mut buf = Vec::new();
+			cx.encode_use(ty, value, &scope, &mut buf)?;
+			write_varint(out, buf.len() as u64);
+			out.extend(buf);
+			Ok(())
+		};
+		for &i in &by_number {
+			let f = &fields[i];
+			let Some((_, value)) = given.iter().find(|(g, _)| g.name == f.name) else {
+				continue;
+			};
+			let wire = wires[i];
+			let field = || format!("field {:?}", f.name);
+			match f.label {
+				Label::Repeated => {
+					let Expr::List(items) = value else {
+						bail!("repeated field {:?} is not a list", f.name);
+					};
+					if wire == Wire::Len {
+						for item in items {
+							key(out, f.number, Wire::Len as u8);
+							framed(out, f.ty, item).with_context(field)?;
+						}
+					} else if !items.is_empty() {
+						let mut buf = Vec::new();
+						for item in items {
+							cx.encode_use(f.ty, item, &scope, &mut buf).with_context(field)?;
+						}
+						key(out, f.number, Wire::Len as u8);
+						write_varint(out, buf.len() as u64);
+						out.extend(buf);
+					}
+				}
+				_ => {
+					key(out, f.number, wire as u8);
+					if wire == Wire::Len {
+						framed(out, f.ty, value).with_context(field)?;
+					} else {
+						cx.encode_use(f.ty, value, &scope, out).with_context(field)?;
+					}
+				}
+			}
+		}
+		Ok(())
+	}
+}
+
+fn entries<'f, 'c>(
+	fields: &'f [MessageField<'f>],
+	c: &'c Construction,
+) -> Result<Vec<(&'f MessageField<'f>, &'c Expr)>> {
+	let Construction::Record(given) = c else {
+		bail!("message is constructed from a record, got {c:?}");
+	};
+	given
+		.iter()
+		.map(|(n, e)| {
+			let f = fields
+				.iter()
+				.find(|f| f.name == n)
+				.ok_or_else(|| anyhow!("no message field {n:?}"))?;
+			Ok((f, e))
+		})
+		.collect()
 }
 
 struct Plan<'a> {
@@ -350,6 +486,32 @@ impl NativeCodegen<Rust> for Message {
 			}
 		})
 	}
+	fn construct(
+		&self,
+		cx: &LowerCx<Rust>,
+		id: TypeId,
+		native: &mir::NativeType,
+		c: &Construction,
+	) -> Result<rust::Tokens> {
+		let fields = view(native).ok_or_else(|| anyhow!("malformed message"))?;
+		let mut parts = Vec::new();
+		for (f, e) in entries(&fields, c)? {
+			let value = (cx.lower)(e)?;
+			parts.push(match f.label {
+				Label::Single => {
+					quote!($(rname(f.name)): Some($(cx.names.slot_new(id, f.name, value))),)
+				}
+				Label::Repeated => quote!($(rname(f.name)): $value,),
+				Label::Oneof(g) => {
+					let g = Ident::new(g);
+					let member = cx.names.slot_new(id, f.name, value);
+					let group = cx.names.item(id, &rname(&g).to_string()?);
+					quote!($(rname(&g)): Some($group::$(rname(f.name))($member)),)
+				}
+			});
+		}
+		Ok(quote!($(cx.names.ty(id)) { $(for p in parts => $p) ..Default::default() }))
+	}
 }
 
 impl NativeCodegen<JavaScript> for Message {
@@ -532,5 +694,25 @@ impl NativeCodegen<JavaScript> for Message {
 				return n;
 			}
 		})
+	}
+	fn construct(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		native: &mir::NativeType,
+		c: &Construction,
+	) -> Result<js::Tokens> {
+		let fields = view(native).ok_or_else(|| anyhow!("malformed message"))?;
+		let mut parts = Vec::new();
+		for (f, e) in entries(&fields, c)? {
+			let value = (cx.lower)(e)?;
+			parts.push(match f.label {
+				Label::Single | Label::Repeated => quote!($(f.name.as_str()): $value),
+				Label::Oneof(g) => {
+					quote!($g: { kind: $(quoted(f.name.as_str())), value: $value })
+				}
+			});
+		}
+		Ok(quote!({ $(for p in parts join(, ) => $p) }))
 	}
 }

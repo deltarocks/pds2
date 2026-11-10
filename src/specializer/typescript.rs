@@ -44,7 +44,7 @@ fn typed_array(names: &dyn Names<JavaScript>, value: TypeId) -> Option<&'static 
 		Scalar::U64 => "BigUint64Array",
 		Scalar::F32 => "Float32Array",
 		Scalar::F64 => "Float64Array",
-		Scalar::Bool => return None,
+		Scalar::Bool | Scalar::String | Scalar::Bytes => return None,
 	})
 }
 
@@ -53,6 +53,19 @@ fn array_ty(names: &dyn Names<JavaScript>, value: TypeId) -> Tokens {
 		Some(a) => quote!($a),
 		None => quote!(Array<$(names.ty(value))>),
 	}
+}
+
+fn construct_array(
+	cx: &LowerCx<JavaScript>,
+	native: &mir::NativeType,
+	c: &mir::Construction,
+) -> Result<Tokens> {
+	let items = super::list_items(cx, c)?;
+	let list = quote!([$(for i in items join(, ) => $i)]);
+	Ok(match value_of(native).and_then(|v| typed_array(cx.names, v)) {
+		Some(a) => quote!(new $a($list)),
+		None => list,
+	})
 }
 
 fn wide(names: &dyn Names<JavaScript>, ty: TypeId) -> bool {
@@ -113,6 +126,15 @@ impl NativeCodegen<JavaScript> for Array {
 		names: &dyn Names<JavaScript>,
 	) -> Option<Tokens> {
 		Some(array_ty(names, value_of(native)?))
+	}
+	fn construct(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<Tokens> {
+		construct_array(cx, native, c)
 	}
 	fn generate(&self, ctx: &Ctx) -> Result<Tokens> {
 		let value_use = ctx
@@ -244,13 +266,22 @@ impl NativeCodegen<JavaScript> for OptionP {
 		c: &mir::Construction,
 	) -> Result<Tokens> {
 		let mir::Construction::Wrap(inner) = c else {
-			bail!("option is constructed from its value, got {c:?}");
+			return Ok(quote!(null));
 		};
 		Ok(cx.names.slot_new(id, &Ident::new(VALUE), (cx.lower)(inner)?))
 	}
 }
 
 impl NativeCodegen<JavaScript> for Buffer {
+	fn construct(
+		&self,
+		_cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<Tokens> {
+		super::reflect::construct_bytes_js(c)
+	}
 	fn inline_ty(
 		&self,
 		_id: TypeId,
@@ -301,6 +332,15 @@ impl NativeCodegen<JavaScript> for Buffer {
 }
 
 impl NativeCodegen<JavaScript> for PString {
+	fn construct(
+		&self,
+		_cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<Tokens> {
+		Ok(quote!($(quoted(super::reflect::string_of(c)?))))
+	}
 	fn inline_ty(
 		&self,
 		_id: TypeId,
@@ -334,6 +374,15 @@ impl NativeCodegen<JavaScript> for PString {
 }
 
 impl NativeCodegen<JavaScript> for Bitfield {
+	fn construct(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<Tokens> {
+		super::reflect::construct_object(cx, c)
+	}
 	fn generate(&self, ctx: &Ctx) -> Result<Tokens> {
 		let entries = bitfield_entries(&ctx.native.body)?;
 		let total: u32 = entries.iter().map(|e| e.size).sum();
@@ -398,6 +447,15 @@ impl NativeCodegen<JavaScript> for Bitfield {
 }
 
 impl NativeCodegen<JavaScript> for Bitflags {
+	fn construct(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<Tokens> {
+		super::reflect::construct_object(cx, c)
+	}
 	fn generate(&self, ctx: &Ctx) -> Result<Tokens> {
 		let value = ctx.specialization(VALUE)?;
 		let bit = |i: usize| format!("{:#x}n", 1u64 << i);
@@ -442,6 +500,16 @@ impl NativeCodegen<JavaScript> for Bitflags {
 }
 
 impl NativeCodegen<JavaScript> for RegistryEntryHolder {
+	fn construct(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<Tokens> {
+		let (kind, value) = super::reflect::holder_payload_js(cx, c, None)?;
+		Ok(quote!({ kind: $(quoted(kind)), value: $value }))
+	}
 	fn generate(&self, ctx: &Ctx) -> Result<Tokens> {
 		let varint = (ctx.resolve)("varint")
 			.ok_or_else(|| anyhow!("registryEntryHolder needs the `varint` native"))?;
@@ -484,6 +552,18 @@ impl NativeCodegen<JavaScript> for RegistryEntryHolder {
 }
 
 impl NativeCodegen<JavaScript> for RegistryEntryHolderSet {
+	fn construct(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<Tokens> {
+		let varint = cx.types.0.iter().find(|(_, d)| d.name.readable_name() == "varint").map(|(id, _)| *id);
+		let typed = varint.and_then(|v| typed_array(cx.names, v));
+		let (kind, value) = super::reflect::holder_payload_js(cx, c, typed)?;
+		Ok(quote!({ kind: $(quoted(kind)), value: $value }))
+	}
 	fn generate(&self, ctx: &Ctx) -> Result<Tokens> {
 		let varint = (ctx.resolve)("varint")
 			.ok_or_else(|| anyhow!("registryEntryHolderSet needs the `varint` native"))?;
@@ -565,6 +645,15 @@ impl NativeCodegen<JavaScript> for EntityMetadataLoop {
 	) -> Option<Tokens> {
 		Some(array_ty(names, value_of(native)?))
 	}
+	fn construct(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<Tokens> {
+		construct_array(cx, native, c)
+	}
 	fn generate(&self, ctx: &Ctx) -> Result<Tokens> {
 		let value_use = ctx
 			.specialization_use(VALUE)
@@ -574,7 +663,7 @@ impl NativeCodegen<JavaScript> for EntityMetadataLoop {
 			.inline_ty(ctx.id, ctx.native, ctx.names)
 			.context("terminated array type")?;
 		let (end_ty, end) = terminator(ctx)?;
-		let is_end = if ctx.names.scalar(end_ty).is_some() {
+		let is_end = if ctx.names.scalar(end_ty).is_some_and(|s| s != Scalar::Bytes) {
 			quote!(($(ctx.names.deserialize(end_ty))(input) === $(&end)))
 		} else {
 			quote!($(pds("equal"))($(ctx.names.deserialize(end_ty))(input), $(&end)))
@@ -613,6 +702,15 @@ impl NativeCodegen<JavaScript> for EntityMetadataLoop {
 }
 
 impl NativeCodegen<JavaScript> for TopBitSetTerminatedArray {
+	fn construct(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<Tokens> {
+		construct_array(cx, native, c)
+	}
 	fn inline_ty(
 		&self,
 		_id: TypeId,

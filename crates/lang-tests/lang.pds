@@ -1,14 +1,97 @@
-@scalar u8
+@scalar u8 @encoding be
 def_native(u8);
 
-@scalar u16
+@scalar i8 @encoding be
+def_native(i8);
+
+@scalar u16 @encoding be
 def_native(u16);
 
-@scalar bool
+@scalar bool @encoding be
 def_native(bool);
+
+@scalar i32 @encoding varint64
+def_native(varint);
+
+@scalar bytes @encoding raw
+def_native(bytes);
 
 def_native(void) {
 	is_void;
+};
+
+@specializer bitfield
+def_native(bitfield) {
+	body {
+		item(field) {
+			argument(size);
+
+			argument(signed) => false;
+		};
+	};
+};
+
+@specializer bitflags
+def_native(bitflags) {
+	type(Value);
+
+	body {
+		item(flag);
+	};
+};
+
+@specializer buffer
+def_native(buffer) {
+	variant(inline) {
+		type(Count);
+	};
+
+	variant(sized) {
+		argument(count);
+	};
+};
+
+@specializer pstring
+def_native(pstring) {
+	type(Count);
+};
+
+@specializer registryEntryHolder
+def_native(registryEntryHolder) {
+	argument(baseName);
+
+	body {
+		item(field) {
+			type(Value);
+		};
+	};
+};
+
+@specializer registryEntryHolderSet
+def_native(registryEntryHolderSet) {
+	argument(baseName);
+
+	body {
+		item(field) {
+			type(Value);
+		};
+	};
+};
+
+@specializer entityMetadataLoop
+def_native(entityMetadataLoop) {
+	argument(end) => End;
+
+	type(End);
+
+	type(Value);
+
+	body;
+};
+
+@specializer topBitSetTerminatedArray
+def_native(topBitSetTerminatedArray) {
+	type(Value);
 };
 
 @specializer array
@@ -34,6 +117,15 @@ def_native(terminated) {
 	type(End);
 
 	argument(end) => End;
+
+	body;
+};
+
+@specializer const
+def_native(const) {
+	type(Value);
+
+	argument(value) => Value;
 
 	body;
 };
@@ -149,3 +241,123 @@ def(Tagged) {
 		default;
 	};
 };
+
+def(sample_counted) => const(value: Counted(data: [7, 8]));
+
+def(sample_words) => const(value: Words([1, 0xff00]));
+
+def(sample_choices) => const(value: Choices(k: 2, picked: (two: 9), fixed: (two: 7)));
+
+def(sample_tagged) => const(value: Tagged(k: (b: 9), v: (y: 5), o: 3, w: (p: 4)));
+
+def(sample_default) => const(value: Tagged(k: 7, v: z, o: none, w: (default: none)));
+
+def(sample_flags) => const(value: [true, false, true]) => array(count: 3) => bool;
+
+def(Packed) {
+	export;
+} => bitfield {
+	field(x, size: 4, signed: true);
+
+	field(y, size: 12);
+};
+
+def(Flags) {
+	export;
+} => bitflags {
+	flag(a);
+
+	flag(b);
+
+	flag(c);
+} => u8;
+
+def(Blob) {
+	export;
+} => container {
+	field(raw) => buffer(Count: u8);
+
+	field(n) => u8;
+
+	field(fixed) => buffer(count: ../n);
+
+	field(name) => pstring(Count: u16);
+
+	field(rest) => bytes;
+};
+
+def(Holders) {
+	export;
+} => container {
+	field(by_id) => registryEntryHolder(baseName: "aId") {
+		field(data) => u16;
+	};
+
+	field(inline) => registryEntryHolder(baseName: "aId") {
+		field(data) => u16;
+	};
+
+	field(ids) => registryEntryHolderSet(baseName: "sId") {
+		field(name) => pstring(Count: u8);
+	};
+
+	field(named) => registryEntryHolderSet(baseName: "sId") {
+		field(name) => pstring(Count: u8);
+	};
+};
+
+def(Loop) {
+	export;
+} => entityMetadataLoop(end: u8(255)) => u8;
+
+def(TopBits) {
+	export;
+} => topBitSetTerminatedArray => container {
+	field(slot) => u8;
+
+	field(v) => u16;
+};
+
+def(sample_packed) => const(value: Packed(x: -3, y: 4000));
+
+def(encoded_packed) => const(value: serialized(Packed(x: -3, y: 4000))) => bytes;
+
+def(sample_flagset) => const(value: Flags([a, c]));
+
+def(encoded_flagset) => const(value: serialized(Flags([a, c]))) => bytes;
+
+def(sample_blob) => const(value: Blob(raw: b"\x01\xff", n: 3, fixed: "abc", name: "pds", rest: b"!"));
+
+def(encoded_blob) => const(
+	value: serialized(Blob(raw: b"\x01\xff", n: 3, fixed: "abc", name: "pds", rest: b"!")),
+) => bytes;
+
+def(sample_holders) => const(
+	value: Holders(by_id: (id: 7), inline: (data: 513), ids: (ids: [1, 300]), named: (name: "tag")),
+);
+
+def(encoded_holders) => const(
+	value: serialized(
+		Holders(by_id: (id: 7), inline: (data: 513), ids: (ids: [1, 300]), named: (name: "tag")),
+	),
+) => bytes;
+
+def(sample_loop) => const(value: Loop([1, 2, 254]));
+
+def(encoded_loop) => const(value: serialized(Loop([1, 2, 254]))) => bytes;
+
+def(sample_top_bits) => const(value: TopBits([(slot: 1, v: 10), (slot: 5, v: 300)]));
+
+def(encoded_top_bits) => const(value: serialized(TopBits([(slot: 1, v: 10), (slot: 5, v: 300)]))) => bytes;
+
+def(encoded_counted) => const(value: serialized(Counted(data: [7, 8]))) => bytes;
+
+def(encoded_words) => const(value: serialized(Words([1, 0xff00]))) => bytes;
+
+def(encoded_choices) => const(value: serialized(Choices(k: 2, picked: (two: 9), fixed: (two: 7)))) => bytes;
+
+def(encoded_tagged) => const(value: serialized(Tagged(k: (b: 9), v: (y: 5), o: 3, w: (p: 4)))) => bytes;
+
+def(encoded_default) => const(value: serialized(Tagged(k: 7, v: z, o: none, w: (default: none)))) => bytes;
+
+def(encoded_widened) => const(value: serialized(Widened(n: 2, items: [1, 2, 3, 0xffff]))) => bytes;

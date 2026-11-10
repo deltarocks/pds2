@@ -69,6 +69,7 @@ pub struct NativeSig {
 	/// the native carries no data (`is_void;`)
 	pub is_void: bool,
 	pub scalar: Option<String>,
+	pub encoding: Option<&'static str>,
 	pub default: NativeSigVariant,
 	pub variants: BTreeMap<String, NativeSigVariant>,
 }
@@ -754,6 +755,12 @@ fn upgrade_namespace_inner(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::B
 					attributes.insert(
 						Ident::new("scalar"),
 						vec![ast::Value::new_simple_item(scalar.as_str())],
+					);
+				}
+				if let Some(encoding) = sig.encoding {
+					attributes.insert(
+						Ident::new("encoding"),
+						vec![ast::Value::new_simple_item(encoding)],
 					);
 				}
 				statements.push(Statement {

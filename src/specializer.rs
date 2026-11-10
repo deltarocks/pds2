@@ -6,13 +6,17 @@ use genco::prelude::*;
 use genco::Tokens;
 use tracing::info;
 
+mod constant;
 pub mod container;
+pub mod encode;
 pub mod expr;
 pub mod message;
+mod reflect;
 mod typescript;
 pub mod union;
 
 use container::Container;
+use encode::Encoder;
 use expr::{Elaborator, ValueModel};
 
 use crate::ast::{self, Ident, Statement};
@@ -60,11 +64,18 @@ pub enum Scalar {
 	F32,
 	F64,
 	Bool,
+	String,
+	Bytes,
 }
 impl Scalar {
+	pub fn is_number(self) -> bool {
+		!matches!(self, Self::Bool | Self::String | Self::Bytes)
+	}
 	pub fn parse(s: &str) -> Option<Self> {
 		Some(match s {
 			"bool" => Self::Bool,
+			"string" => Self::String,
+			"bytes" => Self::Bytes,
 			"i8" => Self::I8,
 			"u8" => Self::U8,
 			"i16" => Self::I16,
@@ -307,9 +318,16 @@ pub struct Registry {
 	pub(crate) codegen_rust: HashMap<String, Box<dyn NativeCodegen<Rust>>>,
 	pub(crate) codegen_ts: HashMap<String, Box<dyn NativeCodegen<JavaScript>>>,
 	pub(crate) value: HashMap<String, Box<dyn ValueModel>>,
+	pub(crate) encoders: HashMap<String, Box<dyn Encoder>>,
 }
 
 impl Registry {
+	pub fn register_encoder(&mut self, name: &str, encoder: impl Encoder + 'static) {
+		self.encoders.insert(name.to_owned(), Box::new(encoder));
+	}
+	pub fn encoder(&self, name: &str) -> Option<&dyn Encoder> {
+		self.encoders.get(name).map(|b| b.as_ref())
+	}
 	pub fn register_value(&mut self, name: &str, model: impl ValueModel + 'static) {
 		self.value.insert(name.to_owned(), Box::new(model));
 	}
@@ -364,6 +382,43 @@ pub fn register_protodef_types(reg: &mut Registry) {
 	reg.register_upgrade(union::Union);
 	reg.register_value("union", union::Union);
 	reg.register_value("option", OptionP);
+	reg.register_value("container", Container);
+	reg.register_value("array", Array);
+	reg.register_value("terminated", EntityMetadataLoop);
+	reg.register_value("message", message::Message);
+	reg.register_value("bitfield", Bitfield);
+	reg.register_value("bitflags", Bitflags);
+	reg.register_value("buffer", Buffer);
+	reg.register_value("pstring", PString);
+	reg.register_value("registryEntryHolder", RegistryEntryHolder);
+	reg.register_value("registryEntryHolderSet", RegistryEntryHolderSet);
+	reg.register_value("entityMetadataLoop", EntityMetadataLoop);
+	reg.register_value("topBitSetTerminatedArray", TopBitSetTerminatedArray);
+	reg.register_value("const", constant::Const);
+
+	for e in encode::SCALAR_ENCODINGS {
+		reg.register_encoder(e, encode::ScalarEncoding(e));
+	}
+	reg.register_encoder("container", Container);
+	reg.register_encoder("union", union::Union);
+	reg.register_encoder("message", message::Message);
+	reg.register_encoder("const", constant::Const);
+	reg.register_encoder("option", OptionP);
+	reg.register_encoder("array", Array);
+	reg.register_encoder("terminated", EntityMetadataLoop);
+	reg.register_encoder("entityMetadataLoop", EntityMetadataLoop);
+	reg.register_encoder("topBitSetTerminatedArray", TopBitSetTerminatedArray);
+	reg.register_encoder("bitfield", Bitfield);
+	reg.register_encoder("bitflags", Bitflags);
+	reg.register_encoder("buffer", Buffer);
+	reg.register_encoder("pstring", PString);
+	reg.register_encoder("registryEntryHolder", RegistryEntryHolder);
+	reg.register_encoder("registryEntryHolderSet", RegistryEntryHolderSet);
+
+	reg.register_asthir("const", constant::Const);
+	reg.register_layout("const", constant::Const);
+	reg.register_codegen::<Rust>("const", constant::Const);
+	reg.register_codegen::<JavaScript>("const", constant::Const);
 
 	reg.register_layout("bitfield", Bitfield);
 	reg.register_layout("bitflags", Bitflags);
@@ -434,7 +489,7 @@ macro_rules! trivial_upgrade {
 			}
 		}
 	};
-	($struct:ident => $name:literal, scalar: $scalar:literal) => {
+	($struct:ident => $name:literal, scalar: $scalar:literal, encoding: $encoding:literal) => {
 		struct $struct;
 		impl Upgrade for $struct {
 			fn name(&self) -> String {
@@ -443,6 +498,7 @@ macro_rules! trivial_upgrade {
 			fn sig(&self) -> NativeSig {
 				NativeSig {
 					scalar: Some($scalar.to_owned()),
+					encoding: Some($encoding),
 					..Default::default()
 				}
 			}
@@ -462,18 +518,18 @@ impl Upgrade for Void {
 	}
 }
 
-trivial_upgrade!(U8P => "u8", scalar: "u8");
-trivial_upgrade!(U16P => "u16", scalar: "u16");
-trivial_upgrade!(U32P => "u32", scalar: "u32");
-trivial_upgrade!(U64P => "u64", scalar: "u64");
-trivial_upgrade!(I8P => "i8", scalar: "i8");
-trivial_upgrade!(I16P => "i16", scalar: "i16");
-trivial_upgrade!(I32P => "i32", scalar: "i32");
-trivial_upgrade!(I64P => "i64", scalar: "i64");
-trivial_upgrade!(F32P => "f32", scalar: "f32");
-trivial_upgrade!(F64P => "f64", scalar: "f64");
-trivial_upgrade!(Varint => "varint", scalar: "i32");
-trivial_upgrade!(Varlong => "varlong", scalar: "i64");
+trivial_upgrade!(U8P => "u8", scalar: "u8", encoding: "be");
+trivial_upgrade!(U16P => "u16", scalar: "u16", encoding: "be");
+trivial_upgrade!(U32P => "u32", scalar: "u32", encoding: "be");
+trivial_upgrade!(U64P => "u64", scalar: "u64", encoding: "be");
+trivial_upgrade!(I8P => "i8", scalar: "i8", encoding: "be");
+trivial_upgrade!(I16P => "i16", scalar: "i16", encoding: "be");
+trivial_upgrade!(I32P => "i32", scalar: "i32", encoding: "be");
+trivial_upgrade!(I64P => "i64", scalar: "i64", encoding: "be");
+trivial_upgrade!(F32P => "f32", scalar: "f32", encoding: "be");
+trivial_upgrade!(F64P => "f64", scalar: "f64", encoding: "be");
+trivial_upgrade!(Varint => "varint", scalar: "i32", encoding: "varint");
+trivial_upgrade!(Varlong => "varlong", scalar: "i64", encoding: "varint");
 
 struct TopBitSetTerminatedArray;
 impl NativeLayout for TopBitSetTerminatedArray {
@@ -482,6 +538,15 @@ impl NativeLayout for TopBitSetTerminatedArray {
 	}
 }
 impl NativeCodegen<Rust> for TopBitSetTerminatedArray {
+	fn construct(
+		&self,
+		cx: &LowerCx<Rust>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<rust::Tokens> {
+		construct_vec(cx, c)
+	}
 	fn inline_ty(
 		&self,
 		_id: TypeId,
@@ -643,6 +708,15 @@ impl NativeLayout for Bitfield {
 	}
 }
 impl NativeCodegen<Rust> for Bitfield {
+	fn construct(
+		&self,
+		cx: &LowerCx<Rust>,
+		id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<rust::Tokens> {
+		reflect::construct_struct(cx, id, c)
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let entries = bitfield_entries(&ctx.native.body)?;
 		let total: u32 = entries.iter().map(|e| e.size).sum();
@@ -722,7 +796,7 @@ fn param_ty(ctx: &NativeCodegenCtx<Rust>, id: TypeId) -> rust::Tokens {
 }
 
 /// the `crate::pds` IO types every generated module uses
-fn pds_io() -> (rust::Import, rust::Import, rust::Import) {
+pub(crate) fn pds_io() -> (rust::Import, rust::Import, rust::Import) {
 	(
 		rust::import("crate::pds", "Input"),
 		rust::import("crate::pds", "Output"),
@@ -807,6 +881,15 @@ impl NativeLayout for Bitflags {
 	}
 }
 impl NativeCodegen<Rust> for Bitflags {
+	fn construct(
+		&self,
+		cx: &LowerCx<Rust>,
+		id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<rust::Tokens> {
+		reflect::construct_struct(cx, id, c)
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let value = ctx.specialization("Value")?;
 		// flag bit i = 1 << i, in declaration order
@@ -959,6 +1042,15 @@ impl NativeLayout for RegistryEntryHolder {
 	}
 }
 impl NativeCodegen<Rust> for RegistryEntryHolder {
+	fn construct(
+		&self,
+		cx: &LowerCx<Rust>,
+		id: TypeId,
+		native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<rust::Tokens> {
+		reflect::construct_holder_rust(cx, id, native, c)
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let varint = (ctx.resolve)("varint")
 			.ok_or_else(|| anyhow!("registryEntryHolder needs the `varint` native"))?;
@@ -1042,6 +1134,15 @@ impl NativeLayout for RegistryEntryHolderSet {
 	}
 }
 impl NativeCodegen<Rust> for RegistryEntryHolderSet {
+	fn construct(
+		&self,
+		cx: &LowerCx<Rust>,
+		id: TypeId,
+		native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<rust::Tokens> {
+		reflect::construct_holder_rust(cx, id, native, c)
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let varint = (ctx.resolve)("varint")
 			.ok_or_else(|| anyhow!("registryEntryHolderSet needs the `varint` native"))?;
@@ -1130,6 +1231,61 @@ impl NativeLayout for Array {
 		visit_specialization(native, VALUE, Embed::Indirect, v);
 	}
 }
+fn list_value(
+	cx: &Elaborator,
+	id: TypeId,
+	native: &mir::NativeType,
+	value: &mir::Expr,
+) -> Result<mir::Construction> {
+	let mir::Expr::List(items) = value else {
+		bail!("{} is written as a list `[...]`", cx.name(id));
+	};
+	let elem = specialization_use(native, VALUE)
+		.ok_or_else(|| anyhow!("list without a value type"))?
+		.target;
+	let items = items
+		.iter()
+		.enumerate()
+		.map(|(i, e)| cx.coerce(e.clone(), elem).with_context(|| format!("item {i}")))
+		.collect::<Result<_>>()?;
+	Ok(mir::Construction::List(items))
+}
+
+fn list_items<'c, L: Lang>(cx: &LowerCx<L>, c: &'c mir::Construction) -> Result<Vec<Tokens<L>>> {
+	let mir::Construction::List(items) = c else {
+		bail!("list is constructed from items, got {c:?}");
+	};
+	items.iter().map(|e| (cx.lower)(e)).collect()
+}
+
+fn construct_vec(cx: &LowerCx<Rust>, c: &mir::Construction) -> Result<rust::Tokens> {
+	let items = list_items(cx, c)?;
+	Ok(quote!(vec![$(for i in items join(, ) => $i)]))
+}
+
+impl ValueModel for Array {
+	fn construct(
+		&self,
+		cx: &Elaborator,
+		id: TypeId,
+		native: &mir::NativeType,
+		value: &mir::Expr,
+	) -> Result<mir::Construction> {
+		list_value(cx, id, native, value)
+	}
+}
+impl ValueModel for EntityMetadataLoop {
+	fn construct(
+		&self,
+		cx: &Elaborator,
+		id: TypeId,
+		native: &mir::NativeType,
+		value: &mir::Expr,
+	) -> Result<mir::Construction> {
+		list_value(cx, id, native, value)
+	}
+}
+
 impl NativeCodegen<Rust> for Array {
 	fn inline_ty(
 		&self,
@@ -1138,6 +1294,15 @@ impl NativeCodegen<Rust> for Array {
 		names: &dyn Names<Rust>,
 	) -> Option<rust::Tokens> {
 		vec_of_value(native, names)
+	}
+	fn construct(
+		&self,
+		cx: &LowerCx<Rust>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<rust::Tokens> {
+		construct_vec(cx, c)
 	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let value_use = ctx
@@ -1263,6 +1428,7 @@ impl Upgrade for Array {
 			specializer: Some("array".to_owned()),
 			is_void: false,
 			scalar: None,
+			encoding: None,
 			default: NativeSigVariant {
 				value_generic: true,
 				..Default::default()
@@ -1291,6 +1457,15 @@ impl NativeLayout for Buffer {
 	fn visit(&self, _native: &mir::NativeType, _v: &mut dyn SlotVisitor) {}
 }
 impl NativeCodegen<Rust> for Buffer {
+	fn construct(
+		&self,
+		_cx: &LowerCx<Rust>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<rust::Tokens> {
+		reflect::construct_bytes_rust(c)
+	}
 	fn inline_ty(
 		&self,
 		_id: TypeId,
@@ -1420,6 +1595,15 @@ impl NativeCodegen<Rust> for EntityMetadataLoop {
 		names: &dyn Names<Rust>,
 	) -> Option<rust::Tokens> {
 		vec_of_value(native, names)
+	}
+	fn construct(
+		&self,
+		cx: &LowerCx<Rust>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<rust::Tokens> {
+		construct_vec(cx, c)
 	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let value_use = ctx
@@ -1578,7 +1762,7 @@ impl NativeCodegen<Rust> for OptionP {
 		c: &mir::Construction,
 	) -> Result<rust::Tokens> {
 		let mir::Construction::Wrap(inner) = c else {
-			bail!("option is constructed from its value, got {c:?}");
+			return Ok(quote!(None));
 		};
 		let value = cx.names.slot_new(id, &Ident::new(VALUE), (cx.lower)(inner)?);
 		Ok(quote!(Some($value)))
@@ -1590,10 +1774,15 @@ impl ValueModel for OptionP {
 		cx: &Elaborator,
 		_id: TypeId,
 		native: &mir::NativeType,
-		value: &mir::Value,
-	) -> Option<mir::Construction> {
-		let inner = specialization_use(native, VALUE)?.target;
-		Some(mir::Construction::Wrap(Box::new(cx.construct(inner, value)?)))
+		value: &mir::Expr,
+	) -> Result<mir::Construction> {
+		if matches!(value, mir::Expr::Const(mir::Value::UnionDescriminator(n)) if n.as_str() == "none") {
+			return Ok(mir::Construction::Variant(Ident::new("none"), vec![]));
+		}
+		let inner = specialization_use(native, VALUE)
+			.ok_or_else(|| anyhow!("option without a value type"))?
+			.target;
+		Ok(mir::Construction::Wrap(Box::new(cx.coerce(value.clone(), inner)?)))
 	}
 }
 impl Upgrade for OptionP {
@@ -1638,6 +1827,7 @@ impl Upgrade for BoolP {
 	fn sig(&self) -> NativeSig {
 		NativeSig {
 			scalar: Some("bool".to_owned()),
+			encoding: Some("be"),
 			..Default::default()
 		}
 	}
@@ -1653,6 +1843,15 @@ impl NativeLayout for PString {
 	fn visit(&self, _native: &mir::NativeType, _v: &mut dyn SlotVisitor) {}
 }
 impl NativeCodegen<Rust> for PString {
+	fn construct(
+		&self,
+		_cx: &LowerCx<Rust>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<rust::Tokens> {
+		Ok(quote!(String::from($(quoted(reflect::string_of(c)?)))))
+	}
 	fn inline_ty(
 		&self,
 		_id: TypeId,
@@ -1716,6 +1915,13 @@ struct RestBuffer;
 impl Upgrade for RestBuffer {
 	fn name(&self) -> String {
 		"restBuffer".to_owned()
+	}
+	fn sig(&self) -> NativeSig {
+		NativeSig {
+			scalar: Some("bytes".to_owned()),
+			encoding: Some("raw"),
+			..Default::default()
+		}
 	}
 }
 impl Upgrade for Container {

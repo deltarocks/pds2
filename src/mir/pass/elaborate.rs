@@ -139,7 +139,13 @@ mod tests {
 		def_native(union) {
 			body { item(variant) { argument(match); type(Value); }; };
 			variant(external) { argument(tag); };
+			variant(inline) { type(Tag); };
 		};
+		def_native(void) { is_void; };
+		@specializer const
+		def_native(const) { type(Value); argument(value) => Value; body; };
+		def(Pair) => container { field(a) => u8; field(b) => u16; };
+		def(Mode) => union(Tag: u8) { variant(on, match: 1) => void; variant(level, match: 2) => u16; };
 		def(Pick) { argument(k) => u8; } => union(tag: ./$k) { variant(one, match: 1) => u8; };
 		def(AnyPick) { type(K); argument(k) => K; } => union(tag: ./$k) { variant(one, match: 1) => u8; };
 		@specializer terminated
@@ -156,6 +162,39 @@ mod tests {
 
 	fn error(body: &str) -> String {
 		format!("{:#}", compile(body).expect_err("should be rejected"))
+	}
+
+	fn constant(def: &str) -> Result<TypeMap> {
+		let mut reg = Registry::default();
+		register_protodef_types(&mut reg);
+		let ast = crate::ast::parse(&format!("{DECL} {def}")).map_err(|e| anyhow!("{e}"))?;
+		mir::from_hir(&crate::hir::parse_ast(ast, &reg)?, &reg)
+	}
+
+	#[test]
+	fn records_and_lists_construct_values() {
+		constant("def(c) => const(value: Pair(a: 1, b: 300));").unwrap();
+		constant("def(c) => const(value: [on, (level: 2), Mode(on)]) => array(count: 3) => Mode;")
+			.unwrap();
+		let err = |def: &str| format!("{:#}", constant(def).expect_err("should be rejected"));
+		assert!(err("def(c) => const(value: Pair(a: 1));").contains("needs field"));
+		assert!(err("def(c) => const(value: Pair(a: 1, b: 2, c: 3));").contains("no stored field"));
+		assert!(err("def(c) => const(value: Pair(a: \"x\", b: 2));").contains("can't be written as"));
+		assert!(err("def(c) => const(value: Pair(a: 256, b: 2));").contains("can't be written as"));
+		assert!(err("def(c) => const(value: Pair(a: -1, b: 2));").contains("can't be written as"));
+		assert!(err("def(c) => const(value: Mode(off));").contains("no variant"));
+		assert!(err("def(c) => const(value: Mode(level));").contains("carries a value"));
+		assert!(err("def(c) => const(value: Mode(on: ()));").contains("carries no value"));
+		assert!(err("def(c) => const(value: (a: 1, b: 2));").contains("bind `Value: <type>`"));
+	}
+
+	#[test]
+	fn serialized_needs_typed_values_with_encodings() {
+		let err = |def: &str| format!("{:#}", constant(def).expect_err("should be rejected"));
+		let e = err("def(c) => const(value: serialized((a: 1, b: 2))) => u8;");
+		assert!(e.contains("needs a type"), "{e}");
+		let e = err("def(c) => const(value: serialized(Pair(a: 1, b: 2))) => u8;");
+		assert!(e.contains("u8 has no encoding"), "{e}");
 	}
 
 	fn counts(types: &TypeMap) -> Vec<Expr> {

@@ -44,10 +44,37 @@ rule valueChain() -> Vec<Value>
 rule value() -> Value
 	= s:string_block() { Value::String { is_block: true, string: s } }
 	/ s:string_singleline() { Value::String { is_block: false, string: s } }
+	/ "b\"" b:byteChar()* "\"" _ { Value::Bytes(b.concat()) }
 	/ "0x" i:$(['0'..='9' | 'a'..='f' | 'A'..='F']+) { Value::Int(i128::from_str_radix(i, 16).unwrap()) }
+	/ f:float() { Value::Float(Float(f)) }
 	/ i:$("-"? ['0'..='9']+) { Value::Int(i.parse().unwrap()) }
+	/ "[" _ items:(e:expr() _ {e}) ** ("," _) ("," _)? "]" _ { Value::List(items) }
+	/ "(" _ fields:recordField() ** ("," _) ("," _)? ")" _ {?
+		let mut seen = BTreeSet::new();
+		if fields.iter().all(|(k, _)| seen.insert(k.clone())) {
+			Ok(Value::Record(fields))
+		} else {
+			Err("record fields to be unique")
+		}
+	}
 	/ i:item() { Value::Item(i) }
 	/ r:reference() { Value::FieldRef(r) }
+
+rule recordField() -> (Ident, Value)
+	= k:baseIdent() ":" !":" _ v:expr() _ { (k, v) }
+rule float() -> f64
+	= n:$("-"? ['0'..='9']+ (("." ['0'..='9']+ exponent()?) / exponent())) {? n.parse().or(Err("float")) }
+rule exponent()
+	= ['e' | 'E'] ['+' | '-']? ['0'..='9']+
+rule byteChar() -> Vec<u8>
+	= "\\x" h:$(['0'..='9' | 'a'..='f' | 'A'..='F']*<2>) { vec![u8::from_str_radix(h, 16).unwrap()] }
+	/ "\\n" { vec![b'\n'] }
+	/ "\\r" { vec![b'\r'] }
+	/ "\\t" { vec![b'\t'] }
+	/ "\\0" { vec![0] }
+	/ "\\\\" { vec![b'\\'] }
+	/ "\\\"" { vec![b'"'] }
+	/ !['"' | '\\' | '\n'] c:$[_] { c.as_bytes().to_vec() }
 
 rule item() -> Item
 	= ident:item_path() args:itemArgs()? block:itemBlock()? {
@@ -58,19 +85,23 @@ rule item() -> Item
 		  }
 	  }
 rule itemArgs() -> ItemArgs
-	= "(" args:(itemArg() ** (_ "," _)) ")" _ {
+	= "(" _ args:(itemArg() ** (_ "," _)) ("," _)? ")" _ {?
 		let mut out = ItemArgs::default();
 		for (k, v) in args {
 			if let Some(k) = k {
-				out.named.insert(k, v);
+				if out.named.insert(k, v).is_some() {
+					return Err("named arguments to be unique");
+				}
 			} else {
 				out.unnamed.push(v)
 			}
 		}
-		out
+		Ok(out)
 	}
 rule itemArg() -> (Option<Ident>, Value)
-	= tag:(t:baseIdent() ":" {t})? _ val:expr() _ { (tag, val) }
+	= tag:(t:baseIdent() ":" !":" {t})? _ val:expr() _ { (tag, val) }
+pub rule expr_root() -> Value
+	= _ e:expr() _ { e }
 rule expr() -> Value = precedence!{
 	x:(@) _ "+" _ y:@ { Value::Binary(BinOp::Add, Box::new(x), Box::new(y)) }
 	x:(@) _ "-" _ y:@ { Value::Binary(BinOp::Sub, Box::new(x), Box::new(y)) }
@@ -139,4 +170,7 @@ pub fn parse(input: &str) -> Result<Block, ParseError<LineCol>> {
 }
 pub fn parse_reference(input: &str) -> Result<FieldRef, ParseError<LineCol>> {
 	pds_parser::reference(input)
+}
+pub fn parse_expr(input: &str) -> Result<Value, ParseError<LineCol>> {
+	pds_parser::expr_root(input)
 }

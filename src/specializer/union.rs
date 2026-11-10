@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
+use super::encode::{Encoder, Encoding, Scope, Val};
 use super::expr::{value_eq, Elaborator, ValueModel};
 use super::{
 	AstHir, BoxCost, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, NativeSig,
@@ -198,27 +199,68 @@ impl ValueModel for Union {
 	fn construct(
 		&self,
 		cx: &Elaborator,
-		_id: TypeId,
+		id: TypeId,
 		native: &mir::NativeType,
-		value: &Value,
-	) -> Option<Construction> {
-		let u = view(native)?;
+		value: &Expr,
+	) -> Result<Construction> {
+		let u = view(native).ok_or_else(|| anyhow!("malformed union"))?;
 		let void = |ty: &mir::Type| cx.types.is_void(ty.target);
-		if let Value::UnionDescriminator(name) = value {
-			let (_, arm, _) = u.arms.iter().find(|(_, n, ty)| {
-				sanitize(n.as_str()) == sanitize(name.as_str()) && void(ty)
-			})?;
-			return Some(Construction::Variant((*arm).clone(), vec![]));
+		let arm = |name: &Ident| {
+			u.arms
+				.iter()
+				.find(|(_, n, _)| sanitize(n.as_str()) == sanitize(name.as_str()))
+				.map(|(_, n, ty)| (*n, *ty))
+				.ok_or_else(|| {
+					let known: Vec<&str> = u.arms.iter().map(|(_, n, _)| n.as_str()).collect();
+					anyhow!("{} has no variant {name:?}, expected one of {known:?}", cx.name(id))
+				})
+		};
+		match value {
+			Expr::Const(Value::UnionDescriminator(name)) => {
+				let (arm, ty) = arm(name)?;
+				ensure!(void(ty), "variant {name:?} carries a value, write it as `({name:?}: ...)`");
+				Ok(Construction::Variant(arm.clone(), vec![]))
+			}
+			Expr::Const(value) => {
+				if let Some((_, arm, ty)) = u.arms.iter().find(|(v, _, _)| value_eq(v, value)) {
+					ensure!(void(ty), "variant {arm:?} carries a value, write it as `({arm:?}: ...)`");
+					return Ok(Construction::Variant((*arm).clone(), vec![]));
+				}
+				let (default, ty) = u
+					.default
+					.ok_or_else(|| anyhow!("{} has no variant matching {value:?}", cx.name(id)))?;
+				ensure!(void(ty), "the default of {} carries a value", cx.name(id));
+				let tag = cx.build(u.tag_type, &Expr::Const(value.clone()))?;
+				Ok(Construction::Variant(default.clone(), vec![tag]))
+			}
+			Expr::Record(fields) => {
+				let [(name, payload)] = fields.as_slice() else {
+					bail!(
+						"a {} value names one variant, `(variant: value)`, got {} fields",
+						cx.name(id),
+						fields.len()
+					);
+				};
+				if let Some((default, ty)) = u.default.filter(|(d, _)| d == &name) {
+					ensure!(
+						void(ty),
+						"a default carrying a value can't be written yet, {name:?} of {}",
+						cx.name(id)
+					);
+					let tag = cx
+						.coerce(payload.clone(), u.tag_type)
+						.with_context(|| format!("{name:?} tag"))?;
+					return Ok(Construction::Variant(default.clone(), vec![tag]));
+				}
+				let (arm, ty) = arm(name)?;
+				ensure!(!void(ty), "variant {name:?} carries no value, write it as `{name:?}`");
+				let payload = cx
+					.coerce(payload.clone(), ty.target)
+					.with_context(|| format!("variant {name:?}"))?;
+				Ok(Construction::Variant(arm.clone(), vec![payload]))
+			}
+			v => bail!("{} can't be written as {}", cx.name(id), super::expr::describe(v)),
 		}
-		if let Some((_, arm, ty)) = u.arms.iter().find(|(v, _, _)| value_eq(v, value)) {
-			return void(ty).then(|| Construction::Variant((*arm).clone(), vec![]));
-		}
-		let (default, ty) = u.default?;
-		if !void(ty) {
-			return None;
-		}
-		let tag = cx.construct(u.tag_type, value)?;
-		Some(Construction::Variant(default.clone(), vec![tag]))
 	}
 	fn casts(&self, _cx: &Elaborator, _id: TypeId, native: &mir::NativeType) -> Vec<TypeId> {
 		view(native).map(|u| vec![u.tag_type]).unwrap_or_default()
@@ -236,6 +278,91 @@ impl ValueModel for Union {
 				)
 			})
 			.collect()
+	}
+}
+
+fn tag_of(cx: &Encoding, v: &Val) -> Result<Expr> {
+	let u = view(v.native).ok_or_else(|| anyhow!("malformed union"))?;
+	let (name, payload) = variant_of(v.c)?;
+	if u.default.is_some_and(|(d, _)| d == name) {
+		return payload
+			.first()
+			.cloned()
+			.ok_or_else(|| anyhow!("default of {} without its tag", cx.name(v.id)));
+	}
+	let (value, _, _) = u
+		.arms
+		.iter()
+		.find(|(_, n, _)| *n == name)
+		.ok_or_else(|| anyhow!("{} has no variant {name:?}", cx.name(v.id)))?;
+	cx.elab
+		.build(u.tag_type, &Expr::Const(value.clone()))
+		.with_context(|| format!("tag of variant {name:?}"))
+}
+
+impl Encoder for Union {
+	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
+		let u = view(v.native).ok_or_else(|| anyhow!("malformed union"))?;
+		let (name, payload) = variant_of(v.c)?;
+		let scope = v.scope();
+		let default = u.default.filter(|(d, _)| *d == name);
+		let tag = match u.tag {
+			TagView::Inline(t) => {
+				let tag = tag_of(cx, v)?;
+				cx.encode_use(t, &tag, &scope, out).context("tag")?;
+				tag
+			}
+			TagView::External(f) => cx.eval(&Expr::Field(f.clone()), &scope).context("tag")?,
+		};
+		let conds = cx.elab.exprs(v.id)?;
+		let vars = [(Ident::new(TAG), tag.clone())];
+		let tagged = Scope {
+			vars: &vars,
+			..scope
+		};
+		let mut matching = None;
+		for ((_, arm, _), cond) in u.arms.iter().zip(&conds) {
+			if cx.truthy(cond, &tagged)? {
+				matching = Some(*arm);
+				break;
+			}
+		}
+		ensure!(
+			matching == Some(name) || (matching.is_none() && default.is_some()),
+			"variant {name:?} of {} disagrees with its tag {}, which selects {}",
+			cx.name(v.id),
+			super::expr::describe(&tag),
+			matching.map_or("the default".to_owned(), |m| format!("{m:?}"))
+		);
+		let ty = match default {
+			Some((_, ty)) => ty,
+			None => u
+				.arms
+				.iter()
+				.find(|(_, n, _)| *n == name)
+				.map(|(_, _, ty)| *ty)
+				.ok_or_else(|| anyhow!("{} has no variant {name:?}", cx.name(v.id)))?,
+		};
+		let value = match (default, payload) {
+			(Some(_), [_, value]) | (None, [value]) => value.clone(),
+			_ => cx.elab.build(ty.target, &Expr::Record(vec![]))?,
+		};
+		cx.encode_use(ty, &value, &scope, out)
+			.with_context(|| format!("variant {name:?}"))
+	}
+	fn virtual_field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
+		ensure!(name.as_str() == "tag", "{} has no virtual field {name:?}", cx.name(v.id));
+		tag_of(cx, v)
+	}
+	fn cast(&self, cx: &Encoding, v: &Val, to: TypeId) -> Result<Expr> {
+		let tag = tag_of(cx, v)?;
+		ensure!(
+			tag.ty().map(|t| cx.elab.resolve(t)) == Some(cx.elab.resolve(to)),
+			"{} can't be cast to {}",
+			cx.name(v.id),
+			cx.name(to)
+		);
+		Ok(tag)
 	}
 }
 
@@ -430,14 +557,21 @@ impl NativeCodegen<Rust> for Union {
 		&self,
 		cx: &LowerCx<Rust>,
 		id: TypeId,
-		_native: &mir::NativeType,
+		native: &mir::NativeType,
 		c: &Construction,
 	) -> Result<rust::Tokens> {
 		let (name, payload) = variant_of(c)?;
+		let is_default = view(native)
+			.and_then(|u| u.default)
+			.is_some_and(|(d, _)| d == name);
 		let payload = payload
 			.iter()
 			.map(|e| (cx.lower)(e))
 			.collect::<Result<Vec<_>>>()?;
+		let payload = match (is_default, payload.as_slice()) {
+			(false, [value]) => vec![cx.names.slot_new(id, name, value.clone())],
+			_ => payload,
+		};
 		Ok(quote! {
 			$(cx.names.ty(id))::$(rname(name))$(if !payload.is_empty() => ($(for p in payload join(, ) => $p)))
 		})
@@ -654,6 +788,7 @@ impl NativeCodegen<JavaScript> for Union {
 		Ok(match (is_default, payload) {
 			(_, []) => quote!({ kind: $(quoted(name.as_str())) }),
 			(true, [tag]) => quote!({ kind: $(quoted(name.as_str())), tag: $((cx.lower)(tag)?) }),
+			(false, [value]) => quote!({ kind: $(quoted(name.as_str())), value: $((cx.lower)(value)?) }),
 			_ => bail!("union variant {name:?} constructed with {} values", payload.len()),
 		})
 	}

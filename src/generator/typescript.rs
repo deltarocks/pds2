@@ -73,10 +73,12 @@ impl<'a> TsMeta<'a> {
 }
 
 pub(crate) fn literal(types: &TypeMap, value: &Value, ty: TypeId) -> Tokens {
-	let wide = matches!(
-		ty.is_valid().then(|| scalar_of(types, ty)).flatten(),
-		Some(Scalar::I64 | Scalar::U64)
-	);
+	let scalar = ty.is_valid().then(|| scalar_of(types, ty)).flatten();
+	let wide = matches!(scalar, Some(Scalar::I64 | Scalar::U64));
+	let bytes = |b: &[u8]| {
+		let items = b.iter().map(u8::to_string).collect::<Vec<_>>().join(", ");
+		quote!(new Uint8Array([$items]))
+	};
 	let int = |n: String| -> Tokens {
 		if wide {
 			quote!($(format!("{n}n")))
@@ -88,6 +90,9 @@ pub(crate) fn literal(types: &TypeMap, value: &Value, ty: TypeId) -> Tokens {
 		Value::Signed(n) => int(n.to_string()),
 		Value::Unsigned(n) => int(n.to_string()),
 		Value::Bool(b) => quote!($(b.to_string())),
+		Value::Float(f) => quote!($(format!("{f:?}"))),
+		Value::Bytes(b) => bytes(b),
+		Value::String(s) if scalar == Some(Scalar::Bytes) => bytes(s.as_bytes()),
 		Value::String(s) => quote!($(quoted(s.as_str()))),
 		Value::UnionDescriminator(id) => {
 			quote!({ kind: $(quoted(sanitize(id.as_str()))) })
@@ -180,7 +185,7 @@ fn wrap(s: Scalar, x: Tokens) -> Tokens {
 		Scalar::I64 => quote!(BigInt.asIntN(64, $x)),
 		Scalar::U64 => quote!(BigInt.asUintN(64, $x)),
 		Scalar::F32 => quote!(Math.fround($x)),
-		Scalar::F64 | Scalar::Bool => x,
+		Scalar::F64 | Scalar::Bool | Scalar::String | Scalar::Bytes => x,
 	}
 }
 
@@ -245,6 +250,13 @@ fn lower(meta: &TsMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 		Expr::Var(name, _) => quote!($(name.as_str())),
 		Expr::Field(f) => read_reference(meta, from_locals, f),
 		Expr::Const(v) => bail!("untyped constant {v:?}"),
+		Expr::Record(_) => bail!("untyped record"),
+		Expr::Serialized(_) => bail!("serialized(...) was not evaluated"),
+		Expr::List(items) => {
+			let items = items.iter().map(rec).collect::<Result<Vec<_>>>()?;
+			quote!([$(for i in items join(, ) => $i)])
+		}
+		Expr::Construct(id, _) if meta.types.is_void(*id) => quote!(null),
 		Expr::Construct(id, c) => match (scalar_of(meta.types, *id), c) {
 			(Some(_), Construction::Literal(v)) => literal(meta.types, v, *id),
 			_ => {
@@ -261,7 +273,7 @@ fn lower(meta: &TsMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 				reg: meta.reg,
 			}
 			.resolve(from);
-			let numeric = |t: TypeId| scalar_of(meta.types, t).filter(|s| *s != Scalar::Bool);
+			let numeric = |t: TypeId| scalar_of(meta.types, t).filter(|s| s.is_number());
 			match (numeric(from), numeric(*to)) {
 				(Some(f), Some(t)) => numeric_cast(f, t, rec(e)?),
 				_ => {
@@ -275,7 +287,7 @@ fn lower(meta: &TsMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 				.ty()
 				.ok_or_else(|| anyhow!("untyped arithmetic"))?;
 			let s = scalar_of(meta.types, ty)
-				.filter(|s| *s != Scalar::Bool)
+				.filter(|s| s.is_number())
 				.ok_or_else(|| anyhow!("arithmetic on a non-number"))?;
 			let (a, b) = (rec(a)?, rec(b)?);
 			match (op, s) {
@@ -284,7 +296,11 @@ fn lower(meta: &TsMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 			}
 		}
 		Expr::Eq(a, b) => {
-			let scalar = |e: &Expr| e.ty().is_some_and(|t| scalar_of(meta.types, t).is_some());
+			let scalar = |e: &Expr| {
+				e.ty()
+					.and_then(|t| scalar_of(meta.types, t))
+					.is_some_and(|s| s != Scalar::Bytes)
+			};
 			if scalar(a) && scalar(b) {
 				quote!(($(rec(a)?) === $(rec(b)?)))
 			} else {

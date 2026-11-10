@@ -1,6 +1,7 @@
 protoc := "nix shell nixpkgs#protobuf -c protoc"
 protos := "target/protos"
 envoy_includes := "-I " + protos + "/data-plane-api -I " + protos + "/xds -I " + protos + "/protoc-gen-validate"
+envoy_roots := "envoy/config/cluster/v3/cluster.proto envoy/extensions/upstreams/http/v3/http_protocol_options.proto"
 
 minecraft: nbt
 	rm -rf crates/minecraft-protocol/src/gen ts/minecraft-protocol/gen
@@ -46,12 +47,12 @@ envoy-protos:
 	test -d {{protos}}/protoc-gen-validate || gh repo clone bufbuild/protoc-gen-validate {{protos}}/protoc-gen-validate -- --depth 1
 
 envoy: envoy-protos
-	{{protoc}} {{envoy_includes}} --include_imports --descriptor_set_out=target/envoy.pb envoy/config/cluster/v3/cluster.proto
-	cargo run proto target/envoy.pb --root envoy/config/cluster/v3/cluster.proto --to crates/envoy-api/envoy.pds
+	{{protoc}} {{envoy_includes}} --include_imports --descriptor_set_out=target/envoy.pb {{envoy_roots}}
+	cargo run proto target/envoy.pb --root envoy/config/cluster/v3/cluster.proto --root envoy/extensions/upstreams/http/v3/http_protocol_options.proto --to crates/envoy-api/envoy.pds
 	rm -rf crates/envoy-api/src/gen ts/envoy-api/gen
-	cargo run compile crates/envoy-api/envoy.pds rust --to crates/envoy-api/src/gen
-	cargo run compile crates/envoy-api/envoy.pds typescript --to ts/envoy-api/gen
-	{{protoc}} {{envoy_includes}} --encode=envoy.config.cluster.v3.Cluster envoy/config/cluster/v3/cluster.proto < crates/envoy-api/cluster.txtpb > target/cluster.bin
+	cargo run compile crates/envoy-api/envoy.pds rust --const cluster_fixture=crates/envoy-api/cluster.txtpds2 --to crates/envoy-api/src/gen
+	cargo run compile crates/envoy-api/envoy.pds typescript --const cluster_fixture=crates/envoy-api/cluster.txtpds2 --to ts/envoy-api/gen
+	{{protoc}} {{envoy_includes}} --encode=envoy.config.cluster.v3.Cluster {{envoy_roots}} < crates/envoy-api/cluster.txtpb > target/cluster.bin
 
 test: minecraft lang descriptor-check envoy
 	cargo test --workspace

@@ -118,6 +118,22 @@ impl Definition {
 				Self::resolve_expr(scope, types, b)?;
 				None
 			}
+			Expr::Record(fields) => {
+				for (_, e) in fields {
+					Self::resolve_expr(scope, types, e)?;
+				}
+				None
+			}
+			Expr::List(items) => {
+				for e in items {
+					Self::resolve_expr(scope, types, e)?;
+				}
+				None
+			}
+			Expr::Serialized(e) => {
+				Self::resolve_expr(scope, types, e)?;
+				None
+			}
 		})
 	}
 

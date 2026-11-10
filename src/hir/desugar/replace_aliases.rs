@@ -59,6 +59,14 @@ fn substitute(template: &Expr, supplied: &[(Ident, Expr)]) -> Expr {
 			Box::new(substitute(b, supplied)),
 		),
 		Expr::Cast(e, t) => Expr::Cast(Box::new(substitute(e, supplied)), t.clone()),
+		Expr::Record(fields) => Expr::Record(
+			fields
+				.iter()
+				.map(|(n, e)| (n.clone(), substitute(e, supplied)))
+				.collect(),
+		),
+		Expr::List(items) => Expr::List(items.iter().map(|e| substitute(e, supplied)).collect()),
+		Expr::Serialized(e) => Expr::Serialized(Box::new(substitute(e, supplied))),
 	}
 }
 

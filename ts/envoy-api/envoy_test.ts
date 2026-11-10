@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { Input, Output } from "./pds.ts";
 import * as cluster from "./gen/pds_envoy_config_cluster_v3_Cluster.ts";
+import * as cluster_fixture from "./gen/pds_cluster_fixture.ts";
 
 Deno.test("cluster roundtrips protoc encoding", async () => {
 	const bytes = await Deno.readFile(new URL("../../target/cluster.bin", import.meta.url));
@@ -19,4 +20,13 @@ Deno.test("cluster roundtrips protoc encoding", async () => {
 	cluster.serialize(decoded, out);
 	assertEquals(cluster.size_of(decoded), bytes.length);
 	assertEquals(out.into_inner(), bytes);
+});
+
+Deno.test("text fixture encodes like protoc", async () => {
+	const bytes = await Deno.readFile(new URL("../../target/cluster.bin", import.meta.url));
+	const value = cluster_fixture.value();
+	const out = new Output();
+	cluster.serialize(value, out);
+	assertEquals(out.into_inner(), bytes);
+	assertEquals(cluster.deserialize(new Input(bytes)), value);
 });

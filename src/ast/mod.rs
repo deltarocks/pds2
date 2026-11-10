@@ -11,7 +11,7 @@ use std::{
 mod format;
 pub use format::format;
 mod parse;
-pub use parse::parse;
+pub use parse::{parse, parse_expr};
 
 pub mod builder;
 
@@ -324,12 +324,35 @@ impl BinOp {
 	}
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Float(pub f64);
+impl PartialEq for Float {
+	fn eq(&self, other: &Self) -> bool {
+		self.0.to_bits() == other.0.to_bits()
+	}
+}
+impl Eq for Float {}
+impl PartialOrd for Float {
+	fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+		Some(self.cmp(other))
+	}
+}
+impl Ord for Float {
+	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+		self.0.total_cmp(&other.0)
+	}
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
 	String { string: String, is_block: bool },
 	FieldRef(FieldRef),
 	FunctionCall(Ident, ItemArgs),
 	Int(i128),
+	Float(Float),
+	Bytes(Vec<u8>),
+	List(Vec<Value>),
+	Record(Vec<(Ident, Value)>),
 	Item(Item),
 	Binary(BinOp, Box<Value>, Box<Value>),
 	Internal(String),

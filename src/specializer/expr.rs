@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Context as _, Result};
 
 use super::{Registry, Scalar};
 use crate::ast::BinOp;
@@ -9,12 +9,12 @@ use crate::mir::{self, Construction, Expr, TypeKind, TypeMap, Value};
 pub trait ValueModel {
 	fn construct(
 		&self,
-		_cx: &Elaborator,
-		_id: TypeId,
+		cx: &Elaborator,
+		id: TypeId,
 		_native: &mir::NativeType,
-		_value: &Value,
-	) -> Option<Construction> {
-		None
+		value: &Expr,
+	) -> Result<Construction> {
+		bail!("{} can't be written as {}", cx.name(id), describe(value))
 	}
 	fn casts(&self, _cx: &Elaborator, _id: TypeId, _native: &mir::NativeType) -> Vec<TypeId> {
 		vec![]
@@ -28,8 +28,38 @@ impl Scalar {
 	pub fn accepts(&self, value: &Value) -> bool {
 		match (self, value) {
 			(Scalar::Bool, v) => matches!(v, Value::Bool(_)),
-			(_, v) => matches!(v, Value::Signed(_) | Value::Unsigned(_)),
+			(Scalar::String, v) => matches!(v, Value::String(_)),
+			(Scalar::Bytes, v) => matches!(v, Value::Bytes(_) | Value::String(_)),
+			(Scalar::F32 | Scalar::F64, v) => {
+				matches!(v, Value::Signed(_) | Value::Unsigned(_) | Value::Float(_))
+			}
+			(s, Value::Signed(n)) => s.range().contains(n),
+			(s, Value::Unsigned(n)) => i128::try_from(*n).is_ok_and(|n| s.range().contains(&n)),
+			_ => false,
 		}
+	}
+
+	fn range(self) -> std::ops::RangeInclusive<i128> {
+		match self {
+			Scalar::I8 => i8::MIN.into()..=i8::MAX.into(),
+			Scalar::U8 => 0..=u8::MAX.into(),
+			Scalar::I16 => i16::MIN.into()..=i16::MAX.into(),
+			Scalar::U16 => 0..=u16::MAX.into(),
+			Scalar::I32 => i32::MIN.into()..=i32::MAX.into(),
+			Scalar::U32 => 0..=u32::MAX.into(),
+			Scalar::I64 => i64::MIN.into()..=i64::MAX.into(),
+			Scalar::U64 => 0..=u64::MAX.into(),
+			_ => i128::MIN..=i128::MAX,
+		}
+	}
+}
+
+pub fn describe(e: &Expr) -> String {
+	match e {
+		Expr::Const(v) => format!("{v:?}"),
+		Expr::Record(_) => "a record".to_owned(),
+		Expr::List(_) => "a list".to_owned(),
+		e => format!("{e:?}"),
 	}
 }
 
@@ -73,18 +103,34 @@ impl Elaborator<'_> {
 		Some((n, model))
 	}
 
-	pub fn construct(&self, ty: TypeId, value: &Value) -> Option<Expr> {
+	pub fn build(&self, ty: TypeId, value: &Expr) -> Result<Expr> {
 		let id = self.resolve(ty);
-		let construction = match scalar_of(self.types, id) {
-			Some(s) => s
-				.accepts(value)
-				.then(|| Construction::Literal(value.clone()))?,
-			None => {
-				let (native, model) = self.native(id)?;
-				model?.construct(self, id, native, value)?
+		let construction = if self.types.is_void(id) {
+			ensure!(
+				matches!(value, Expr::Record(f) if f.is_empty()),
+				"{} carries no data, write it as `()`, got {}",
+				self.name(id),
+				describe(value)
+			);
+			Construction::Record(vec![])
+		} else if let Some(s) = scalar_of(self.types, id) {
+			match value {
+				Expr::Const(v) if s.accepts(v) => Construction::Literal(v.clone()),
+				v => bail!("{} can't be written as {}", self.name(id), describe(v)),
 			}
+		} else {
+			let (native, model) = self
+				.native(id)
+				.ok_or_else(|| anyhow!("{} can't be written as a value", self.name(id)))?;
+			let model =
+				model.ok_or_else(|| anyhow!("{} can't be written as a value", self.name(id)))?;
+			model.construct(self, id, native, value)?
 		};
-		Some(Expr::Construct(id, construction))
+		Ok(Expr::Construct(id, construction))
+	}
+
+	pub fn construct(&self, ty: TypeId, value: &Value) -> Option<Expr> {
+		self.build(ty, &Expr::Const(value.clone())).ok()
 	}
 
 	pub fn casts(&self, ty: TypeId) -> Vec<TypeId> {
@@ -106,8 +152,17 @@ impl Elaborator<'_> {
 			.collect()
 	}
 
-	fn name(&self, id: TypeId) -> String {
+	pub fn name(&self, id: TypeId) -> String {
 		self.types[id].name.readable_name()
+	}
+
+	pub fn resolve_name(&self, name: &str) -> Result<TypeId> {
+		self.types
+			.0
+			.iter()
+			.find(|(_, d)| d.name.readable_name() == name)
+			.map(|(id, _)| *id)
+			.ok_or_else(|| anyhow!("the `{name}` native is not declared"))
 	}
 
 	fn compare(&self, subject: Expr, value: &Value) -> Result<Expr> {
@@ -126,22 +181,22 @@ impl Elaborator<'_> {
 	}
 
 	fn numeric(&self, ty: TypeId) -> Option<Scalar> {
-		scalar_of(self.types, ty).filter(|s| *s != Scalar::Bool)
+		scalar_of(self.types, ty).filter(|s| s.is_number())
 	}
 
 	fn operand(&self, e: Expr) -> Result<Expr> {
-		match e {
-			Expr::Const(_) => Ok(e),
-			e => self.elaborate(e),
+		if e.is_untyped_literal() {
+			Ok(e)
+		} else {
+			self.elaborate(e)
 		}
 	}
 
 	fn typed(&self, e: Expr, ty: TypeId) -> Result<Expr> {
-		match e {
-			Expr::Const(v) => self
-				.construct(ty, &v)
-				.ok_or_else(|| anyhow!("{v:?} can't be constructed as {}", self.name(ty))),
-			e => Ok(e),
+		if e.is_untyped_literal() {
+			self.build(ty, &e)
+		} else {
+			Ok(e)
 		}
 	}
 
@@ -199,7 +254,7 @@ impl Elaborator<'_> {
 
 	fn cast(&self, e: Expr, to: TypeId) -> Result<Expr> {
 		let e = self.operand(e)?;
-		if let Expr::Const(_) = e {
+		if e.is_untyped_literal() {
 			return self.typed(e, to);
 		}
 		let from = e
@@ -237,7 +292,16 @@ impl Elaborator<'_> {
 				}
 			},
 			Expr::Cast(e, to) => self.cast(*e, to)?,
-			Expr::Const(v) => bail!("constant {v:?} needs a type"),
+			Expr::Serialized(e) => {
+				let e = self.elaborate(*e)?;
+				let bytes = super::encode::Encoding { elab: self }
+					.encode_root(&e)
+					.context("serialized(...)")?;
+				Expr::Const(Value::Bytes(bytes))
+			}
+			e if e.is_untyped_literal() => {
+				bail!("{} needs a type, write it as `Type(...)`", describe(&e))
+			}
 			e => e,
 		})
 	}

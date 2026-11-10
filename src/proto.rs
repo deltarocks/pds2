@@ -7,22 +7,24 @@ use protobuf_descriptor::{
 };
 
 const PRELUDE: &str = r#"
-@scalar f64 @protobuf i64 def_native(double);
-@scalar f32 @protobuf i32 def_native(float);
-@scalar i64 @protobuf varint def_native(int64);
-@scalar u64 @protobuf varint def_native(uint64);
-@scalar i32 @protobuf varint def_native(int32);
-@scalar u64 @protobuf i64 def_native(fixed64);
-@scalar u32 @protobuf i32 def_native(fixed32);
-@scalar bool @protobuf varint def_native(bool);
-@protobuf len def_native(string);
-@protobuf len def_native(bytes);
-@scalar u32 @protobuf varint def_native(uint32);
-@scalar i32 @protobuf i32 def_native(sfixed32);
-@scalar i64 @protobuf i64 def_native(sfixed64);
-@scalar i32 @protobuf varint def_native(sint32);
-@scalar i64 @protobuf varint def_native(sint64);
+@scalar f64 @protobuf i64 @encoding le def_native(double);
+@scalar f32 @protobuf i32 @encoding le def_native(float);
+@scalar i64 @protobuf varint @encoding varint def_native(int64);
+@scalar u64 @protobuf varint @encoding varint def_native(uint64);
+@scalar i32 @protobuf varint @encoding varint64 def_native(int32);
+@scalar u64 @protobuf i64 @encoding le def_native(fixed64);
+@scalar u32 @protobuf i32 @encoding le def_native(fixed32);
+@scalar bool @protobuf varint @encoding varint def_native(bool);
+@scalar string @protobuf len @encoding raw def_native(string);
+@scalar bytes @protobuf len @encoding raw def_native(bytes);
+@scalar u32 @protobuf varint @encoding varint def_native(uint32);
+@scalar i32 @protobuf i32 @encoding le def_native(sfixed32);
+@scalar i64 @protobuf i64 @encoding le def_native(sfixed64);
+@scalar i32 @protobuf varint @encoding zigzag def_native(sint32);
+@scalar i64 @protobuf varint @encoding zigzag def_native(sint64);
 def_native(void) { is_void; };
+@specializer const
+def_native(const) { type(Value); argument(value) => Value; body; };
 @specializer message
 def_native(message) {
 	body {

@@ -57,6 +57,8 @@ fn parse_specializer_body(block: &Block) -> Result<Vec<BodyField>> {
 fn const_value(value: Value) -> Result<HirValue> {
 	Ok(match value {
 		Value::Int(i) => HirValue::Number(i),
+		Value::Float(f) => HirValue::Float(f),
+		Value::Bytes(b) => HirValue::Bytes(b),
 		Value::String { string, .. } => HirValue::String(string),
 		Value::Item(item) => match item.simple_name().as_ref().map(Ident::as_str) {
 			Some("true") => HirValue::Bool(true),
@@ -67,18 +69,56 @@ fn const_value(value: Value) -> Result<HirValue> {
 	})
 }
 
-fn arg_value(value: Value) -> Result<Expr> {
+fn record(fields: Vec<(Ident, Value)>) -> Result<Expr> {
+	Ok(Expr::Record(
+		fields
+			.into_iter()
+			.map(|(n, v)| {
+				let e = arg_value(v).with_context(|| format!("field {n:?}"))?;
+				Ok((n, e))
+			})
+			.collect::<Result<_>>()?,
+	))
+}
+
+pub fn arg_value(value: Value) -> Result<Expr> {
 	Ok(match value {
 		Value::FieldRef(r) => Expr::Field(r),
 		Value::Binary(op, a, b) => {
 			Expr::Binary(op, Box::new(arg_value(*a)?), Box::new(arg_value(*b)?))
 		}
+		Value::List(items) => Expr::List(items.into_iter().map(arg_value).collect::<Result<_>>()?),
+		Value::Record(fields) => record(fields)?,
 		Value::Item(item)
-			if item.args.positional_count() == 1
-				&& item.args.named_names().next().is_none()
-				&& item.block.is_empty() =>
+			if item.block.is_empty()
+				&& !item.name.absolute
+				&& item.name.path.is_empty()
+				&& item.name.item.as_str() == "serialized" =>
 		{
-			let operand: Value = item.args.arg(0, "cast operand")?;
+			ensure!(
+				item.args.positional_count() == 1 && item.args.named_names().next().is_none(),
+				"`serialized(value)` takes one value"
+			);
+			let value: Value = item.args.arg(0, "serialized value")?;
+			Expr::Serialized(Box::new(arg_value(value)?))
+		}
+		Value::Item(item) if item.block.is_empty() && !item.args.is_empty() => {
+			let operand = match item.args.positional_count() {
+				0 => {
+					let mut fields = Vec::new();
+					for n in item.args.named_names().cloned().collect::<Vec<_>>() {
+						let v: Value = item.args.named(n.clone())?;
+						fields.push((n, v));
+					}
+					record(fields)?
+				}
+				1 => {
+					let operand: Value = item.args.arg(0, "cast operand")?;
+					arg_value(operand)?
+				}
+				_ => bail!("`{:?}(...)` takes one value or named fields", item.name),
+			};
+			item.args.verify_unused()?;
 			let ty = TypeKind::from_ast(
 				Item {
 					name: item.name,
@@ -87,10 +127,18 @@ fn arg_value(value: Value) -> Result<Expr> {
 				},
 				vec![],
 			)?;
-			Expr::Cast(Box::new(arg_value(operand)?), Box::new(ty))
+			Expr::Cast(Box::new(operand), Box::new(ty))
+		}
+		Value::Item(item)
+			if item.block.is_empty()
+				&& !item.name.absolute
+				&& item.name.path.is_empty()
+				&& !matches!(item.name.item.as_str(), "true" | "false") =>
+		{
+			Expr::Const(HirValue::UnionDescriminator(item.name.item))
 		}
 		v => Expr::Const(const_value(v).context(
-			"argument should be a field reference, constant, arithmetic or `type(value)` cast",
+			"argument should be a field reference, constant, arithmetic, record, list or `type(value)` cast",
 		)?),
 	})
 }

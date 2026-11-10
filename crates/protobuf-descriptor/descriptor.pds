@@ -1,35 +1,44 @@
-@protobuf i64 @scalar f64 def_native(double);
+@encoding le @protobuf i64 @scalar f64 def_native(double);
 
-@protobuf i32 @scalar f32 def_native(float);
+@encoding le @protobuf i32 @scalar f32 def_native(float);
 
-@protobuf varint @scalar i64 def_native(int64);
+@encoding varint @protobuf varint @scalar i64 def_native(int64);
 
-@protobuf varint @scalar u64 def_native(uint64);
+@encoding varint @protobuf varint @scalar u64 def_native(uint64);
 
-@protobuf varint @scalar i32 def_native(int32);
+@encoding varint64 @protobuf varint @scalar i32 def_native(int32);
 
-@protobuf i64 @scalar u64 def_native(fixed64);
+@encoding le @protobuf i64 @scalar u64 def_native(fixed64);
 
-@protobuf i32 @scalar u32 def_native(fixed32);
+@encoding le @protobuf i32 @scalar u32 def_native(fixed32);
 
-@protobuf varint @scalar bool def_native(bool);
+@encoding varint @protobuf varint @scalar bool def_native(bool);
 
-@protobuf len def_native(string);
+@encoding raw @protobuf len @scalar string def_native(string);
 
-@protobuf len def_native(bytes);
+@encoding raw @protobuf len @scalar bytes def_native(bytes);
 
-@protobuf varint @scalar u32 def_native(uint32);
+@encoding varint @protobuf varint @scalar u32 def_native(uint32);
 
-@protobuf i32 @scalar i32 def_native(sfixed32);
+@encoding le @protobuf i32 @scalar i32 def_native(sfixed32);
 
-@protobuf i64 @scalar i64 def_native(sfixed64);
+@encoding le @protobuf i64 @scalar i64 def_native(sfixed64);
 
-@protobuf varint @scalar i32 def_native(sint32);
+@encoding zigzag @protobuf varint @scalar i32 def_native(sint32);
 
-@protobuf varint @scalar i64 def_native(sint64);
+@encoding zigzag @protobuf varint @scalar i64 def_native(sint64);
 
 def_native(void) {
 	is_void;
+};
+
+@specializer const
+def_native(const) {
+	type(Value);
+
+	argument(value) => Value;
+
+	body;
 };
 
 @specializer message
