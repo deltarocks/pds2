@@ -1022,6 +1022,7 @@ pub fn generate(
 	merged: &Block,
 	versions: &[crate::merge::Version],
 	migrations: &[Option<Migration>],
+	virtual_packets: bool,
 ) -> Result<String> {
 	let protocols: Vec<(i32, usize)> = versions
 		.iter()
@@ -1165,12 +1166,36 @@ pub fn generate(
 	}
 	let variants: Vec<String> = root_names.iter().map(|r| root_variant(r.trim_end_matches("::packet"))).collect();
 	let mut inspect = Vec::new();
+	let mut names = Vec::new();
 	for (i, tag) in tags.iter().enumerate() {
 		for (root, id) in roots_of(tag) {
 			if !root_names.contains(&root) {
 				continue;
 			}
 			let variant = root_variant(root.trim_end_matches("::packet"));
+			if let Some(u) = native(types, id).and_then(union::view) {
+				if matches!(u.tag, union::TagView::Inline(_)) {
+					let arms: Vec<(i128, String)> = u
+						.arms
+						.iter()
+						.filter_map(|(v, n, _)| match v {
+							mir::Value::Signed(t) => Some((*t, n.as_str().to_owned())),
+							_ => None,
+						})
+						.collect();
+					let de = g.names.item(u.tag_type, "deserialize");
+					names.push(quote! {
+						(Root::$(&variant), $i) => {
+							let tag = $de(&mut input).ok()? as i64;
+							let table: &[(i64, &str)] = &[$(for (t, n) in &arms join(, ) => ($(*t as i64), $(quoted(n))))];
+							table
+								.iter()
+								.find(|(t, _)| *t == tag)
+								.map(|(_, n)| *n)
+						}
+					});
+				}
+			}
 			let de = g.names.item(id, "deserialize");
 			inspect.push(quote! {
 				(Root::$(&variant), $i) => {
@@ -1276,6 +1301,14 @@ pub fn generate(
 			}
 		}
 
+		pub fn packet_name(root: Root, version: usize, data: &[u8]) -> Option<&'static str> {
+			let mut input = crate::pds::Input::new(data);
+			match (root, version) {
+				$(for n in names => $n)
+				_ => None,
+			}
+		}
+
 		pub fn inspect(root: Root, version: usize, data: &[u8]) -> std::result::Result<String, String> {
 			match (root, version) {
 				$(for i in inspect => $i)
@@ -1283,20 +1316,62 @@ pub fn generate(
 			}
 		}
 
-		pub fn convert(root: Root, from: usize, to: usize, data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
-			let mut packets = vec![data.to_vec()];
-			let mut at = from;
-			while at != to {
-				let next = if to > at { at + 1 } else { at - 1 };
-				let mut out = Vec::new();
-				for p in &packets {
-					out.extend(step(root, at, next, p, cx)?);
-				}
-				packets = out;
-				at = next;
+		$(if virtual_packets {
+			pub enum Carrier {
+				Wire(Vec<u8>),
+				Virtual(crate::custom::Virtual),
 			}
-			Ok(packets)
-		}
+
+			pub fn convert(root: Root, from: usize, to: usize, data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
+				let packets = match crate::custom::virtual_start(root, from, to, data, cx)? {
+					Some(carried) => carried,
+					None => vec![Carrier::Wire(data.to_vec())],
+				};
+				carry(root, from, to, packets, cx)
+			}
+
+			pub fn carry(root: Root, from: usize, to: usize, mut packets: Vec<Carrier>, cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
+				let mut at = from;
+				while at != to {
+					let next = if to > at { at + 1 } else { at - 1 };
+					let mut out = Vec::new();
+					for p in packets {
+						match p {
+							Carrier::Wire(bytes) => match crate::custom::virtual_wire(root, at, next, &bytes, cx)? {
+								Some(carried) => out.extend(carried),
+								None => out.extend(step(root, at, next, &bytes, cx)?.into_iter().map(Carrier::Wire)),
+							},
+							Carrier::Virtual(model) => out.extend(crate::custom::virtual_step(root, at, next, model, cx)?),
+						}
+					}
+					packets = out;
+					at = next;
+				}
+				let mut wire = Vec::new();
+				for p in packets {
+					match p {
+						Carrier::Wire(bytes) => wire.push(bytes),
+						Carrier::Virtual(model) => wire.extend(crate::custom::virtual_finish(root, to, model, cx)?),
+					}
+				}
+				Ok(wire)
+			}
+		} else {
+			pub fn convert(root: Root, from: usize, to: usize, data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
+				let mut packets = vec![data.to_vec()];
+				let mut at = from;
+				while at != to {
+					let next = if to > at { at + 1 } else { at - 1 };
+					let mut out = Vec::new();
+					for p in &packets {
+						out.extend(step(root, at, next, p, cx)?);
+					}
+					packets = out;
+					at = next;
+				}
+				Ok(packets)
+			}
+		})
 
 		$(for m in version_mods join($['\n']) => $m)
 

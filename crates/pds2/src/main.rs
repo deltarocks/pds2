@@ -53,6 +53,9 @@ enum MinecraftData {
 		/// only report missing rules, write nothing
 		#[arg(long)]
 		check: bool,
+		/// let crate::custom carry packets through steps as decoded models (virtual_start/step/finish)
+		#[arg(long = "virtual")]
+		virtual_packets: bool,
 	},
 	/// Merge upgraded .pds files of consecutive versions into one schema
 	Merge {
@@ -138,7 +141,7 @@ fn main() {
 					merged.variants.len()
 				);
 			}
-			Opts::MinecraftData(MinecraftData::Converters { merged, migrations, gen, check }) => {
+			Opts::MinecraftData(MinecraftData::Converters { merged, migrations, gen, check, virtual_packets }) => {
 				let reg = pds2::registry();
 				let data = std::fs::read_to_string(&merged)?;
 				let block = ast::parse(&data).map_err(|e| anyhow!("{}: {e}", merged.display()))?;
@@ -159,7 +162,7 @@ fn main() {
 					};
 					steps.push(rules);
 				}
-				let code = pds2::converters::generate(&mir, &reg, &block, &versions, &steps)?;
+				let code = pds2::converters::generate(&mir, &reg, &block, &versions, &steps, virtual_packets)?;
 				if check {
 					return Ok(());
 				}
