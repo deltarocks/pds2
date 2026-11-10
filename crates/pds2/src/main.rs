@@ -162,7 +162,16 @@ fn main() {
 					};
 					steps.push(rules);
 				}
-				let code = pds2::converters::generate(&mir, &reg, &block, &versions, &steps, virtual_packets)?;
+				let every_path = migrations.join("every.pds");
+				let every = match std::fs::read_to_string(&every_path) {
+					Ok(text) => {
+						let parsed = ast::parse(&text).map_err(|e| anyhow!("{}: {e}", every_path.display()))?;
+						Some(pds2::converters::parse_every(&parsed).with_context(|| every_path.display().to_string())?)
+					}
+					Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+					Err(e) => return Err(anyhow!("{}: {e}", every_path.display())),
+				};
+				let code = pds2::converters::generate(&mir, &reg, &block, &versions, &steps, every.as_ref(), virtual_packets)?;
 				if check {
 					return Ok(());
 				}

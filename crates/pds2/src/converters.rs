@@ -55,12 +55,35 @@ impl Change {
 #[derive(Clone, Default, Debug)]
 pub struct Rules {
 	pub path: String,
+	pub own: bool,
 	pub whole: Change,
 	pub added: BTreeMap<String, Change>,
 	pub removed: BTreeMap<String, Change>,
 	pub converted: BTreeMap<String, Change>,
+	pub hooked: BTreeMap<String, Change>,
 	pub renamed: BTreeMap<String, String>,
 	pub updated: BTreeMap<String, Rules>,
+}
+
+impl Rules {
+	fn active(&self, dir: Dir) -> bool {
+		self.own || self.hooked.values().any(|c| c.get(dir).is_some()) || self.updated.values().any(|u| u.active(dir))
+	}
+
+	fn disown(&mut self) -> Result<()> {
+		ensure!(
+			self.whole.up.is_none()
+				&& self.whole.down.is_none()
+				&& self.added.is_empty()
+				&& self.removed.is_empty()
+				&& self.converted.is_empty()
+				&& self.renamed.is_empty(),
+			"{}: rules for every step can only be `hooked` or `updated`",
+			self.path
+		);
+		self.own = false;
+		self.updated.values_mut().try_for_each(Rules::disown)
+	}
 }
 
 fn first_name(item: &Item) -> Result<String> {
@@ -96,6 +119,7 @@ fn parse_rules(item: &Item, path: String, all: &mut BTreeSet<String>) -> Result<
 	all.insert(path.clone());
 	let mut r = Rules {
 		path: path.clone(),
+		own: true,
 		whole: change(item),
 		..Default::default()
 	};
@@ -111,6 +135,13 @@ fn parse_rules(item: &Item, path: String, all: &mut BTreeSet<String>) -> Result<
 			"added" => merge_change(r.added.entry(name).or_default(), change(op), &key)?,
 			"removed" => merge_change(r.removed.entry(name).or_default(), change(op), &key)?,
 			"converted" => merge_change(r.converted.entry(name).or_default(), change(op), &key)?,
+			"hooked" => {
+				let c = change(op);
+				for a in [&c.up, &c.down].into_iter().flatten() {
+					ensure!(matches!(a, Action::Custom(_)), "{key}: a hook should be custom(...)");
+				}
+				merge_change(r.hooked.entry(name).or_default(), c, &key)?
+			}
 			"renamed" => {
 				let (_, to) = op
 					.args
@@ -149,11 +180,13 @@ fn merge_change(into: &mut Change, from: Change, at: &str) -> Result<()> {
 }
 
 fn merge_rules(into: &mut Rules, from: Rules) -> Result<()> {
+	into.own |= from.own;
 	merge_change(&mut into.whole, from.whole, &into.path)?;
 	for (map, other, kind) in [
 		(&mut into.added, from.added, "added"),
 		(&mut into.removed, from.removed, "removed"),
 		(&mut into.converted, from.converted, "converted"),
+		(&mut into.hooked, from.hooked, "hooked"),
 	] {
 		for (name, change) in other {
 			let at = format!("{}/{kind}({name})", into.path);
@@ -218,6 +251,12 @@ pub fn parse_migration(block: &Block) -> Result<Migration> {
 	Ok(Migration { rules, all })
 }
 
+pub fn parse_every(block: &Block) -> Result<Migration> {
+	let mut m = parse_migration(block)?;
+	m.rules.values_mut().try_for_each(Rules::disown)?;
+	Ok(m)
+}
+
 #[derive(Clone)]
 enum Conv {
 	Identity,
@@ -234,7 +273,7 @@ struct Gen<'a> {
 	code: RefCell<Vec<rust::Tokens>>,
 	errors: RefCell<BTreeSet<String>>,
 	used: RefCell<BTreeSet<String>>,
-	dirty: RefCell<BTreeMap<(usize, TypeId), bool>>,
+	dirty: RefCell<BTreeMap<(usize, Dir, TypeId), bool>>,
 	counter: Cell<usize>,
 }
 
@@ -320,16 +359,106 @@ impl<'a> Gen<'a> {
 			.or_else(|| self.alias_base.get(&resolved))
 	}
 
-	fn dirty(&self, step: &Step, id: TypeId) -> bool {
+	fn dirty(&self, step: &Step, dir: Dir, id: TypeId) -> bool {
 		let id = self.resolve(id);
-		if let Some(d) = self.dirty.borrow().get(&(step.index, id)) {
+		if let Some(d) = self.dirty.borrow().get(&(step.index, dir, id)) {
 			return *d;
 		}
-		self.dirty.borrow_mut().insert((step.index, id), false);
-		let own = self.base_name(id).is_some_and(|b| step.rules.contains_key(b));
-		let d = own || self.children(id).into_iter().any(|c| self.dirty(step, c));
-		self.dirty.borrow_mut().insert((step.index, id), d);
+		self.dirty.borrow_mut().insert((step.index, dir, id), false);
+		let own = self.base_name(id).and_then(|b| step.rules.get(b)).is_some_and(|r| r.active(dir));
+		let d = own || self.children(id).into_iter().any(|c| self.dirty(step, dir, c));
+		self.dirty.borrow_mut().insert((step.index, dir, id), d);
 		d
+	}
+
+	fn leaf(&self, id: TypeId) -> bool {
+		let id = self.resolve(id);
+		match kind_of(self.types, id) {
+			Some("container" | "bitfield" | "bitflags" | "union" | "registryEntryHolder" | "registryEntryHolderSet") => false,
+			Some(_) => self.children(id).into_iter().all(|c| self.leaf(c)),
+			None => true,
+		}
+	}
+
+	fn hook_tree(&self, dir: Dir, versions: (usize, usize), id: TypeId, r: &Rules, place: rust::Tokens, depth: usize, out: &mut Vec<rust::Tokens>) {
+		let id = self.resolve(id);
+		let p = format!("__h{depth}");
+		let visit = |name: &str, ty: TypeId, value: rust::Tokens, body: &mut Vec<rust::Tokens>| {
+			if let Some(Action::Custom(f)) = r.hooked.get(name).and_then(|c| c.get(dir)) {
+				if self.leaf(ty) {
+					let (f, (a, b)) = (self.custom(f), versions);
+					body.push(quote!($f(&mut $(&value), $a, $b, cx)?;));
+					self.used(format!("{}/hooked({name})", r.path));
+				}
+			}
+			if let Some(nested) = r.updated.get(name) {
+				self.used(nested.path.clone());
+				self.hook_tree(dir, versions, ty, nested, value, depth + 1, body);
+			}
+		};
+		if let Some(fields) = stored_fields(self.types, id) {
+			for (name, ty) in fields {
+				let ident = pds2_core::ast::Ident::new(&name);
+				let value = if self.names.boxed(id, &ident) {
+					quote!((*$(&place).$(rname(&ident))))
+				} else {
+					quote!($(&place).$(rname(&ident)))
+				};
+				visit(&name, ty, value, out);
+			}
+			return;
+		}
+		let Some(n) = native(self.types, id) else { return };
+		let ty = self.names.ty(id);
+		let inner = |boxed: bool| if boxed { quote!((**$(&p))) } else { quote!((*$(&p))) };
+		if let Some(u) = union::view(n) {
+			let mut arms = Vec::new();
+			let void = |t: TypeId| self.types.is_void(self.resolve(t));
+			for (_, name, t) in u.arms.iter().filter(|(_, _, t)| !void(t.target)) {
+				let mut body = Vec::new();
+				visit(name.as_str(), t.target, inner(self.names.boxed(id, name)), &mut body);
+				if !body.is_empty() {
+					arms.push(quote!($(&ty)::$(rname(name))($(&p)) => { $(for b in body => $b) }));
+				}
+			}
+			if let Some((name, t)) = u.default.filter(|(_, t)| !void(t.target)) {
+				let mut body = Vec::new();
+				visit("default", t.target, inner(self.names.boxed(id, name)), &mut body);
+				if !body.is_empty() {
+					arms.push(quote!($(&ty)::$(rname(name))(_, $(&p)) => { $(for b in body => $b) }));
+				}
+			}
+			if !arms.is_empty() {
+				out.push(quote!(match &mut $(&place) { $(for a in arms => $a) _ => {} }));
+			}
+			return;
+		}
+		let slot = pds2_core::ast::Ident::new(VALUE);
+		let mut body = Vec::new();
+		match kind_of(self.types, id) {
+			Some("array" | "terminated" | "entityMetadataLoop" | "topBitSetTerminatedArray") => {
+				let Some(e) = self.element(id) else { return };
+				visit("items", e, quote!((*$(&p))), &mut body);
+				if !body.is_empty() {
+					out.push(quote!(for $(&p) in $(&place).iter_mut() { $(for b in body => $b) }));
+				}
+			}
+			Some("option") => {
+				let Some(e) = self.element(id) else { return };
+				visit("value", e, inner(self.names.boxed(id, &slot)), &mut body);
+				if !body.is_empty() {
+					out.push(quote!(if let Some($(&p)) = &mut $(&place) { $(for b in body => $b) }));
+				}
+			}
+			Some("registryEntryHolder") => {
+				let Some((name, t)) = n.fields.first() else { return };
+				visit(name.as_str(), t.target, inner(self.names.boxed(id, name)), &mut body);
+				if !body.is_empty() {
+					out.push(quote!(if let $(&ty)::Inline($(&p)) = &mut $(&place) { $(for b in body => $b) }));
+				}
+			}
+			_ => {}
+		}
 	}
 
 	fn alias_names(&self, id: TypeId, path: Option<String>, out: &mut BTreeMap<String, TypeId>) {
@@ -508,7 +637,9 @@ impl<'a> Gen<'a> {
 		if let Some(r) = rules {
 			self.used(r.path.clone());
 		}
-		if from == to && !root && rules.is_none() && !self.dirty(step, from) {
+		let rules = rules.filter(|r| r.own);
+		let passed = rules.is_some();
+		if from == to && !root && rules.is_none() && !self.dirty(step, dir, from) {
 			return Conv::Identity;
 		}
 		let same = bf.is_some() && bf == bt;
@@ -527,10 +658,13 @@ impl<'a> Gen<'a> {
 		}
 		let rules = match rules {
 			Some(r) => Some(r),
-			None if same => bt.and_then(|b| step.rules.get(b)).inspect(|r| self.used(r.path.clone())),
+			None if same => bt
+				.and_then(|b| step.rules.get(b))
+				.inspect(|r| self.used(r.path.clone()))
+				.filter(|r| r.active(dir)),
 			None => None,
 		};
-		if from == to && !root && rules.is_none() && !self.dirty(step, from) {
+		if from == to && !root && rules.is_none() && !self.dirty(step, dir, from) {
 			return Conv::Identity;
 		}
 		let key = (step.index, dir, from, to, root, rules.map(|r| r.path.clone()));
@@ -541,8 +675,25 @@ impl<'a> Gen<'a> {
 		self.fns.borrow_mut().insert(key, name.clone());
 		let (from_ty, to_ty) = (self.names.ty(from), self.names.ty(to));
 		let ret = if root { quote!(Vec<$(&to_ty)>) } else { to_ty.clone() };
+		let mut hooks = Vec::new();
+		if let Some(r) = rules.filter(|_| !passed) {
+			let versions = match dir {
+				Dir::Up => (step.index, step.index + 1),
+				Dir::Down => (step.index + 1, step.index),
+			};
+			self.hook_tree(dir, versions, from, r, quote!(v), 0, &mut hooks);
+		}
 		let body = self.body(step, dir, from, to, rules, root, at);
 		let body = body.unwrap_or_else(|| quote!(unreachable!()));
+		let body = if hooks.is_empty() {
+			body
+		} else {
+			quote! {
+				let mut v = v;
+				$(for h in hooks => $h)
+				$body
+			}
+		};
 		self.code.borrow_mut().push(quote! {
 			pub fn $(&name)(v: $from_ty, cx: &mut crate::Session) -> crate::pds::convert::Result<$ret> {
 				$body
@@ -585,7 +736,7 @@ impl<'a> Gen<'a> {
 		}
 		let wrap = |t: rust::Tokens| if root { quote!(Ok(vec![$t])) } else { quote!(Ok($t)) };
 		let (kf, kt) = (kind_of(self.types, from), kind_of(self.types, to));
-		if from == to && rules.is_none() && !self.dirty(step, from) {
+		if from == to && rules.is_none() && !self.dirty(step, dir, from) {
 			return Some(wrap(quote!(v)));
 		}
 		match (kf, kt) {
@@ -1022,6 +1173,7 @@ pub fn generate(
 	merged: &Block,
 	versions: &[crate::merge::Version],
 	migrations: &[Option<Migration>],
+	every: Option<&Migration>,
 	virtual_packets: bool,
 ) -> Result<String> {
 	let protocols: Vec<(i32, usize)> = versions
@@ -1116,11 +1268,20 @@ pub fn generate(
 	let mut root_names = BTreeSet::new();
 	for (i, rules) in migrations.iter().enumerate() {
 		let Some(rules) = rules else { continue };
+		let mut merged = rules.rules.clone();
+		for (name, hooks) in every.iter().flat_map(|e| &e.rules) {
+			match merged.get_mut(name) {
+				Some(existing) => merge_rules(existing, hooks.clone())?,
+				None => {
+					merged.insert(name.clone(), hooks.clone());
+				}
+			}
+		}
 		let step = Step {
 			index: i,
 			name: format!("{} -> {}", versions[i], versions[i + 1]),
 			label: format!("{}_{}", tags[i], tags[i + 1].trim_start_matches('v')),
-			rules: &rules.rules,
+			rules: &merged,
 		};
 		let (a, b) = (roots_of(&tags[i]), roots_of(&tags[i + 1]));
 		for (root, ta) in &a {
@@ -1130,7 +1291,7 @@ pub fn generate(
 			for (dir, from, to, fi, ti) in [(Dir::Up, *ta, *tb, i, i + 1), (Dir::Down, *tb, *ta, i + 1, i)] {
 				let (fm, tm) = (g.names.ty(from), g.names.ty(to));
 				let (fd, ts) = (g.names.item(from, "deserialize"), g.names.item(to, "serialize"));
-				let body = if from == to && !g.dirty(&step, from) {
+				let body = if from == to && !g.dirty(&step, dir, from) {
 					quote!(Ok(vec![data.to_vec()]))
 				} else {
 					let Conv::Call(f) = g.convert(&step, dir, from, to, None, true, root) else {
@@ -1159,6 +1320,9 @@ pub fn generate(
 		for u in unused {
 			g.error(format!("{} -> {}: rule {u} is not used", versions[i], versions[i + 1]));
 		}
+	}
+	for u in every.iter().flat_map(|e| e.all.difference(&g.used.borrow()).cloned().collect::<Vec<_>>()) {
+		g.error(format!("every step: rule {u} is not used"));
 	}
 	let errors = g.errors.borrow();
 	if !errors.is_empty() {
