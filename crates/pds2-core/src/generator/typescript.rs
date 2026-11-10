@@ -306,6 +306,8 @@ fn lower(meta: &TsMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 			let (a, b) = (rec(a)?, rec(b)?);
 			match (op, s) {
 				(BinOp::Mul, Scalar::I32 | Scalar::U32) => wrap(s, quote!(Math.imul($a, $b))),
+				(BinOp::Div, Scalar::F32 | Scalar::F64 | Scalar::I64 | Scalar::U64) => wrap(s, quote!(($a / $b))),
+				(BinOp::Div, _) => wrap(s, quote!(Math.trunc($a / $b))),
 				_ => wrap(s, quote!(($a $(op.symbol()) $b))),
 			}
 		}

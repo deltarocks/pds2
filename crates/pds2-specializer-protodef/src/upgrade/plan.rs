@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Map, Value};
 
@@ -72,6 +72,58 @@ pub fn scope_names(fields: &[(String, Value)]) -> BTreeSet<String> {
 				if let Some(n) = sub.get("name").and_then(Value::as_str) {
 					out.insert(n.to_owned());
 				}
+			}
+		}
+	}
+	out
+}
+
+pub fn inlined_names(fields: &[(String, Value)]) -> BTreeMap<String, String> {
+	let mut out = BTreeMap::new();
+	for (name, f) in fields {
+		let ty = f.get("type");
+		if is_anon(f) && ty.and_then(head) == Some("bitfield") {
+			for sub in ty
+				.and_then(arg)
+				.and_then(Value::as_array)
+				.into_iter()
+				.flatten()
+			{
+				if let Some(n) = sub.get("name").and_then(Value::as_str) {
+					out.insert(n.to_owned(), name.clone());
+				}
+			}
+		}
+	}
+	out
+}
+
+pub fn inlined_types(fields: &[(String, Value)]) -> BTreeMap<String, Value> {
+	let mut out = BTreeMap::new();
+	for (_, f) in fields {
+		let ty = f.get("type");
+		if is_anon(f) && ty.and_then(head) == Some("bitfield") {
+			for sub in ty
+				.and_then(arg)
+				.and_then(Value::as_array)
+				.into_iter()
+				.flatten()
+			{
+				let (Some(n), Some(size)) = (
+					sub.get("name").and_then(Value::as_str),
+					sub.get("size").and_then(Value::as_u64),
+				) else {
+					continue;
+				};
+				let signed = sub.get("signed").and_then(Value::as_bool).unwrap_or(false);
+				let bits = match size {
+					0..=8 => 8,
+					9..=16 => 16,
+					17..=32 => 32,
+					_ => 64,
+				};
+				let prim = format!("{}{bits}", if signed { "i" } else { "u" });
+				out.insert(n.to_owned(), Value::String(prim));
 			}
 		}
 	}

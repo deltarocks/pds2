@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{anyhow, ensure, Context as _, Result};
 use tracing::info;
@@ -6,7 +6,9 @@ use tracing::info;
 use pds2_core::ast::{self, Ident, Statement};
 
 use crate::container::Container;
-use crate::upgrade::{keys_fit, plan, NativeSig, NativeSigVariant, TagKind, Upgrade, UpgradeCtx};
+use crate::upgrade::{
+	keys_fit, plan, ContainerScope, NativeSig, NativeSigVariant, TagKind, Upgrade, UpgradeCtx,
+};
 
 macro_rules! trivial_upgrade {
 	($struct:ident => $name:literal) => {
@@ -126,6 +128,12 @@ impl Upgrade for Container {
 		let fields = plan::inline_fields(data);
 		let scope = plan::scope_names(&fields);
 		let names: BTreeSet<String> = fields.iter().map(|(n, _)| n.clone()).collect();
+		let inlined = plan::inlined_names(&fields);
+		let mut types: BTreeMap<String, serde_json::Value> = fields
+			.iter()
+			.filter_map(|(n, f)| Some((n.clone(), f.get("type")?.clone())))
+			.collect();
+		types.extend(plan::inlined_types(&fields));
 
 		// protodef `mapper` (discriminant) + `switch(compareTo: mapper)` is a pds
 		// inline-tag union; merge them when the mapper feeds exactly one switch and
@@ -266,10 +274,38 @@ impl Upgrade for Container {
 		for i in effective {
 			let name = name_of(i);
 			let name = name.as_str();
-			let ty = ctx
-				.in_container(names.clone(), switch_valued.clone(), |ctx| emit(ctx, i))
-				.with_context(|| format!("container field <{name}> value"))?;
+			let scope = ContainerScope {
+				fields: names.clone(),
+				switch_valued: switch_valued.clone(),
+				inlined: inlined.clone(),
+				types: types.clone(),
+			};
 			let args = ast::ItemArgs::builder().arg(ast::Value::new_simple_item(name));
+			if let Some(count) = count_of(&fields[i].1)? {
+				let (counted, ty) = count;
+				let size = ast::Value::FieldRef(ast::FieldRef {
+					up: 0,
+					path: ast::BaseFieldRef(vec![
+						ast::FieldRefSegment::Down {
+							to: Ident::new(counted),
+							ignore_delegation: false,
+						},
+						ast::FieldRefSegment::Virtual(Ident::new("size")),
+					]),
+				});
+				let mut cast = ast::Item::simple_builder(ty)
+					.argsb(ast::ItemArgs::builder().arg(size))
+					.build_values();
+				statements.push(Statement::simple(
+					ast::Item::simple_builder("virtual_field")
+						.argsb(args.named("value", cast.remove(0)))
+						.then(vec![ast::Value::new_simple_item(ty)]),
+				));
+				continue;
+			}
+			let ty = ctx
+				.in_container(scope, |ctx| emit(ctx, i))
+				.with_context(|| format!("container field <{name}> value"))?;
 			let item = match &plans[i] {
 				Plan::Virtual(union) => {
 					ast::Item::simple_builder("virtual_field").argsb(args.named(
@@ -298,6 +334,30 @@ impl Upgrade for Container {
 			})
 			.build_values())
 	}
+}
+
+/// protodef `["count", { type, countFor }]`: the count of a sibling list
+fn count_of(field: &serde_json::Value) -> Result<Option<(&str, &str)>> {
+	let Some(ty) = field.get("type") else {
+		return Ok(None);
+	};
+	if plan::head(ty) != Some("count") {
+		return Ok(None);
+	}
+	let arg = plan::arg(ty).ok_or_else(|| anyhow!("count needs an argument"))?;
+	let int = arg
+		.get("type")
+		.and_then(serde_json::Value::as_str)
+		.ok_or_else(|| anyhow!("count needs a type name"))?;
+	let counted = arg
+		.get("countFor")
+		.and_then(serde_json::Value::as_str)
+		.ok_or_else(|| anyhow!("count needs countFor"))?;
+	ensure!(
+		!counted.contains('/'),
+		"count of {counted:?} should name a sibling field"
+	);
+	Ok(Some((counted, int)))
 }
 
 pub struct Switch;

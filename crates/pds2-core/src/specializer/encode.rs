@@ -346,6 +346,7 @@ impl<'a> Encoding<'a> {
 				crate::ast::BinOp::Add => x + y,
 				crate::ast::BinOp::Sub => x - y,
 				crate::ast::BinOp::Mul => x * y,
+				crate::ast::BinOp::Div => x / y,
 			};
 			return self.elab.build(ty.expect("float scalar"), &Expr::Const(Value::Float(r)));
 		}

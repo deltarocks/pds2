@@ -88,6 +88,29 @@ impl<'a> RustMeta<'a> {
 	}
 }
 
+pub struct RustNames<'a>(RustMeta<'a>);
+
+impl<'a> RustNames<'a> {
+	pub fn new(types: &'a TypeMap, reg: &'a Registry) -> Result<Self> {
+		Ok(Self(RustMeta::new(types, reg, boxing::analyze(types, reg)?)))
+	}
+	pub fn ty(&self, id: TypeId) -> Tokens {
+		Names::ty(&self.0, id)
+	}
+	pub fn item(&self, id: TypeId, name: &str) -> Tokens {
+		Names::item(&self.0, id, name)
+	}
+	pub fn module(&self, id: TypeId) -> String {
+		self.0.name_str(id)
+	}
+	pub fn boxed(&self, owner: TypeId, slot: &Ident) -> bool {
+		Names::boxed(&self.0, owner, slot)
+	}
+	pub fn lower(&self, expr: &Expr) -> Result<Tokens> {
+		lower(&self.0, expr, false)
+	}
+}
+
 impl Names<Rust> for RustMeta<'_> {
 	fn ty(&self, id: TypeId) -> Tokens {
 		RustMeta::ty(self, id)
@@ -342,6 +365,7 @@ fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 						BinOp::Add => "wrapping_add",
 						BinOp::Sub => "wrapping_sub",
 						BinOp::Mul => "wrapping_mul",
+						BinOp::Div => "wrapping_div",
 					};
 					quote!(($a).$method($b))
 				}

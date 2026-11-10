@@ -2,6 +2,7 @@
 
 use std::cell::Cell;
 
+pub mod convert;
 pub mod natives;
 pub mod protobuf;
 

@@ -9,8 +9,6 @@ members = [
 	"crates/pds2-specializer-protodef",
 	"crates/pds2-specializer-minecraft-data",
 	"crates/pds2-specializer-protobuf",
-	"crates/minecraft-protocol",
-	"crates/minecraft-proxy",
 	"crates/nbt",
 	"crates/lang-tests",
 	"crates/pds-runtime",

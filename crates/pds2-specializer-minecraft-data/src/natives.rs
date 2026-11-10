@@ -272,6 +272,7 @@ impl Upgrade for EntityMetadataLoop {
 				args: BTreeSet::from_iter(["end".to_owned()]),
 				arg_types: BTreeMap::from_iter([("end".to_owned(), "End")]),
 				generics: BTreeSet::from_iter(["End".to_owned()]),
+				..Default::default()
 			},
 			..Default::default()
 		}
@@ -307,6 +308,14 @@ pub struct UUID;
 impl Upgrade for UUID {
 	fn name(&self) -> String {
 		"UUID".to_owned()
+	}
+}
+
+pub struct Opaque(pub &'static str);
+
+impl Upgrade for Opaque {
+	fn name(&self) -> String {
+		self.0.to_owned()
 	}
 }
 

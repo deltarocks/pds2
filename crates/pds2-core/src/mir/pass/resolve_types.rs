@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 
@@ -236,7 +236,9 @@ impl Definition {
 		for (name, param) in self.params.iter_mut() {
 			*param = match self.param_types.iter().find(|(n, _)| n == name) {
 				Some((_, declared)) => *declared,
-				None => collector.find_type(i, name)?,
+				None => collector
+					.find_type(i, name)
+					.with_context(|| format!("argument {name:?} of {}", self.name.readable_name()))?,
 			};
 		}
 		Ok(())
@@ -286,8 +288,19 @@ pub fn resolve_types(types: &mut TypeMap) -> Result<()> {
 		} else if !collector.has_invalid && !collector.has_valid {
 			break;
 		}
+		let names: BTreeMap<TypeId, String> = types
+			.0
+			.iter()
+			.map(|(i, d)| (*i, d.name.readable_name()))
+			.collect();
 		for (i, d) in types.0.iter_mut() {
-			d.propogate_types(*i, &collector)?;
+			d.propogate_types(*i, &collector).map_err(|e| {
+				let mut msg = format!("{e:#}");
+				for (id, name) in &names {
+					msg = msg.replace(&format!("{id:?}"), name);
+				}
+				anyhow!("{msg}")
+			})?;
 		}
 	}
 

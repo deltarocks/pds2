@@ -5,6 +5,7 @@ use genco::lang::{rust, Rust};
 use genco::prelude::*;
 
 use pds2_core::ast::{self, Ident, Statement};
+use pds2_core::generator::rust::rname;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, Value};
 use pds2_core::specializer::encode::{int_of, Args, Encoder, Encoding, Val};
@@ -139,11 +140,11 @@ impl NativeCodegen<Rust> for Bitfield {
 				// to sign-extend
 				let pad = e.bits - e.size;
 				quote! {
-					let $(&e.name) = (((((acc >> $(shift.to_string())) & $(&mask)) as u$(e.bits.to_string())) << $(pad.to_string())) as $(&prim)) >> $(pad.to_string());
+					let $(rname(&e.name)) = (((((acc >> $(shift.to_string())) & $(&mask)) as u$(e.bits.to_string())) << $(pad.to_string())) as $(&prim)) >> $(pad.to_string());
 				}
 			} else {
 				quote! {
-					let $(&e.name) = ((acc >> $(shift.to_string())) & $(&mask)) as $(&prim);
+					let $(rname(&e.name)) = ((acc >> $(shift.to_string())) & $(&mask)) as $(&prim);
 				}
 			});
 			offset += e.size;
@@ -154,13 +155,13 @@ impl NativeCodegen<Rust> for Bitfield {
 			#[derive(Debug, Clone, PartialEq)]
 			pub struct Ty {
 				$(for (e, (_, ty)) in entries.iter().zip(ctx.native.fields.iter()) join($['\r']) =>
-					pub $(&e.name): $(ctx.names.ty(ty.target)),
+					pub $(rname(&e.name)): $(ctx.names.ty(ty.target)),
 				)
 			}
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
 				let mut acc: u128 = 0;
 				$(for e in &entries join($['\r']) =>
-					acc = (acc << $(e.size.to_string())) | ((_0.$(&e.name) as u128) & $(format!("{:#x}", (1u128 << e.size) - 1)));
+					acc = (acc << $(e.size.to_string())) | ((_0.$(rname(&e.name)) as u128) & $(format!("{:#x}", (1u128 << e.size) - 1)));
 				)
 				for i in (0..$(bytes.to_string())u32).rev() {
 					$(ctx.names.serialize(u8id))(&(((acc >> (i * 8)) & 0xff) as u8), output)?;
@@ -174,7 +175,7 @@ impl NativeCodegen<Rust> for Bitfield {
 				}
 				$(for t in extract join($['\r']) => $t)
 				Ok(Ty {
-					$(for e in &entries join(,$[' ']) => $(&e.name))
+					$(for e in &entries join(,$[' ']) => $(rname(&e.name)))
 				})
 			}
 			pub fn size_of(_0: &Ty) -> usize {
@@ -637,10 +638,19 @@ impl NativeCodegen<Rust> for Buffer {
 			}
 			v => bail!("unknown buffer overload: {v:?}"),
 		};
+		let virtual_size = match ctx.virtual_field("size") {
+			Some(virt) => quote! {
+				pub fn virtual_size(_0: &Ty) -> $(ctx.names.ty(virt)) {
+					_0.len().try_into().expect("buffer length")
+				}
+			},
+			None => quote!(),
+		};
 		Ok(quote! {
 			$((ctx.args_struct)())
 			pub type Ty = $ty;
 			$main
+			$virtual_size
 		})
 	}
 }
@@ -1015,6 +1025,16 @@ impl Encoder for Buffer {
 		}
 		encode_bytes(cx, bytes, out)
 	}
+	fn virtual_field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
+		let (_, ty) = v
+			.native
+			.virtual_fields
+			.iter()
+			.find(|(n, _)| n == name)
+			.ok_or_else(|| anyhow!("{} has no virtual field {name:?}", cx.name(v.id)))?;
+		ensure!(name.as_str() == "size", "unknown buffer virtual field {name:?}");
+		cx.number(ty.target, bytes_of(v.c)?.len() as i128)
+	}
 }
 
 impl ValueModel for PString {
@@ -1027,6 +1047,9 @@ impl ValueModel for PString {
 	) -> Result<Construction> {
 		match value {
 			Expr::Const(Value::String(s)) => Ok(Construction::Literal(Value::String(s.clone()))),
+			Expr::Const(Value::UnionDescriminator(s)) => {
+				Ok(Construction::Literal(Value::String(s.as_str().to_owned())))
+			}
 			v => bail!("{} is written as a string, got {}", cx.name(id), describe(v)),
 		}
 	}

@@ -53,6 +53,7 @@ pub fn parse_reference(r: &str, extra_ups: usize) -> Result<ast::FieldRef> {
 pub struct NativeSigVariant {
 	/// value (lowercase) parameters, declared as `argument(name)`
 	pub args: BTreeSet<String>,
+	pub virtual_fields: BTreeMap<String, &'static str>,
 	pub arg_types: BTreeMap<String, &'static str>,
 	/// type (uppercase) parameters, declared as `type(Name)`
 	pub generics: BTreeSet<String>,
@@ -76,19 +77,32 @@ pub struct NativeSig {
 /// One level of the lexical scope stack tracked during upgrade, used to convert
 /// protodef references (bare names resolved by searching enclosing containers) into
 /// pds references (explicit `../` counts).
+#[derive(Default, Clone)]
+pub struct ContainerScope {
+	pub fields: BTreeSet<String>,
+	pub switch_valued: BTreeSet<String>,
+	pub inlined: BTreeMap<String, String>,
+	pub types: BTreeMap<String, Value>,
+}
+
 enum ScopeFrame {
 	/// a container with its field names
-	Container(BTreeSet<String>, BTreeSet<String>),
+	Container(ContainerScope),
 	/// a native wrapper (option, array element, generic binding): consumes one
 	/// `../` level in pds scoping but holds no fields
 	Wrapper,
 }
+
+type ParamKey = (String, String);
 
 pub struct UpgradeCtx<'r> {
 	registry: &'r UpgradeRegistry,
 	natives: BTreeMap<String, NativeSig>,
 	scopes: Vec<ScopeFrame>,
 	type_scopes: Vec<Map<String, Value>>,
+	counted: bool,
+	param_uses: BTreeMap<ParamKey, Vec<Option<String>>>,
+	param_types: BTreeMap<ParamKey, String>,
 }
 
 pub enum TagKind {
@@ -154,12 +168,10 @@ impl UpgradeCtx<'_> {
 	/// run `f` inside a container scope with the given field names
 	pub fn in_container<T>(
 		&mut self,
-		fields: BTreeSet<String>,
-		switch_valued: BTreeSet<String>,
+		scope: ContainerScope,
 		f: impl FnOnce(&mut Self) -> Result<T>,
 	) -> Result<T> {
-		self.scopes
-			.push(ScopeFrame::Container(fields, switch_valued));
+		self.scopes.push(ScopeFrame::Container(scope));
 		let r = f(self);
 		self.scopes.pop();
 		r
@@ -171,7 +183,7 @@ impl UpgradeCtx<'_> {
 			.iter()
 			.rev()
 			.filter_map(|f| match f {
-				ScopeFrame::Container(fields, switches) => Some((fields, switches)),
+				ScopeFrame::Container(c) => Some((&c.fields, &c.switch_valued)),
 				ScopeFrame::Wrapper => None,
 			})
 			.skip(dots)
@@ -187,6 +199,11 @@ impl UpgradeCtx<'_> {
 		let dots = parsed.up;
 		let head = match parsed.path.0.first() {
 			Some(FieldRefSegment::Down { to, .. }) => to.as_str().to_owned(),
+			Some(FieldRefSegment::Arg(_)) => {
+				ensure!(dots == 0, "type parameter reference {r:?} can't go up");
+				parsed.up = self.scopes.len();
+				return Ok(parsed);
+			}
 			_ => bail!("protodef reference should start with a field name: {r:?}"),
 		};
 		let mut up = 1;
@@ -195,11 +212,21 @@ impl UpgradeCtx<'_> {
 		for frame in self.scopes.iter().rev() {
 			match frame {
 				ScopeFrame::Wrapper => up += 1,
-				ScopeFrame::Container(fields, _) => {
+				ScopeFrame::Container(c) => {
 					if skipped < dots {
 						skipped += 1;
 						up += 1;
-					} else if fields.contains(&head) {
+					} else if c.fields.contains(&head) {
+						found = true;
+						break;
+					} else if let Some(holder) = c.inlined.get(&head) {
+						parsed.path.0.insert(
+							0,
+							FieldRefSegment::Down {
+								to: Ident::new(holder),
+								ignore_delegation: false,
+							},
+						);
 						found = true;
 						break;
 					} else {
@@ -214,6 +241,70 @@ impl UpgradeCtx<'_> {
 		);
 		parsed.up = up;
 		Ok(parsed)
+	}
+	/// The protodef type name of a referenced field, when the reference names a
+	/// sibling (or an outer) field directly and its type is a plain name
+	pub fn reference_type(&self, r: &str) -> Option<String> {
+		let parsed = parse_reference(r, 0).ok()?;
+		let [FieldRefSegment::Down { to, .. }] = parsed.path.0.as_slice() else {
+			return None;
+		};
+		let mut skipped = 0;
+		for frame in self.scopes.iter().rev() {
+			let ScopeFrame::Container(c) = frame else {
+				continue;
+			};
+			if skipped < parsed.up {
+				skipped += 1;
+				continue;
+			}
+			if let Some(t) = c.types.get(to.as_str()) {
+				return t.as_str().map(str::to_owned);
+			}
+			if c.fields.contains(to.as_str()) {
+				return None;
+			}
+		}
+		None
+	}
+	fn scalar_of_type(&self, name: &str, depth: usize) -> Option<String> {
+		if depth > 16 {
+			return None;
+		}
+		match self.named_type(name)? {
+			Value::String(s) if s == "native" => self.registry.get(name)?.sig().scalar,
+			Value::String(other) => self.scalar_of_type(&other.clone(), depth + 1),
+			_ => None,
+		}
+	}
+	fn choose_param_types(&mut self) -> Result<()> {
+		for ((def, param), uses) in std::mem::take(&mut self.param_uses) {
+			let Some(uses) = uses.into_iter().collect::<Option<Vec<String>>>() else {
+				continue;
+			};
+			let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+			for u in uses {
+				*counts.entry(u).or_default() += 1;
+			}
+			let scalar = |t: &str| self.scalar_of_type(t, 0);
+			let covers = |a: &str, b: &str| {
+				a == b
+					|| matches!((scalar(a), scalar(b)), (Some(x), Some(y)) if scalar_covers(&x, &y))
+			};
+			let chosen = counts
+				.iter()
+				.filter(|(c, _)| counts.keys().all(|o| covers(c, o)))
+				.max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))
+				.map(|(c, _)| c.clone());
+			let Some(chosen) = chosen else {
+				bail!(
+					"argument {param:?} of {def:?} is given {:?}, none of which holds all the others",
+					counts.keys().collect::<Vec<_>>()
+				);
+			};
+			self.param_types.insert((def, param), chosen);
+		}
+		Ok(())
 	}
 	pub fn upgrade_named_field(&mut self, obj: &Map<String, Value>) -> Result<Statement> {
 		let name = obj
@@ -319,7 +410,7 @@ fn match_value(key: &str) -> ast::Value {
 	}
 }
 
-fn switch_fields(obj: &Map<String, Value>) -> Result<&Map<String, Value>> {
+fn switch_fields(obj: &Map<String, Value>) -> Result<Map<String, Value>> {
 	let fields = obj
 		.get("fields")
 		.and_then(Value::as_object)
@@ -327,7 +418,18 @@ fn switch_fields(obj: &Map<String, Value>) -> Result<&Map<String, Value>> {
 	if let Some(key) = fields.keys().find(|k| k.starts_with('/')) {
 		bail!("switch key {key:?} compares against a root context variable, which pds has no equivalent for");
 	}
-	Ok(fields)
+	let numeric = fields.keys().any(|k| key_int(k).is_some());
+	Ok(fields
+		.iter()
+		.filter(|(k, _)| {
+			let dead = numeric && matches!(k.as_str(), "true" | "false");
+			if dead {
+				tracing::warn!("switch key {k:?} never equals a number, dropping its arm");
+			}
+			!dead
+		})
+		.map(|(k, v)| (k.clone(), v.clone()))
+		.collect())
 }
 
 fn bool_exhaustive(fields: &Map<String, Value>) -> bool {
@@ -383,14 +485,14 @@ pub fn upgrade_switch(obj: &Map<String, Value>, ctx: &mut UpgradeCtx) -> Result<
 	let fields = switch_fields(obj)?;
 
 	let mut statements = Vec::new();
-	for (key, ty) in fields {
+	for (key, ty) in &fields {
 		statements.push(variant_stmt(
 			key,
 			match_value(key),
 			Some(upgrade_arm(ty, ctx)?),
 		));
 	}
-	statements.extend(default_stmt(obj, bool_exhaustive(fields), ctx)?);
+	statements.extend(default_stmt(obj, bool_exhaustive(&fields), ctx)?);
 
 	Ok(Item::simple_builder("union")
 		.argsb(ItemArgs::builder().named("tag", ast::Value::FieldRef(ctx.reference(compare_to)?)))
@@ -479,7 +581,7 @@ pub fn merge_mapper_switch(
 		};
 		statements.push(variant_stmt(&variant, ast::Value::Int(value), payload));
 	}
-	for (key, payload) in fields {
+	for (key, payload) in &fields {
 		let Some(value) = key_int(key) else {
 			continue;
 		};
@@ -515,14 +617,14 @@ pub fn merge_scalar_switch(
 	let fields = switch_fields(switch)?;
 	let tag_ty = upgrade_type_single(tag, ctx)?;
 	let mut statements = Vec::new();
-	for (key, ty) in fields {
+	for (key, ty) in &fields {
 		statements.push(variant_stmt(
 			key,
 			match_value(key),
 			Some(upgrade_arm(ty, ctx)?),
 		));
 	}
-	statements.extend(default_stmt(switch, bool_exhaustive(fields), ctx)?);
+	statements.extend(default_stmt(switch, bool_exhaustive(&fields), ctx)?);
 	Ok(Item::simple_builder("union")
 		.argsb(ItemArgs::builder().named("Tag",tag_ty))
 		.block(Block {
@@ -632,6 +734,35 @@ pub fn upgrade_type(value: Value, ctx: &mut UpgradeCtx) -> Result<Vec<ast::Value
 						.ok_or_else(|| anyhow!("mapper needs object"))?,
 					ctx,
 				)?,
+				name if ctx.registry.get(name).is_none()
+					&& ctx.named_type(name).is_some_and(|t| t != "native")
+					&& a.len() == 2
+					&& a[1].is_object() =>
+				{
+					let mut args = ItemArgs::builder();
+					for (k, v) in a[1].as_object().expect("checked") {
+						let value = match v {
+							Value::String(r) => {
+								let reference = ast::Value::FieldRef(ctx.reference(r)?);
+								let got = ctx.reference_type(r);
+								let key = (name.to_owned(), k.clone());
+								ctx.param_uses.entry(key.clone()).or_default().push(got.clone());
+								match (ctx.param_types.get(&key), got) {
+									(Some(want), Some(got)) if *want != got => {
+										let mut cast = Item::simple_builder(want.as_str())
+											.argsb(ItemArgs::builder().arg(reference))
+											.build_values();
+										cast.remove(0)
+									}
+									_ => reference,
+								}
+							}
+							v => upgrade_value(v)?,
+						};
+						args = args.named(k.as_str(), value);
+					}
+					Item::simple_builder(name).args(args.build()).build_values()
+				}
 				name if ctx.registry.get(name).is_some() => {
 					let upgrade = ctx.registry.get(name).expect("existence checked");
 					upgrade
@@ -655,6 +786,13 @@ fn native_variant(sig: &NativeSigVariant) -> Vec<Statement> {
 			Some(ty) => item.then(vec![ast::Value::new_simple_item(*ty)]),
 			None => item.build_values(),
 		}));
+	}
+	for (name, ty) in &sig.virtual_fields {
+		statements.push(simple_stmt(
+			Item::simple_builder("virtual_field")
+				.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(name.as_str())))
+				.then(vec![ast::Value::new_simple_item(*ty)]),
+		));
 	}
 	for generic in &sig.generics {
 		statements.push(simple_stmt(
@@ -705,6 +843,50 @@ fn native_block(sig: &NativeSig) -> Block {
 	}
 }
 
+fn uses_count(v: &Value) -> bool {
+	match v {
+		Value::Array(items) => {
+			items.first().and_then(Value::as_str) == Some("count") || items.iter().any(uses_count)
+		}
+		Value::Object(map) => map.values().any(uses_count),
+		_ => false,
+	}
+}
+
+fn int_range(s: &str) -> Option<(bool, u32)> {
+	let (sign, bits) = s.split_at(1);
+	let bits = bits.parse().ok()?;
+	match sign {
+		"i" => Some((true, bits)),
+		"u" => Some((false, bits)),
+		_ => None,
+	}
+}
+
+fn scalar_covers(a: &str, b: &str) -> bool {
+	if a == b {
+		return true;
+	}
+	match (int_range(a), int_range(b)) {
+		(Some((false, wa)), Some((false, wb))) | (Some((true, wa)), Some((true, wb))) => wb <= wa,
+		(Some((true, wa)), Some((false, wb))) => wb < wa,
+		_ => false,
+	}
+}
+
+fn type_params(v: &Value, out: &mut BTreeSet<String>) {
+	match v {
+		Value::String(s) => {
+			if let Some(p) = s.strip_prefix('$') {
+				out.insert(p.to_owned());
+			}
+		}
+		Value::Array(items) => items.iter().for_each(|i| type_params(i, out)),
+		Value::Object(map) => map.values().for_each(|i| type_params(i, out)),
+		_ => {}
+	}
+}
+
 fn upgrade_namespace(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::Block> {
 	ensure!(value.is_object(), "namespace should be object");
 	let types = value
@@ -735,7 +917,13 @@ fn upgrade_namespace_inner(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::B
 					.registry
 					.get(k)
 					.ok_or_else(|| anyhow!("upgrader for native type {k} is not registered"))?;
-				let sig = sig.sig();
+				let mut sig = sig.sig();
+				let has_varint = types.get("varint").is_some_and(|v| v == "native");
+				if (ctx.counted || has_varint) && matches!(k, "array" | "buffer") {
+					if let Some(sized) = sig.variants.get_mut("sized") {
+						sized.virtual_fields.insert("size".to_owned(), "varint");
+					}
+				}
 				let mut builder = Item::simple_builder("def_native")
 					.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(k)));
 				let block = native_block(&sig);
@@ -766,11 +954,28 @@ fn upgrade_namespace_inner(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::B
 					items: builder.build_values(),
 				});
 			} else {
-				statements.push(simple_stmt(
-					Item::simple_builder("def")
-						.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(k.as_str())))
-						.then(upgrade_type(v.clone(), ctx)?),
-				));
+				let mut params = BTreeSet::new();
+				type_params(v, &mut params);
+				let mut def = Item::simple_builder("def")
+					.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(k.as_str())));
+				if !params.is_empty() {
+					def = def.block(Block {
+						attributes: Default::default(),
+						statements: params
+							.iter()
+							.map(|p| {
+								let arg = Item::simple_builder("argument")
+									.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(p.as_str())));
+								simple_stmt(match ctx.param_types.get(&(k.clone(), p.clone())) {
+									Some(ty) => arg.then(vec![ast::Value::new_simple_item(ty.as_str())]),
+									None => arg.build_values(),
+								})
+							})
+							.collect(),
+						root: false,
+					});
+				}
+				statements.push(simple_stmt(def.then(upgrade_type(v.clone(), ctx)?)));
 			}
 		}
 	}
@@ -792,14 +997,31 @@ fn upgrade_namespace_inner(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::B
 	})
 }
 
-pub fn upgrade(value: Value, registry: &UpgradeRegistry) -> Result<ast::Block> {
+pub fn upgrade(mut value: Value, registry: &UpgradeRegistry) -> Result<ast::Block> {
+	if let Some(types) = value.get_mut("types").and_then(Value::as_object_mut) {
+		if types.get("bitfield").is_some_and(|t| t == "native") {
+			for int in ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"] {
+				types
+					.entry(int)
+					.or_insert_with(|| Value::String("native".to_owned()));
+			}
+		}
+	}
 	let mut ctx = UpgradeCtx {
 		registry,
 		natives: BTreeMap::new(),
 		scopes: Vec::new(),
 		type_scopes: Vec::new(),
+		counted: uses_count(&value),
+		param_uses: BTreeMap::new(),
+		param_types: BTreeMap::new(),
 	};
 
+	upgrade_namespace(&value, &mut ctx)?;
+	let root_types = value.get("types").and_then(Value::as_object).cloned();
+	ctx.type_scopes.push(root_types.unwrap_or_default());
+	ctx.choose_param_types()?;
+	ctx.type_scopes.pop();
 	let mut block = upgrade_namespace(&value, &mut ctx)?;
 	block.root = true;
 	Ok(block)
@@ -861,6 +1083,72 @@ mod tests {
 			"@specializer bitfield def_native(bitfield) { body { item(field) { argument(size); argument(signed) => false; }; }; };",
 		);
 		assert_has(&out, "def(p) => bitfield { field(x, signed: true, size: 8); };");
+	}
+
+	#[test]
+	fn type_parameters_become_def_arguments() {
+		let out = upgrade(json!({
+			"data": ["switch", { "compareTo": "$compareTo", "fields": { "1": "u8" }, "default": "void" }],
+			"p": ["container", [
+				{ "name": "kind", "type": "varint" },
+				{ "name": "x", "type": "u8" },
+				{ "name": "payload", "type": ["data", { "compareTo": "kind" }] }
+			]],
+			"q": ["container", [
+				{ "name": "x", "type": "u8" },
+				{ "name": "y", "type": "u8" },
+				{ "name": "payload", "type": ["data", { "compareTo": "x" }] }
+			]]
+		}))
+		.unwrap();
+		assert_has(
+			&out,
+			"def(data) { argument(compareTo) => varint; } => union(tag: ./$compareTo) {",
+		);
+		assert_has(&out, "field(payload) => data(compareTo: ../kind);");
+		assert_has(&out, "field(payload) => data(compareTo: varint(../x));");
+	}
+
+	#[test]
+	fn count_becomes_a_virtual_size() {
+		let out = upgrade(json!({
+			"buffer": "native", "i16": "native",
+			"p": ["container", [
+				{ "name": "n", "type": ["count", { "type": "i16", "countFor": "items" }] },
+				{ "name": "items", "type": ["array", { "count": "n", "type": "u8" }] }
+			]]
+		}))
+		.unwrap();
+		assert_has(&out, "virtual_field(n, value: i16(./items/@size)) => i16;");
+		assert_has(&out, "variant(sized) { argument(count); virtual_field(size) => varint; };");
+	}
+
+	#[test]
+	fn anonymous_bitfield_names_are_reachable() {
+		let out = upgrade(json!({
+			"bitfield": "native",
+			"p": ["container", [
+				{ "anon": true, "type": ["bitfield", [
+					{ "name": "kind", "size": 3, "signed": false },
+					{ "name": "key", "size": 5, "signed": false }
+				]] },
+				{ "name": "value", "type": ["switch", { "compareTo": "kind", "fields": { "0": "u8" } }] }
+			]]
+		}))
+		.unwrap();
+		assert_has(&out, "union(tag: ../ANON/kind)");
+		assert_has(&out, "def_native(u32);");
+	}
+
+	#[test]
+	fn boolean_keys_of_numeric_switches_are_dropped() {
+		let out = upgrade(json!({ "p": ["container", [
+			{ "name": "n", "type": "varint" },
+			{ "name": "x", "type": "u8" },
+			{ "name": "v", "type": ["switch", { "compareTo": "n", "fields": { "0": "void", "false": "void" }, "default": "u8" }] }
+		]] }))
+		.unwrap();
+		assert!(!out.contains("match: false"), "{out}");
 	}
 
 	#[test]

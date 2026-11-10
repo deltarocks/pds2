@@ -107,12 +107,13 @@ rule expr() -> Value = precedence!{
 	x:(@) _ "-" _ y:@ { Value::Binary(BinOp::Sub, Box::new(x), Box::new(y)) }
 	--
 	x:(@) _ "*" _ y:@ { Value::Binary(BinOp::Mul, Box::new(x), Box::new(y)) }
+	x:(@) _ "/" _ y:@ { Value::Binary(BinOp::Div, Box::new(x), Box::new(y)) }
 	--
 	"(" _ e:expr() _ ")" { e }
 	v:value() { v }
 }
 rule itemBlock() -> Block
-	= "{" attrs:(a:insideBlockAttr() _ {a})* s:statement()* "}" _ {
+	= "{" attrs:(_ a:insideBlockAttr() _ {a})* s:statement()* _ "}" _ {
 		Block {
 			attributes: attrs.iter().cloned().collect(),
 			statements: s,

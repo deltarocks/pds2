@@ -3,17 +3,6 @@ protos := "target/protos"
 envoy_includes := "-I " + protos + "/data-plane-api -I " + protos + "/xds -I " + protos + "/protoc-gen-validate"
 envoy_roots := "envoy/config/cluster/v3/cluster.proto envoy/extensions/upstreams/http/v3/http_protocol_options.proto"
 
-minecraft: nbt
-	rm -rf crates/minecraft-protocol/src/gen ts/minecraft-protocol/gen
-	cargo run minecraft-data upgrade protocol.json
-	cargo run compile protocol.pds rust --to crates/minecraft-protocol/src/gen
-	cargo run compile protocol.pds typescript --to ts/minecraft-protocol/gen
-
-nbt:
-	rm -rf crates/nbt/src/gen ts/nbt/gen
-	cargo run compile crates/nbt/nbt.pds rust --to crates/nbt/src/gen
-	cargo run compile crates/nbt/nbt.pds typescript --to ts/nbt/gen
-
 lang:
 	rm -rf crates/lang-tests/src/gen ts/lang-tests/gen
 	cargo run compile crates/lang-tests/lang.pds rust --to crates/lang-tests/src/gen
@@ -54,6 +43,6 @@ envoy: envoy-protos
 	cargo run compile crates/envoy-api/envoy.pds typescript --const cluster_fixture=crates/envoy-api/cluster.txtpds2 --to ts/envoy-api/gen
 	{{protoc}} {{envoy_includes}} --encode=envoy.config.cluster.v3.Cluster {{envoy_roots}} < crates/envoy-api/cluster.txtpb > target/cluster.bin
 
-test: minecraft lang descriptor-check envoy
+test: lang descriptor-check envoy
 	cargo test --workspace
 	cd ts && deno test --allow-net --allow-read

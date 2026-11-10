@@ -300,6 +300,7 @@ pub enum BinOp {
 	Add,
 	Sub,
 	Mul,
+	Div,
 }
 impl BinOp {
 	pub fn symbol(self) -> &'static str {
@@ -307,12 +308,13 @@ impl BinOp {
 			BinOp::Add => "+",
 			BinOp::Sub => "-",
 			BinOp::Mul => "*",
+			BinOp::Div => "/",
 		}
 	}
 	pub fn precedence(self) -> u8 {
 		match self {
 			BinOp::Add | BinOp::Sub => 1,
-			BinOp::Mul => 2,
+			BinOp::Mul | BinOp::Div => 2,
 		}
 	}
 	pub fn eval(self, a: i128, b: i128) -> Option<i128> {
@@ -320,6 +322,7 @@ impl BinOp {
 			BinOp::Add => a.checked_add(b),
 			BinOp::Sub => a.checked_sub(b),
 			BinOp::Mul => a.checked_mul(b),
+			BinOp::Div => a.checked_div(b),
 		}
 	}
 }
@@ -426,6 +429,18 @@ impl ItemArgs {
 	}
 	pub fn named_names<'i>(&'i self) -> impl Iterator<Item = &'i Ident> {
 		self.named.keys()
+	}
+	pub fn positional(&self) -> &[Value] {
+		&self.unnamed
+	}
+	pub fn named_values(&self) -> impl Iterator<Item = (&Ident, &Value)> {
+		self.named.iter()
+	}
+	pub fn values_mut(&mut self) -> impl Iterator<Item = &mut Value> {
+		self.unnamed.iter_mut().chain(self.named.values_mut())
+	}
+	pub fn named_values_mut(&mut self) -> impl Iterator<Item = (&Ident, &mut Value)> {
+		self.named.iter_mut()
 	}
 	pub fn verify_unused(&self) -> Result<()> {
 		for i in 0..self.unnamed.len() {

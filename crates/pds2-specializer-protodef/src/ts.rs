@@ -224,10 +224,19 @@ impl NativeCodegen<JavaScript> for Buffer {
 			},
 			v => bail!("unknown buffer overload: {v:?}"),
 		};
+		let virtual_size = match ctx.virtual_field("size") {
+			Some(virt) => quote! {
+				export function virtual_size(_0: Ty): $(ctx.names.ty(virt)) {
+					return $(int_as(ctx.names, virt, quote!(_0.length)));
+				}
+			},
+			None => quote!(),
+		};
 		Ok(quote! {
 			$((ctx.args_struct)())
 			export type Ty = Uint8Array;
 			$main
+			$virtual_size
 		})
 	}
 }

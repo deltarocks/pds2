@@ -17,6 +17,24 @@ impl Block {
 			out.push_signal(Signal::StartNewLineGroup);
 		}
 
+		let docs = self.attributes.iter().filter(|(k, _)| k.as_str() == "doc");
+		let rest = self.attributes.iter().filter(|(k, _)| k.as_str() != "doc");
+		for (k, v) in docs.chain(rest) {
+			out.push_str_runtime_width_computed("@!");
+			out.push_string(k.to_string());
+			out.push_str_runtime_width_computed(" ");
+			for (i, item) in v.iter().enumerate() {
+				if i != 0 {
+					out.push_str_runtime_width_computed(" => ");
+				}
+				item.print(out, None);
+			}
+			out.push_signal(Signal::NewLine);
+		}
+		if !self.attributes.is_empty() && !self.statements.is_empty() {
+			out.push_signal(Signal::NewLine);
+		}
+
 		for (i, stmt) in self.statements.iter().enumerate() {
 			if i != 0 {
 				out.push_signal(Signal::NewLine);

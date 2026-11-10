@@ -40,4 +40,7 @@ pub fn register_upgraders(reg: &mut UpgradeRegistry) {
 	reg.register(AnonOptionalNbt);
 	reg.register(AnonymousNbt);
 	reg.register(LpVec3);
+	for name in ["nbt", "optionalNbt", "compressedNbt", "byte_array", "string"] {
+		reg.register(Opaque(name));
+	}
 }

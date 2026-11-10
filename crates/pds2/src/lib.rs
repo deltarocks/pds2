@@ -1,4 +1,8 @@
 use pds2_core::specializer::Registry;
+
+pub mod converters;
+pub mod merge;
+pub mod survey;
 use pds2_specializer_protodef::UpgradeRegistry;
 
 pub fn registry() -> Registry {
