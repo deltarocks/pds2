@@ -418,12 +418,20 @@ impl NativeCodegen<Rust> for Array {
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 		let perror = &rust::import("crate::pds", "Error");
+		let virt = ctx.virtual_field("size");
+		let check_size = match virt {
+			Some(virt) => quote! {
+				let _: $(ctx.names.ty(virt)) = _0.len().try_into().map_err(|_| $perror::InvalidValue)?;
+			},
+			None => quote!(),
+		};
 
 		let main = match ctx.variant.as_str() {
 			"inline" => {
 				let count = ctx.specialization("Count").context("array count type")?;
 				quote! {
 					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+						$(&check_size)
 						$(ctx.names.serialize(count))(&_0.len().try_into().map_err(|_| $perror::InvalidValue)?, output)?;
 						for e in _0.iter() {
 							$(ctx.names.serialize(value))(e, output)?;
@@ -452,6 +460,7 @@ impl NativeCodegen<Rust> for Array {
 				);
 				quote! {
 					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+						$(&check_size)
 						for e in _0.iter() {
 							$(ctx.names.serialize(value))(e, output)?;
 						}
@@ -476,10 +485,10 @@ impl NativeCodegen<Rust> for Array {
 		};
 
 		// the runtime length, referencable as `@size` (e.g. by a virtual length field)
-		let virtual_size = match ctx.virtual_field("size") {
+		let virtual_size = match virt {
 			Some(virt) => quote! {
 				pub fn virtual_size(_0: &Ty) -> $(ctx.names.ty(virt)) {
-					_0.len().try_into().expect("array length")
+					_0.len().try_into().unwrap_or_default()
 				}
 			},
 			None => rust::Tokens::new(),
@@ -587,6 +596,13 @@ impl NativeCodegen<Rust> for Buffer {
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 		let perror = &rust::import("crate::pds", "Error");
+		let virt = ctx.virtual_field("size");
+		let check_size = match virt {
+			Some(virt) => quote! {
+				let _: $(ctx.names.ty(virt)) = _0.len().try_into().map_err(|_| $perror::InvalidValue)?;
+			},
+			None => quote!(),
+		};
 		let read_bytes = quote! {
 			if count > input.remaining() {
 				return Err($perror::NotEnoughData);
@@ -598,6 +614,7 @@ impl NativeCodegen<Rust> for Buffer {
 			Ok(out)
 		};
 		let write_bytes = quote! {
+			$check_size
 			for b in _0.iter() {
 				$(ctx.names.serialize(u8id))(b, output)?;
 			}
@@ -637,10 +654,10 @@ impl NativeCodegen<Rust> for Buffer {
 			}
 			v => bail!("unknown buffer overload: {v:?}"),
 		};
-		let virtual_size = match ctx.virtual_field("size") {
+		let virtual_size = match virt {
 			Some(virt) => quote! {
 				pub fn virtual_size(_0: &Ty) -> $(ctx.names.ty(virt)) {
-					_0.len().try_into().expect("buffer length")
+					_0.len().try_into().unwrap_or_default()
 				}
 			},
 			None => quote!(),
