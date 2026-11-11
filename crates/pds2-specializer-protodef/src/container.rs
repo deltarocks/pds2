@@ -7,12 +7,11 @@ use pds2_core::specializer::encode::{const_eq, Encoder, Encoding, Scope, Target,
 use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
 use crate::union::{self, TagView, UnionView};
 use pds2_core::specializer::{
-	AstHir, BoxCost, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor,
-	ViewPolicy,
+	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
+	SlotVisitor, ViewPolicy,
 };
 use pds2_core::ast::{FieldRefSegment, Ident};
 use pds2_core::generator::common::local;
-use pds2_core::generator::rust::rname;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, TypeKind, TypeMap};
 
@@ -194,6 +193,17 @@ impl NativeLayout for Container {
 			}
 		}
 	}
+	fn members(&self, native: &mir::NativeType) -> Members {
+		Members {
+			fields: view(native)
+				.into_iter()
+				.flatten()
+				.filter(|f| f.load_from.is_none())
+				.map(|f| f.name.clone())
+				.collect(),
+			..Default::default()
+		}
+	}
 }
 
 // For a container field that is an external-tag union, a debug-build check that
@@ -253,11 +263,12 @@ impl NativeCodegen<Rust> for Container {
 	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
 		let fields = view(ctx.native).ok_or_else(|| anyhow!("malformed container"))?;
 		let parts = fields.iter().filter(|f| f.load_from.is_none()).map(|f| {
+			let name = ctx.field(f.name.as_str());
 			let v = ctx.slot_new(
 				f.name,
-				quote!($(ctx.names.into_view_fn(f.ty.target))(&mut _0.$(rname(f.name)))),
+				quote!($(ctx.names.into_view_fn(f.ty.target))(&mut _0.$(&name))),
 			);
-			quote!($(rname(f.name)): $v)
+			quote!($name: $v)
 		});
 		Ok(Some(ctx.into_view_fn(quote! {
 			$(ctx.into_path()) {
@@ -273,9 +284,10 @@ impl NativeCodegen<Rust> for Container {
 		let lt = &ctx.lt();
 		let this = &ctx.this();
 		let stored: Vec<&ContainerField> = fields.iter().filter(|f| f.load_from.is_none()).collect();
+		let fname = |f: &ContainerField| ctx.field(f.name.as_str());
 		let view_fields = stored.iter().map(|f| {
-			let v = ctx.slot_new(f.name, quote!($(names.view_fn(f.ty.target))(&_0.$(rname(f.name)))));
-			quote!($(rname(f.name)): $v)
+			let v = ctx.slot_new(f.name, quote!($(names.view_fn(f.ty.target))(&_0.$(fname(f)))));
+			quote!($(fname(f)): $v)
 		});
 		let assert_tag_call = |field: &ContainerField| -> rust::Tokens {
 			let Some(val) = assert_tag_arg(ctx.types, &fields, field) else {
@@ -283,14 +295,14 @@ impl NativeCodegen<Rust> for Container {
 			};
 			quote! {
 				$(names.item(field.ty.target, "debug_assert_tag"))(
-					&_0.$(rname(field.name)),
+					&_0.$(ctx.field(field.name.as_str())),
 					$((ctx.read)(val, false)),
 				);
 			}
 		};
 		let value_of = |field: &ContainerField| -> rust::Tokens {
 			match field.load_from {
-				None => quote!(&_0.$(rname(field.name))),
+				None => quote!(&_0.$(ctx.field(field.name.as_str()))),
 				Some(from) => (ctx.read)(from, false),
 			}
 		};
@@ -300,7 +312,7 @@ impl NativeCodegen<Rust> for Container {
 			pub struct $this {
 				$(for field in fields.iter() join($['\r']) =>
 					$(if field.load_from.is_none() {
-						pub $(rname(field.name)): $(ctx.slot_ty(field.name, field.ty.target)),
+						pub $(fname(field)): $(ctx.slot_ty(field.name, field.ty.target)),
 					} else {
 						$("// ") $(field.name) $("- virtual field")
 					})
@@ -331,7 +343,7 @@ impl NativeCodegen<Rust> for Container {
 				)
 				Ok(Ty {
 					$(for field in fields.iter().filter(|f| f.load_from.is_none()) join(,) =>
-						$(rname(field.name)): $(ctx.slot_new(field.name, quote!($(local(field.name)))))
+						$(fname(field)): $(ctx.slot_new(field.name, quote!($(local(field.name)))))
 					)
 				})
 			}
@@ -362,7 +374,7 @@ impl NativeCodegen<Rust> for Container {
 		let mut parts = Vec::new();
 		for (n, e) in record_of(c)? {
 			let value = cx.names.slot_new(id, n, (cx.lower)(e)?);
-			parts.push(quote!($(rname(n)): $value));
+			parts.push(quote!($(cx.names.field(id, n.as_str())): $value));
 		}
 		Ok(quote!($(cx.names.ty(id)) { $(for p in parts join(, ) => $p) }))
 	}
@@ -372,10 +384,10 @@ impl NativeCodegen<JavaScript> for Container {
 	fn generate(&self, ctx: &NativeCodegenCtx<JavaScript>) -> Result<js::Tokens> {
 		let fields = view(ctx.native).ok_or_else(|| anyhow!("malformed container"))?;
 		let names = ctx.names;
-		let pinput = &js::import("../pds.ts", "Input");
-		let poutput = &js::import("../pds.ts", "Output");
-		let perror = &js::import("../pds.ts", "PdsError");
-		let pequal = &js::import("../pds.ts", "equal");
+		let pinput = &ctx.runtime("Input");
+		let poutput = &ctx.runtime("Output");
+		let perror = &ctx.runtime("PdsError");
+		let pequal = &ctx.runtime("equal");
 		let has_args = !ctx.params.is_empty();
 		let args_of = |t: &mir::Type| -> js::Tokens {
 			let a = (ctx.pass_args)(t);

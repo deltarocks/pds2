@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 
 use pds2_core::mir::{self, TypeMap};
-use protobuf_descriptor::gen::pds_google_protobuf_FieldDescriptorProto_Type as field_type;
-use protobuf_descriptor::gen::pds_google_protobuf_FileDescriptorSet as file_set;
+use protobuf_descriptor::gen::google::protobuf::field_descriptor_proto_type as field_type;
+use protobuf_descriptor::gen::google::protobuf::file_descriptor_set as file_set;
 use protobuf_descriptor::pds::{Input, Output};
 
 const DECL: &str = r#"
@@ -174,6 +174,22 @@ fn protobuf_extensions_become_fields_of_the_extended_message() {
 	let value = "root::a::Opts(x: 1, b_tag: (v: true), b_Holder_nested: [\"p\", \"q\"])\n";
 	let bytes = pds2_cli::encode(&schema, None, value, &reg).unwrap();
 	assert_eq!(roundtrip(&schema, "root::a::Opts", &bytes), value);
+}
+
+#[test]
+fn repeated_message_fields_merge_like_generated_code() {
+	let options = |number: u8, text: u8| [0x42, 0x03, (number << 3) | 2, 0x01, text];
+	let file: Vec<u8> = [options(1, b'x'), options(8, b'y')].concat();
+	let bytes = [&[0x0a, file.len() as u8][..], &file].concat();
+
+	let set = file_set::deserialize(&mut Input::new(&bytes)).unwrap();
+	let opts = set.file[0].options.as_ref().unwrap();
+	assert_eq!(opts.java_package.as_deref(), Some("x"));
+	assert_eq!(opts.java_outer_classname.as_deref(), Some("y"));
+
+	let text = pds2_cli::decode(DESCRIPTOR, FILE_SET, &bytes, &pds2::registry()).unwrap();
+	assert!(text.contains("java_package: \"x\""), "{text}");
+	assert!(text.contains("java_outer_classname: \"y\""), "{text}");
 }
 
 #[test]

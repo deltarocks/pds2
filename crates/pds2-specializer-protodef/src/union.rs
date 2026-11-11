@@ -8,13 +8,12 @@ use pds2_core::specializer::decode::Input;
 use pds2_core::specializer::encode::{Encoder, Encoding, Scope, Target, Val};
 use pds2_core::specializer::expr::{value_eq, Elaborator, ValueModel};
 use pds2_core::specializer::{
-	AstHir, BoxCost, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, Projection,
-	SlotVisitor, ViewPolicy,
+	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
+	Projection, SlotVisitor, ViewPolicy,
 };
 use crate::upgrade::{NativeSig, NativeSigVariant, Upgrade};
 use pds2_core::ast::{FieldRefSegment, Ident};
 use pds2_core::generator::common::sanitize;
-use pds2_core::generator::rust::rname;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, TypeKind, TypeMap, Value};
 
@@ -157,6 +156,20 @@ impl NativeLayout for Union {
 		if let Some((name, ty)) = u.default {
 			v.slot(&Ident::new("@tag"), u.tag_type, Embed::Fixed);
 			v.slot(name, ty.target, Embed::Boxable(BoxCost::Low));
+		}
+	}
+	fn members(&self, native: &mir::NativeType) -> Members {
+		let Some(u) = view(native) else {
+			return Members::default();
+		};
+		Members {
+			variants: u
+				.arms
+				.iter()
+				.map(|(_, name, _)| (*name).clone())
+				.chain(u.default.map(|(name, _)| name.clone()))
+				.collect(),
+			..Default::default()
 		}
 	}
 }
@@ -428,7 +441,7 @@ impl NativeCodegen<Rust> for Union {
 		let path = &ctx.into_path();
 		let mut arms = Vec::new();
 		for (_, variant, vty) in &u.arms {
-			let v = rname(variant);
+			let v = ctx.variant(variant.as_str());
 			if ctx.types.is_void(vty.target) {
 				arms.push(quote!($owned::$(&v) => $path::$(&v),));
 			} else {
@@ -437,7 +450,7 @@ impl NativeCodegen<Rust> for Union {
 			}
 		}
 		if let Some((dname, dty)) = u.default {
-			let d = rname(dname);
+			let d = ctx.variant(dname.as_str());
 			let tag = quote!($(names.into_view_fn(u.tag_type))(__t));
 			if ctx.types.is_void(dty.target) {
 				arms.push(quote!($owned::$(&d)(__t) => $path::$(&d)($tag),));
@@ -475,7 +488,7 @@ impl NativeCodegen<Rust> for Union {
 					Some(FieldRefSegment::Arg(name)) => name.clone(),
 					other => bail!("union tag should be an argument by codegen: {other:?}"),
 				};
-				quote!(let __tag = args.$(rname(&tag_param));)
+				quote!(let __tag = args.$(ctx.arg(tag_param.as_str()));)
 			}
 			TagView::Inline(t) => quote! {
 				let __tagv = $(names.deserialize(t.target))(
@@ -531,7 +544,7 @@ impl NativeCodegen<Rust> for Union {
 		let mut de_branches: Vec<rust::Tokens> = Vec::new();
 		let mut name_arms: Vec<rust::Tokens> = Vec::new();
 		for ((value, variant, vty), cond) in u.arms.iter().zip(&conds) {
-			let v = rname(variant);
+			let v = ctx.variant(variant.as_str());
 			if input.is_void(vty.target) {
 				name_arms.push(quote!(Ty::$(&v) => $(quoted(variant.as_str())),));
 				view_arms.push(quote!($owned::$(&v) => Ty::$(&v),));
@@ -563,7 +576,7 @@ impl NativeCodegen<Rust> for Union {
 			}
 		}
 		let de_default: rust::Tokens = if let Some((dname, dty)) = u.default {
-			let d = rname(dname);
+			let d = ctx.variant(dname.as_str());
 			name_arms.push(quote!(Ty::$(&d)(..) => $(quoted(dname.as_str())),));
 			let view_tag = quote!($(names.view_fn(tag_ty))(__t));
 			if input.is_void(dty.target) {
@@ -688,7 +701,7 @@ impl NativeCodegen<Rust> for Union {
 			_ => payload,
 		};
 		Ok(quote! {
-			$(cx.names.ty(id))::$(rname(name))$(if !payload.is_empty() => ($(for p in payload join(, ) => $p)))
+			$(cx.names.ty(id))::$(cx.names.variant(id, name.as_str()))$(if !payload.is_empty() => ($(for p in payload join(, ) => $p)))
 		})
 	}
 	fn cast(
@@ -708,9 +721,9 @@ impl NativeCodegen<JavaScript> for Union {
 		let u = view(ctx.native).ok_or_else(|| anyhow!("malformed union"))?;
 		let input = ctx.types;
 		let names = ctx.names;
-		let pinput = &js::import("../pds.ts", "Input");
-		let poutput = &js::import("../pds.ts", "Output");
-		let perror = &js::import("../pds.ts", "PdsError");
+		let pinput = &ctx.runtime("Input");
+		let poutput = &ctx.runtime("Output");
+		let perror = &ctx.runtime("PdsError");
 		let has_args = !ctx.params.is_empty();
 		let args_of = |t: &mir::Type| -> js::Tokens {
 			let a = (ctx.pass_args)(t);

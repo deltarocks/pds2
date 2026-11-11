@@ -1,7 +1,38 @@
 import { assertEquals } from "@std/assert";
-import { Input, Output } from "./pds.ts";
-import * as cluster from "./gen/pds_envoy_config_cluster_v3_Cluster.ts";
-import * as cluster_fixture from "./gen/pds_cluster_fixture.ts";
+import { Input, Output, protobuf } from "./pds.ts";
+import * as cluster from "./gen/envoy/config/cluster/v3/Cluster.ts";
+import * as cluster_fixture from "./gen/cluster_fixture.ts";
+import * as value from "./gen/google/protobuf/Value.ts";
+
+function bytes(parts: [number, Uint8Array][]): Uint8Array {
+	const out = new Output();
+	for (const [number, body] of parts) {
+		protobuf.writeKey(out, number, 2);
+		protobuf.writeLen(out, body.length);
+		out.write(body);
+	}
+	return out.into_inner();
+}
+
+const text = (s: string) => new TextEncoder().encode(s);
+
+Deno.test("repeated singular message fields merge", () => {
+	const wire = bytes([[33, bytes([[1, text("a")]])], [33, bytes([[2, new Uint8Array()]])]]);
+	const decoded = cluster.deserialize(new Input(wire));
+	assertEquals(decoded.load_assignment!.cluster_name, "a");
+	assertEquals(decoded.load_assignment!.endpoints!.length, 1);
+});
+
+Deno.test("repeated oneof message members merge until another member is set", () => {
+	const entry = (key: string) => bytes([[1, bytes([[1, text(key)]])]]);
+	const keys = (wire: Uint8Array) => {
+		const kind = value.deserialize(new Input(wire)).kind;
+		if (kind?.kind !== "struct_value") throw new Error(`expected a struct, got ${kind?.kind}`);
+		return kind.value.fields!.map((f) => f.key);
+	};
+	assertEquals(keys(bytes([[5, entry("a")], [5, entry("b")]])), ["a", "b"]);
+	assertEquals(keys(bytes([[5, entry("a")], [3, text("s")], [5, entry("b")]])), ["b"]);
+});
 
 Deno.test("cluster roundtrips protoc encoding", async () => {
 	const bytes = await Deno.readFile(new URL("../../target/cluster.bin", import.meta.url));

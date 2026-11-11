@@ -106,6 +106,29 @@ pub trait Names<L: Lang> {
 	fn into_view_fn(&self, id: TypeId) -> Tokens<L> {
 		self.item(id, "into_view")
 	}
+	fn runtime(&self, item: &str) -> Tokens<L>;
+	fn field(&self, _owner: TypeId, name: &str) -> String {
+		name.to_owned()
+	}
+	fn variant(&self, _owner: TypeId, name: &str) -> String {
+		name.to_owned()
+	}
+	fn member_type(&self, _owner: TypeId, name: &str) -> String {
+		name.to_owned()
+	}
+	fn arg(&self, _owner: TypeId, name: &str) -> String {
+		name.to_owned()
+	}
+	fn guarded(&self, _id: TypeId) -> bool {
+		false
+	}
+}
+
+#[derive(Debug, Default)]
+pub struct Members {
+	pub fields: Vec<Ident>,
+	pub variants: Vec<Ident>,
+	pub types: Vec<Ident>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,6 +156,9 @@ pub trait SlotVisitor {
 
 pub trait NativeLayout {
 	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor);
+	fn members(&self, _native: &mir::NativeType) -> Members {
+		Members::default()
+	}
 }
 
 /// Everything a native codegen needs to emit the module contents for one concrete
@@ -190,6 +216,21 @@ impl<L: Lang> NativeCodegenCtx<'_, L> {
 	}
 	pub fn slot_new(&self, slot: &Ident, value: Tokens<L>) -> Tokens<L> {
 		self.names.slot_new(self.id, slot, value)
+	}
+	pub fn field(&self, name: &str) -> String {
+		self.names.field(self.id, name)
+	}
+	pub fn variant(&self, name: &str) -> String {
+		self.names.variant(self.id, name)
+	}
+	pub fn member_type(&self, name: &str) -> String {
+		self.names.member_type(self.id, name)
+	}
+	pub fn arg(&self, name: &str) -> String {
+		self.names.arg(self.id, name)
+	}
+	pub fn runtime(&self, item: &str) -> Tokens<L> {
+		self.names.runtime(item)
 	}
 	/// a full `deserialize(input, args...)` call expression for a type-use,
 	/// threading the use's bound arguments (assumes `input`/`args` in scope)

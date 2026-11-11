@@ -119,8 +119,8 @@ impl NativeCodegen<JavaScript> for Const {
 		let (value_use, built) = value_of(ctx)?;
 		let ty = value_use.target;
 		let names = ctx.names;
-		let pinput = &js::import("../pds.ts", "Input");
-		let poutput = &js::import("../pds.ts", "Output");
+		let pinput = &ctx.runtime("Input");
+		let poutput = &ctx.runtime("Output");
 		let pass = (ctx.pass_args)(value_use);
 		Ok(quote! {
 			$((ctx.args_struct)())

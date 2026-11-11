@@ -5,7 +5,6 @@ use genco::lang::{rust, Rust};
 use genco::prelude::*;
 
 use pds2_core::ast::{self, Ident, Statement};
-use pds2_core::generator::rust::rname;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, Value};
 use pds2_core::specializer::decode::Input;
@@ -17,9 +16,17 @@ use pds2_core::specializer::reflect::{
 };
 use pds2_core::specializer::{
 	construct_vec, list_value, pds_io, specialization_use, vec_of_value, visit_fields,
-	visit_specialization, AstHir, BoxCost, Embed, LowerCx, Names, NativeCodegen, NativeCodegenCtx,
-	NativeLayout, SlotVisitor, ViewPolicy, byte_scalar, into_view_vec, view_vec, VALUE,
+	visit_specialization, AstHir, BoxCost, Embed, LowerCx, Members, Names, NativeCodegen,
+	NativeCodegenCtx, NativeLayout, SlotVisitor, ViewPolicy, byte_scalar, into_view_vec, view_vec,
+	VALUE,
 };
+
+fn field_members(native: &mir::NativeType) -> Members {
+	Members {
+		fields: native.fields.iter().map(|(n, _)| n.clone()).collect(),
+		..Default::default()
+	}
+}
 
 use crate::upgrade::{NativeSig, NativeSigVariant, Upgrade, UpgradeCtx};
 
@@ -106,6 +113,9 @@ impl NativeLayout for Bitfield {
 	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor) {
 		visit_fields(native, Embed::Fixed, v);
 	}
+	fn members(&self, native: &mir::NativeType) -> Members {
+		field_members(native)
+	}
 }
 
 impl NativeCodegen<Rust> for Bitfield {
@@ -130,6 +140,7 @@ impl NativeCodegen<Rust> for Bitfield {
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 
+		let fname = |e: &BitfieldEntry| ctx.field(e.name.as_str());
 		let mut extract = Vec::new();
 		let mut offset = 0;
 		for e in &entries {
@@ -141,11 +152,11 @@ impl NativeCodegen<Rust> for Bitfield {
 				// to sign-extend
 				let pad = e.bits - e.size;
 				quote! {
-					let $(rname(&e.name)) = (((((acc >> $(shift.to_string())) & $(&mask)) as u$(e.bits.to_string())) << $(pad.to_string())) as $(&prim)) >> $(pad.to_string());
+					let $(fname(e)) = (((((acc >> $(shift.to_string())) & $(&mask)) as u$(e.bits.to_string())) << $(pad.to_string())) as $(&prim)) >> $(pad.to_string());
 				}
 			} else {
 				quote! {
-					let $(rname(&e.name)) = ((acc >> $(shift.to_string())) & $(&mask)) as $(&prim);
+					let $(fname(e)) = ((acc >> $(shift.to_string())) & $(&mask)) as $(&prim);
 				}
 			});
 			offset += e.size;
@@ -156,13 +167,13 @@ impl NativeCodegen<Rust> for Bitfield {
 			#[derive(Debug, Clone, PartialEq)]
 			pub struct Ty {
 				$(for (e, (_, ty)) in entries.iter().zip(ctx.native.fields.iter()) join($['\r']) =>
-					pub $(rname(&e.name)): $(ctx.names.ty(ty.target)),
+					pub $(fname(e)): $(ctx.names.ty(ty.target)),
 				)
 			}
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
 				let mut acc: u128 = 0;
 				$(for e in &entries join($['\r']) =>
-					acc = (acc << $(e.size.to_string())) | ((_0.$(rname(&e.name)) as u128) & $(format!("{:#x}", (1u128 << e.size) - 1)));
+					acc = (acc << $(e.size.to_string())) | ((_0.$(fname(e)) as u128) & $(format!("{:#x}", (1u128 << e.size) - 1)));
 				)
 				for i in (0..$(bytes.to_string())u32).rev() {
 					$(ctx.names.serialize(u8id))(&(((acc >> (i * 8)) & 0xff) as u8), output)?;
@@ -176,7 +187,7 @@ impl NativeCodegen<Rust> for Bitfield {
 				}
 				$(for t in extract join($['\r']) => $t)
 				Ok(Ty {
-					$(for e in &entries join(,$[' ']) => $(rname(&e.name)))
+					$(for e in &entries join(,$[' ']) => $(fname(e)))
 				})
 			}
 			pub fn size_of(_0: &Ty) -> usize {
@@ -263,6 +274,9 @@ impl NativeLayout for Bitflags {
 	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor) {
 		visit_fields(native, Embed::Fixed, v);
 	}
+	fn members(&self, native: &mir::NativeType) -> Members {
+		field_members(native)
+	}
 }
 
 impl NativeCodegen<Rust> for Bitflags {
@@ -287,13 +301,13 @@ impl NativeCodegen<Rust> for Bitflags {
 			#[derive(Debug, Clone, PartialEq)]
 			pub struct Ty {
 				$(for (name, ty) in ctx.native.fields.iter() join($['\r']) =>
-					pub $name: $(ctx.names.ty(ty.target)),
+					pub $(ctx.field(name.as_str())): $(ctx.names.ty(ty.target)),
 				)
 			}
 			fn pack(_0: &Ty) -> u64 {
 				let mut acc: u64 = 0;
 				$(for (i, (name, _)) in ctx.native.fields.iter().enumerate() join($['\r']) =>
-					if _0.$name { acc |= $(bit(i)); }
+					if _0.$(ctx.field(name.as_str())) { acc |= $(bit(i)); }
 				)
 				acc
 			}
@@ -304,7 +318,7 @@ impl NativeCodegen<Rust> for Bitflags {
 				let acc = $(ctx.names.deserialize(value))(input)? as u64;
 				Ok(Ty {
 					$(for (i, (name, _)) in ctx.native.fields.iter().enumerate() join($['\r']) =>
-						$name: acc & $(bit(i)) != 0,
+						$(ctx.field(name.as_str())): acc & $(bit(i)) != 0,
 					)
 				})
 			}

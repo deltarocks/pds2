@@ -6,6 +6,7 @@ use crate::specializer::Registry;
 
 mod boxing;
 pub mod common;
+pub mod naming;
 pub mod recursion;
 mod views;
 pub mod rust;

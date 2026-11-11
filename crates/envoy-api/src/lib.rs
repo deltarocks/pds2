@@ -19,13 +19,13 @@ pub mod pds_native {
 	pub use pds_runtime::protobuf::natives::*;
 }
 
-pub use gen::pds_envoy_config_cluster_v3_Cluster as cluster;
+pub use gen::envoy::config::cluster::v3::cluster;
 
 #[cfg(test)]
 mod tests {
 	use crate::cluster;
-	use crate::gen::pds_envoy_config_cluster_v3_Cluster as c;
-	use crate::gen::pds_google_protobuf_Value::kind;
+	use crate::gen::envoy::config::cluster::v3::cluster as c;
+	use crate::gen::google::protobuf::value::Kind;
 	use crate::pds::{Input, Output};
 
 	fn fixture() -> Vec<u8> {
@@ -47,7 +47,7 @@ mod tests {
 		let tags = &decoded.metadata.as_ref().unwrap().filter_metadata[0];
 		assert_eq!(tags.key.as_deref(), Some("envoy.lb"));
 		let weight = tags.value.as_ref().unwrap().fields[1].value.as_ref().unwrap();
-		assert_eq!(weight.kind, Some(kind::number_value(-1.5)));
+		assert_eq!(weight.kind, Some(Kind::NumberValue(-1.5)));
 
 		let mut out = Output::new();
 		cluster::serialize(&decoded, &mut out).unwrap();
@@ -57,7 +57,7 @@ mod tests {
 
 	#[test]
 	fn text_fixture_encodes_like_protoc() {
-		let value = crate::gen::pds_cluster_fixture::value();
+		let value = crate::gen::cluster_fixture::value();
 		let mut out = Output::new();
 		cluster::serialize(&value, &mut out).unwrap();
 		assert_eq!(out.into_inner(), fixture());
@@ -76,5 +76,42 @@ mod tests {
 		let bytes = out.into_inner();
 		let decoded = c::deserialize(&mut Input::new(&bytes)).unwrap();
 		assert_eq!(decoded.name.as_deref(), Some("x"));
+	}
+
+	fn framed(out: &mut Output, number: u32, body: &[u8]) {
+		crate::pds::protobuf::write_key(out, number, 2);
+		crate::pds::protobuf::write_len(out, body.len());
+		out.write(body);
+	}
+
+	fn bytes(parts: &[(u32, Vec<u8>)]) -> Vec<u8> {
+		let mut out = Output::new();
+		for (number, body) in parts {
+			framed(&mut out, *number, body);
+		}
+		out.into_inner()
+	}
+
+	#[test]
+	fn repeated_singular_message_fields_merge() {
+		let wire = bytes(&[(33, bytes(&[(1, b"a".to_vec())])), (33, bytes(&[(2, vec![])]))]);
+		let decoded = c::deserialize(&mut Input::new(&wire)).unwrap();
+		let assignment = decoded.load_assignment.as_ref().unwrap();
+		assert_eq!(assignment.cluster_name.as_deref(), Some("a"));
+		assert_eq!(assignment.endpoints.len(), 1);
+	}
+
+	#[test]
+	fn repeated_oneof_message_members_merge_until_another_member_is_set() {
+		use crate::gen::google::protobuf::value;
+		let entry = |key: &str| bytes(&[(1, bytes(&[(1, key.as_bytes().to_vec())]))]);
+		let keys = |wire: Vec<u8>| -> Vec<String> {
+			match value::deserialize(&mut Input::new(&wire)).unwrap().kind {
+				Some(Kind::StructValue(s)) => s.fields.iter().map(|f| f.key.clone().unwrap()).collect(),
+				other => panic!("expected a struct, got {other:?}"),
+			}
+		};
+		assert_eq!(keys(bytes(&[(5, entry("a")), (5, entry("b"))])), ["a", "b"]);
+		assert_eq!(keys(bytes(&[(5, entry("a")), (3, b"s".to_vec()), (5, entry("b"))])), ["b"]);
 	}
 }

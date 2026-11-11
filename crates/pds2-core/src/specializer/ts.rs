@@ -10,8 +10,8 @@ use crate::mir;
 pub type Tokens = js::Tokens;
 pub type Ctx<'a> = NativeCodegenCtx<'a, JavaScript>;
 
-pub fn pds(name: &str) -> js::Import {
-	js::import("../pds.ts", name)
+pub fn pds(names: &dyn Names<JavaScript>, name: &str) -> Tokens {
+	names.runtime(name)
 }
 
 pub fn typed_array(names: &dyn Names<JavaScript>, value: TypeId) -> Option<&'static str> {
@@ -67,7 +67,7 @@ pub fn value_of(native: &mir::NativeType) -> Option<TypeId> {
 }
 
 pub fn collect(ctx: &Ctx, value: TypeId, count: Tokens, read: Tokens) -> Tokens {
-	let perror = &pds("PdsError");
+	let perror = &pds(ctx.names, "PdsError");
 	match typed_array(ctx.names, value) {
 		Some(a) => quote! {
 			if ($(&count) > input.remaining()) {
@@ -90,8 +90,7 @@ pub fn collect(ctx: &Ctx, value: TypeId, count: Tokens, read: Tokens) -> Tokens 
 }
 
 pub fn read_count(ctx: &Ctx, expr: Tokens) -> Tokens {
-	let perror = &pds("PdsError");
-	let _ = ctx;
+	let perror = &pds(ctx.names, "PdsError");
 	quote! {
 		const count = Number($expr);
 		if (!Number.isSafeInteger(count) || count < 0) {

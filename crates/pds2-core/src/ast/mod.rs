@@ -144,6 +144,9 @@ impl Path {
 			self.absolute = true;
 		}
 	}
+	pub fn segments(&self) -> Vec<Ident> {
+		self.path.iter().chain(iter::once(&self.item)).cloned().collect()
+	}
 	pub fn readable_name(&self) -> String {
 		self.path
 			.iter()

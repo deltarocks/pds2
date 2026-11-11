@@ -39,7 +39,7 @@ impl NativeCodegen<JavaScript> for Array {
 		let ty = self
 			.inline_ty(ctx.id, ctx.native, ctx.names)
 			.context("array type")?;
-		let (pinput, poutput) = (&pds("Input"), &pds("Output"));
+		let (pinput, poutput) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"));
 		let read = ctx.deserialize_call(value_use);
 		let main = match ctx.variant.as_str() {
 			"inline" => {
@@ -137,7 +137,7 @@ impl NativeCodegen<JavaScript> for OptionP {
 		let read = ctx.slot_new(&slot, ctx.deserialize_call(value_use));
 		let boolean =
 			(ctx.resolve)("bool").ok_or_else(|| anyhow!("option needs the `bool` native"))?;
-		let (pinput, poutput) = (&pds("Input"), &pds("Output"));
+		let (pinput, poutput) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"));
 		Ok(quote! {
 			$((ctx.args_struct)())
 			export type Ty = $ty;
@@ -192,7 +192,7 @@ impl NativeCodegen<JavaScript> for Buffer {
 		Some(quote!(Uint8Array))
 	}
 	fn generate(&self, ctx: &Ctx) -> Result<Tokens> {
-		let (pinput, poutput) = (&pds("Input"), &pds("Output"));
+		let (pinput, poutput) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"));
 		let main = match ctx.variant.as_str() {
 			"inline" => {
 				let count = ctx.specialization("Count").context("buffer count type")?;
@@ -261,8 +261,8 @@ impl NativeCodegen<JavaScript> for PString {
 	}
 	fn generate(&self, ctx: &Ctx) -> Result<Tokens> {
 		let count = ctx.specialization("Count").context("pstring count type")?;
-		let (pinput, poutput) = (&pds("Input"), &pds("Output"));
-		let (encode, decode) = (&pds("utf8_encode"), &pds("utf8_decode"));
+		let (pinput, poutput) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"));
+		let (encode, decode) = (&pds(ctx.names, "utf8_encode"), &pds(ctx.names, "utf8_decode"));
 		Ok(quote! {
 			$((ctx.args_struct)())
 			export type Ty = string;
@@ -301,7 +301,7 @@ impl NativeCodegen<JavaScript> for Bitfield {
 		}
 		let bytes = (total / 8).to_string();
 		let u8id = (ctx.resolve)("u8").ok_or_else(|| anyhow!("bitfield needs the `u8` native"))?;
-		let (pinput, poutput) = (&pds("Input"), &pds("Output"));
+		let (pinput, poutput) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"));
 		let mut pack = Vec::new();
 		let mut unpack = Vec::new();
 		let mut offset = 0;
@@ -369,7 +369,7 @@ impl NativeCodegen<JavaScript> for Bitflags {
 	fn generate(&self, ctx: &Ctx) -> Result<Tokens> {
 		let value = ctx.specialization(VALUE)?;
 		let bit = |i: usize| format!("{:#x}n", 1u64 << i);
-		let (pinput, poutput) = (&pds("Input"), &pds("Output"));
+		let (pinput, poutput) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"));
 		let packed = if wide(ctx.names, value) {
 			quote!(pack(_0))
 		} else {

@@ -7,7 +7,6 @@ use super::encode::{int_of, Args, Encoding, Target, Val};
 use super::expr::{describe, Elaborator};
 use super::{specialization_use, LowerCx, VALUE};
 use crate::ast::Ident;
-use crate::generator::rust::rname;
 use crate::hir::TypeId;
 use crate::mir::{self, Construction, Expr, Value};
 
@@ -154,7 +153,7 @@ pub fn record_fields(
 pub fn construct_struct(cx: &LowerCx<Rust>, id: TypeId, c: &Construction) -> Result<rust::Tokens> {
 	let mut parts = Vec::new();
 	for (n, e) in record_of(c)? {
-		parts.push(quote!($(rname(n)): $((cx.lower)(e)?)));
+		parts.push(quote!($(cx.names.field(id, n.as_str())): $((cx.lower)(e)?)));
 	}
 	Ok(quote!($(cx.names.ty(id)) { $(for p in parts join(, ) => $p) }))
 }

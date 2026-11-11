@@ -8,6 +8,7 @@ anyhow = "1.0"
 bitflags = "2.5.0"
 dprint-core = "0.70.0"
 genco = "0.20"
+heck = "0.5"
 peg = "0.8.2"
 tracing = "0.1.44"
 

@@ -5,7 +5,10 @@ use anyhow::{anyhow, bail, Context as _, Result};
 use genco::lang::{js, JavaScript};
 use genco::prelude::*;
 
+use std::rc::Rc;
+
 use super::common::{self, sanitize, scalar_of};
+use super::naming::{self, Modules};
 use super::GeneratorOutput;
 use crate::ast::{BinOp, FieldRefSegment, Ident};
 use crate::hir::TypeId;
@@ -18,32 +21,66 @@ use crate::specializer::{
 type Tokens = js::Tokens;
 
 struct TsMeta<'a> {
-	raw_names: BTreeMap<TypeId, String>,
+	raw_names: Rc<BTreeMap<TypeId, String>>,
+	modules: Rc<Modules>,
+	here: Vec<String>,
 	types: &'a TypeMap,
 	reg: &'a Registry,
 	inlining: RefCell<BTreeSet<TypeId>>,
 }
 
 impl<'a> TsMeta<'a> {
-	fn new(types: &'a TypeMap, reg: &'a Registry) -> Self {
-		Self {
-			raw_names: types
-				.0
-				.iter()
-				.map(|(id, ty)| (*id, ty.name.readable_name()))
-				.collect(),
+	fn new(types: &'a TypeMap, reg: &'a Registry) -> Result<Self> {
+		Ok(Self {
+			raw_names: Rc::new(
+				types
+					.0
+					.iter()
+					.map(|(id, ty)| (*id, ty.name.readable_name()))
+					.collect(),
+			),
+			modules: Rc::new(naming::raw_modules(types)?),
+			here: vec![],
 			types,
 			reg,
 			inlining: RefCell::default(),
+		})
+	}
+	fn at(&self, id: TypeId) -> Self {
+		let path = self.modules.path(id);
+		Self {
+			raw_names: self.raw_names.clone(),
+			modules: self.modules.clone(),
+			here: path[..path.len() - 1].iter().map(|m| m.stem.clone()).collect(),
+			types: self.types,
+			reg: self.reg,
+			inlining: RefCell::default(),
 		}
+	}
+	fn up(&self) -> String {
+		"../".repeat(self.here.len() + 1)
 	}
 	fn name_str(&self, id: TypeId) -> String {
 		assert!(id.is_valid());
 		format!("pds_{}", self.raw_names[&id])
 	}
 	fn module(&self, id: TypeId) -> js::Import {
-		let name = self.name_str(id);
-		js::import(format!("./{name}.ts"), name).into_wildcard()
+		let path = self.modules.path(id);
+		let (dir, file) = path.split_at(path.len() - 1);
+		let here: Vec<&str> = self.here.iter().map(String::as_str).collect();
+		let dir: Vec<&str> = dir.iter().map(|m| m.stem.as_str()).collect();
+		let (up, rest) = naming::relative(&here, &dir);
+		let prefix = if up == 0 { "./".to_owned() } else { "../".repeat(up) };
+		let target = rest
+			.into_iter()
+			.chain([file[0].stem.as_str()])
+			.collect::<Vec<_>>()
+			.join("/");
+		let alias = std::iter::once("pds")
+			.chain(path.iter().map(|m| m.ident.as_str()))
+			.collect::<Vec<_>>()
+			.join("$");
+		js::import(format!("{prefix}{target}.ts"), alias).into_wildcard()
 	}
 	fn item(&self, id: TypeId, item: impl Into<String>) -> Tokens {
 		let module = self.module(id);
@@ -151,6 +188,9 @@ impl Names<JavaScript> for TsMeta<'_> {
 	}
 	fn item(&self, id: TypeId, name: &str) -> Tokens {
 		TsMeta::item(self, id, name)
+	}
+	fn runtime(&self, item: &str) -> Tokens {
+		quote!($(js::import(format!("{}pds.ts", self.up()), item)))
 	}
 }
 
@@ -321,30 +361,29 @@ fn lower(meta: &TsMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 			if scalar(a) && scalar(b) {
 				quote!(($(rec(a)?) === $(rec(b)?)))
 			} else {
-				quote!($(js::import("../pds.ts", "equal"))($(rec(a)?), $(rec(b)?)))
+				quote!($(Names::runtime(meta, "equal"))($(rec(a)?), $(rec(b)?)))
 			}
 		}
 	})
 }
 
 pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Registry) -> Result<()> {
-	let meta = TsMeta::new(input, reg);
+	let root = TsMeta::new(input, reg)?;
 	let virtuals_used = common::virtuals_used(input);
 	let elab = Elaborator { types: input, reg };
 	let elaborated = common::elaborate(&elab)?;
 	for def in input.0.values() {
 		for e in def.exprs() {
 			if !matches!(e, Expr::Field(_) | Expr::Const(_)) {
-				lower(&meta, e, true).with_context(|| format!("in {:?}", def.name))?;
+				lower(&root, e, true).with_context(|| format!("in {:?}", def.name))?;
 			}
 		}
 	}
 
-	let pinput = &js::import("../pds.ts", "Input");
-	let poutput = &js::import("../pds.ts", "Output");
-
-	let mut modules = Vec::new();
 	for (id, ty) in &input.0 {
+		let meta = root.at(*id);
+		let pinput = &Names::runtime(&meta, "Input");
+		let poutput = &Names::runtime(&meta, "Output");
 		let has_args = !ty.params.is_empty();
 		let param_ty = |par: TypeId| -> Tokens {
 			if par.is_valid() {
@@ -439,7 +478,8 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 							.with_context(|| format!("typescript codegen for {:?}", ty.name))?
 					}
 					None => {
-						let native_import = &js::import("../pds_native.ts", meta.name_str(*id));
+						let native_import =
+							&js::import(format!("{}pds_native.ts", meta.up()), meta.name_str(*id));
 						quote! {
 							export type Ty = ReturnType<typeof $native_import.deserialize>;
 							export const serialize = $native_import.serialize;
@@ -451,18 +491,28 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 			}
 		};
 		output.insert(
-			format!("{}.ts", meta.name_str(*id)).into(),
+			root.modules.file(*id, "ts").into(),
 			body.to_file_string().expect("formatting should succeed"),
 		);
-		modules.push(meta.name_str(*id));
 	}
 
-	let index: Tokens = quote! {
-		$(for m in &modules join($['\r']) => export * as $m from $(quoted(format!("./{m}.ts")));)
-	};
-	output.insert(
-		"mod.ts".into(),
-		index.to_file_string().expect("formatting should succeed"),
-	);
+	for (path, children) in root.modules.dirs(input.0.keys().copied()) {
+		let exports = children.iter().map(|(m, is_dir)| {
+			let file = if *is_dir {
+				format!("./{}/mod.ts", m.stem)
+			} else {
+				format!("./{}.ts", m.stem)
+			};
+			quote!(export * as $(&m.ident) from $(quoted(file));)
+		});
+		let index: Tokens = quote!($(for e in exports join($['\r']) => $e));
+		let stems: Vec<&str> = path.iter().map(|m| m.stem.as_str()).collect();
+		let file = if stems.is_empty() {
+			"mod.ts".to_owned()
+		} else {
+			format!("{}/mod.ts", stems.join("/"))
+		};
+		output.insert(file.into(), index.to_file_string().expect("formatting should succeed"));
+	}
 	Ok(())
 }

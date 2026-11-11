@@ -39,9 +39,9 @@ impl NativeCodegen<JavaScript> for Terminated {
 		let is_end = if ctx.names.scalar(end_ty).is_some_and(|s| s != Scalar::Bytes) {
 			quote!(($(ctx.names.deserialize(end_ty))(input) === $(&end)))
 		} else {
-			quote!($(pds("equal"))($(ctx.names.deserialize(end_ty))(input), $(&end)))
+			quote!($(pds(ctx.names, "equal"))($(ctx.names.deserialize(end_ty))(input), $(&end)))
 		};
-		let (pinput, poutput) = (&pds("Input"), &pds("Output"));
+		let (pinput, poutput) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"));
 		Ok(quote! {
 			$((ctx.args_struct)())
 			export type Ty = $ty;

@@ -30,7 +30,7 @@ impl NativeCodegen<JavaScript> for RegistryEntryHolder {
 		};
 		let ity = ity_use.target;
 		let read_inline = ctx.slot_new(iname, ctx.deserialize_call(ity_use));
-		let (pinput, poutput) = (&pds("Input"), &pds("Output"));
+		let (pinput, poutput) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"));
 		Ok(quote! {
 			$((ctx.args_struct)())
 			export type Ty =
@@ -84,7 +84,7 @@ impl NativeCodegen<JavaScript> for RegistryEntryHolderSet {
 		};
 		let nty = nty_use.target;
 		let read_named = ctx.slot_new(nname, ctx.deserialize_call(nty_use));
-		let (pinput, poutput, perror) = (&pds("Input"), &pds("Output"), &pds("PdsError"));
+		let (pinput, poutput, perror) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"), &pds(ctx.names, "PdsError"));
 		let ids_ty = array_ty(ctx.names, varint);
 		let new_ids = match typed_array(ctx.names, varint) {
 			Some(a) => quote!(new $a(count)),
@@ -167,7 +167,7 @@ impl NativeCodegen<JavaScript> for TopBitSetTerminatedArray {
 		let ty = self
 			.inline_ty(ctx.id, ctx.native, ctx.names)
 			.context("topBitSetTerminatedArray type")?;
-		let (pinput, poutput, perror) = (&pds("Input"), &pds("Output"), &pds("PdsError"));
+		let (pinput, poutput, perror) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"), &pds(ctx.names, "PdsError"));
 		Ok(quote! {
 			$((ctx.args_struct)())
 			export type Ty = $ty;

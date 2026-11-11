@@ -89,23 +89,23 @@ fn collect_message<'a>(
 
 fn scalar(ty: &Type) -> Result<Option<&'static str>> {
 	Ok(Some(match ty {
-		Type::TYPE_DOUBLE => "double",
-		Type::TYPE_FLOAT => "float",
-		Type::TYPE_INT64 => "int64",
-		Type::TYPE_UINT64 => "uint64",
-		Type::TYPE_INT32 => "int32",
-		Type::TYPE_FIXED64 => "fixed64",
-		Type::TYPE_FIXED32 => "fixed32",
-		Type::TYPE_BOOL => "bool",
-		Type::TYPE_STRING => "string",
-		Type::TYPE_BYTES => "bytes",
-		Type::TYPE_UINT32 => "uint32",
-		Type::TYPE_SFIXED32 => "sfixed32",
-		Type::TYPE_SFIXED64 => "sfixed64",
-		Type::TYPE_SINT32 => "sint32",
-		Type::TYPE_SINT64 => "sint64",
-		Type::TYPE_MESSAGE | Type::TYPE_ENUM => return Ok(None),
-		Type::TYPE_GROUP => bail!("proto2 groups are not supported"),
+		Type::TypeDouble => "double",
+		Type::TypeFloat => "float",
+		Type::TypeInt64 => "int64",
+		Type::TypeUint64 => "uint64",
+		Type::TypeInt32 => "int32",
+		Type::TypeFixed64 => "fixed64",
+		Type::TypeFixed32 => "fixed32",
+		Type::TypeBool => "bool",
+		Type::TypeString => "string",
+		Type::TypeBytes => "bytes",
+		Type::TypeUint32 => "uint32",
+		Type::TypeSfixed32 => "sfixed32",
+		Type::TypeSfixed64 => "sfixed64",
+		Type::TypeSint32 => "sint32",
+		Type::TypeSint64 => "sint64",
+		Type::TypeMessage | Type::TypeEnum => return Ok(None),
+		Type::TypeGroup => bail!("proto2 groups are not supported"),
 		other => bail!("unknown field type {other:?}"),
 	}))
 }
@@ -212,7 +212,7 @@ fn message_field(
 ) -> Result<()> {
 	let number = f.number.ok_or_else(|| anyhow!("field {fname} without a number"))?;
 	let (ty, _) = field_type(decls, f).with_context(|| format!("field {fname}"))?;
-	let repeated = matches!(f.label, Some(Label::LABEL_REPEATED));
+	let repeated = matches!(f.label, Some(Label::LabelRepeated));
 	match (repeated, oneof) {
 		(true, _) => write!(out, "repeated({fname}, number: {number}) => {ty};")?,
 		(false, Some(g)) => write!(out, "oneof({fname}, number: {number}, group: \"{g}\") => {ty};")?,

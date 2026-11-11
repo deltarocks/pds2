@@ -6,10 +6,10 @@ use pds2_core::specializer::decode::Input;
 use pds2_core::specializer::encode::{write_varint, Encoder, Encoding, Target, Val};
 use pds2_core::specializer::expr::{Elaborator, ValueModel};
 use pds2_core::specializer::{
-	AstHir, BoxCost, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor,
+	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
+	SlotVisitor,
 };
 use pds2_core::ast::Ident;
-use pds2_core::generator::rust::rname;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, TypeKind, TypeMap, Value};
 
@@ -38,6 +38,19 @@ pub struct MessageField<'a> {
 
 fn is_message(native: &mir::NativeType) -> bool {
 	matches!(&native.specializer, Some((s, _)) if s.as_str() == "message")
+}
+
+fn embedded_message(types: &TypeMap, u: &mir::Type) -> Option<(TypeId, Vec<TypeId>)> {
+	let mut chain = vec![u.target];
+	let mut id = u.target;
+	while let TypeKind::Alias(t) = &types[id].kind {
+		id = t.target;
+		chain.push(id);
+	}
+	match &types[id].kind {
+		TypeKind::Native(n) if is_message(n) => Some((id, chain)),
+		_ => None,
+	}
 }
 
 pub fn view(native: &mir::NativeType) -> Option<Vec<MessageField<'_>>> {
@@ -132,6 +145,23 @@ impl NativeLayout for Message {
 			};
 			v.slot(f.name, f.ty.target, embed);
 		}
+	}
+	fn members(&self, native: &mir::NativeType) -> Members {
+		let mut out = Members::default();
+		for f in view(native).into_iter().flatten() {
+			match f.label {
+				Label::Oneof(g) => {
+					out.variants.push(f.name.clone());
+					let g = Ident::new(g);
+					if !out.types.contains(&g) {
+						out.fields.push(g.clone());
+						out.types.push(g);
+					}
+				}
+				_ => out.fields.push(f.name.clone()),
+			}
+		}
+		out
 	}
 }
 
@@ -257,6 +287,13 @@ impl Encoder for Message {
 		let scope = t.scope();
 		let mut single: Vec<Option<Expr>> = vec![None; fields.len()];
 		let mut repeated: Vec<Vec<Expr>> = vec![vec![]; fields.len()];
+		let mut merged: Vec<Option<(usize, Vec<u8>)>> = vec![None; fields.len()];
+		let mergeable: Vec<bool> = fields
+			.iter()
+			.map(|f| {
+				!matches!(f.label, Label::Repeated) && embedded_message(cx.types(), f.ty).is_some()
+			})
+			.collect();
 		while input.remaining() > 0 {
 			let at = input.position();
 			let key = input.varint()?;
@@ -282,6 +319,23 @@ impl Encoder for Message {
 				f.name,
 				wires[i] as u8
 			);
+			if let Label::Oneof(g) = f.label {
+				for (_, members) in groups.iter().filter(|(n, _)| *n == g) {
+					for &j in members.iter().filter(|j| **j != i || !mergeable[i]) {
+						single[j] = None;
+						merged[j] = None;
+					}
+				}
+			}
+			if mergeable[i] {
+				let mut sub = frame(input)?;
+				let base = sub.position();
+				merged[i]
+					.get_or_insert_with(|| (base, vec![]))
+					.1
+					.extend_from_slice(sub.rest());
+				continue;
+			}
 			let value = if wires[i] == Wire::Len {
 				let mut sub = frame(input)?;
 				let value = cx.decode_use(f.ty, &scope, &mut sub).with_context(field)?;
@@ -297,16 +351,24 @@ impl Encoder for Message {
 			};
 			match f.label {
 				Label::Repeated => repeated[i].push(value),
-				Label::Single => single[i] = Some(value),
-				Label::Oneof(g) => {
-					for (_, members) in groups.iter().filter(|(n, _)| *n == g) {
-						for &j in members {
-							single[j] = None;
-						}
-					}
-					single[i] = Some(value);
-				}
+				Label::Single | Label::Oneof(_) => single[i] = Some(value),
 			}
+		}
+		for (i, m) in merged.into_iter().enumerate() {
+			let Some((base, bytes)) = m else {
+				continue;
+			};
+			let f = &fields[i];
+			let field = || format!("field {:?}", f.name);
+			let mut sub = Input::at(&bytes, base);
+			let value = cx.decode_use(f.ty, &scope, &mut sub).with_context(field)?;
+			ensure!(
+				sub.remaining() == 0,
+				"{}: {} bytes are left in its frame",
+				field(),
+				sub.remaining()
+			);
+			single[i] = Some(value);
 		}
 		let record = fields
 			.iter()
@@ -408,12 +470,14 @@ impl NativeCodegen<Rust> for Message {
 		let pinput = &rust::import("crate::pds", "Input");
 		let poutput = &rust::import("crate::pds", "Output");
 		let presult = &rust::import("crate::pds", "Result");
-		let group_ty = |g: &str| rname(&Ident::new(g));
+		let group_ty = |g: &str| ctx.member_type(g);
+		let group_field = |g: &str| ctx.field(g);
+		let has_args = !ctx.params.is_empty();
 
 		let mut decl = Vec::new();
 		let mut seen = Vec::new();
 		for f in &fields {
-			let name = rname(f.name);
+			let name = ctx.field(f.name.as_str());
 			decl.push(match f.label {
 				Label::Single => quote!(pub $name: Option<$(ctx.slot_ty(f.name, f.ty.target))>,),
 				Label::Repeated => quote!(pub $name: Vec<$(names.ty(f.ty.target))>,),
@@ -422,7 +486,7 @@ impl NativeCodegen<Rust> for Message {
 						continue;
 					}
 					seen.push(g);
-					quote!(pub $(group_ty(g)): Option<$(group_ty(g))>,)
+					quote!(pub $(group_field(g)): Option<$(group_ty(g))>,)
 				}
 			});
 		}
@@ -433,7 +497,7 @@ impl NativeCodegen<Rust> for Message {
 					#[derive(Debug, Clone, PartialEq)]
 					pub enum $(group_ty(g)) {
 						$(for i in members join($['\r']) =>
-							$(rname(fields[*i].name))($(ctx.slot_ty(fields[*i].name, fields[*i].ty.target))),
+							$(ctx.variant(fields[*i].name.as_str()))($(ctx.slot_ty(fields[*i].name, fields[*i].ty.target))),
 						)
 					}
 				}
@@ -450,26 +514,79 @@ impl NativeCodegen<Rust> for Message {
 				quote!($de($from, $pass)?)
 			}
 		};
+		let extend = |f: &MessageField| -> Result<Option<rust::Tokens>> {
+			let Some((msg, chain)) = embedded_message(ctx.types, f.ty) else {
+				return Ok(None);
+			};
+			let pass = if msg == f.ty.target {
+				(ctx.pass_args)(f.ty)
+			} else {
+				ensure!(
+					ctx.types[msg].params.is_empty(),
+					"{:?} reaches a message with arguments through an alias",
+					f.name
+				);
+				quote!()
+			};
+			let check = chain.iter().any(|t| names.guarded(*t)).then(|| {
+				let check = rust::import("crate::pds::stack", "check").qualified();
+				quote!($check()?;)
+			});
+			let target = if ctx.boxed(f.name) {
+				quote!(&mut **v)
+			} else {
+				quote!(v)
+			};
+			Ok(Some(quote! {
+				$check
+				$(names.item(msg, "deserialize_extend"))(&mut $(pb("len"))(input)?, $pass $target)?;
+			}))
+		};
 		let arms: Vec<rust::Tokens> = fields
 			.iter()
 			.enumerate()
-			.map(|(i, f)| {
-				let name = rname(f.name);
+			.map(|(i, f)| -> Result<rust::Tokens> {
+				let name = ctx.field(f.name.as_str());
 				let w = wires[i] as u8;
 				let expect = quote!($(pb("expect"))(wire, $(w.to_string()))?;);
-				let body = match f.label {
-					Label::Single => {
+				let merge = match f.label {
+					Label::Repeated => None,
+					_ => extend(f)?,
+				};
+				let body = match (&f.label, merge) {
+					(Label::Single, None) => {
 						let value = ctx.slot_new(f.name, read(i, quote!(input)));
 						quote!($expect out.$name = Some($value);)
 					}
-					Label::Oneof(g) => {
+					(Label::Single, Some(extend)) => {
 						let value = ctx.slot_new(f.name, read(i, quote!(input)));
-						quote!($expect out.$(group_ty(g)) = Some($(group_ty(g))::$name($value));)
+						quote! {
+							$expect
+							match &mut out.$(&name) {
+								Some(v) => { $extend }
+								None => out.$(&name) = Some($value),
+							}
+						}
 					}
-					Label::Repeated if wires[i] == Wire::Len => {
+					(Label::Oneof(g), extend) => {
+						let value = ctx.slot_new(f.name, read(i, quote!(input)));
+						let v = ctx.variant(f.name.as_str());
+						let (field, ty) = (group_field(g), group_ty(g));
+						match extend {
+							None => quote!($expect out.$field = Some($ty::$v($value));),
+							Some(extend) => quote! {
+								$expect
+								match &mut out.$(&field) {
+									Some($(&ty)::$(&v)(v)) => { $extend }
+									_ => out.$(&field) = Some($(&ty)::$(&v)($value)),
+								}
+							},
+						}
+					}
+					(Label::Repeated, _) if wires[i] == Wire::Len => {
 						quote!($expect out.$name.push($(read(i, quote!(input))));)
 					}
-					Label::Repeated => {
+					(Label::Repeated, _) => {
 						let de = names.deserialize(f.ty.target);
 						let pass = (ctx.pass_args)(f.ty);
 						quote! {
@@ -485,9 +602,9 @@ impl NativeCodegen<Rust> for Message {
 						}
 					}
 				};
-				quote!($(f.number.to_string()) => { $body })
+				Ok(quote!($(f.number.to_string()) => { $body }))
 			})
-			.collect();
+			.collect::<Result<_>>()?;
 
 		let size = |i: usize, v: rust::Tokens| -> rust::Tokens {
 			let size = names.size_of(fields[i].ty.target);
@@ -513,7 +630,7 @@ impl NativeCodegen<Rust> for Message {
 		let mut sizes = Vec::new();
 		for &i in &by_number {
 			let f = &fields[i];
-			let name = rname(f.name);
+			let name = ctx.field(f.name.as_str());
 			let n = f.number.to_string();
 			let w = (wires[i] as u8).to_string();
 			let key = quote!($(pb("write_key"))(output, $(&n), $(&w)););
@@ -521,7 +638,7 @@ impl NativeCodegen<Rust> for Message {
 			match f.label {
 				Label::Single | Label::Oneof(_) => {
 					let pattern = match f.label {
-						Label::Oneof(g) => quote!(Some($(group_ty(g))::$(&name)(v)) = &_0.$(group_ty(g))),
+						Label::Oneof(g) => quote!(Some($(group_ty(g))::$(ctx.variant(f.name.as_str()))(v)) = &_0.$(group_field(g))),
 						_ => quote!(Some(v) = &_0.$(&name)),
 					};
 					ser.push(quote!(if let $(&pattern) { $key $(write(i, quote!(v))) }));
@@ -556,8 +673,7 @@ impl NativeCodegen<Rust> for Message {
 				$(for d in decl join($['\r']) => $d)
 			}
 			$(for e in enums join($['\r']) => $e)
-			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
-				let mut out = Ty::default();
+			pub fn deserialize_extend(input: &mut $pinput, $((ctx.args_param)()) out: &mut Ty) -> $presult<()> {
 				while input.remaining() > 0 {
 					let (number, wire) = $(pb("read_key"))(input)?;
 					match number {
@@ -565,6 +681,11 @@ impl NativeCodegen<Rust> for Message {
 						_ => $(pb("skip"))(input, wire)?,
 					}
 				}
+				Ok(())
+			}
+			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+				let mut out = Ty::default();
+				deserialize_extend(input, $(if has_args => args,) &mut out)?;
 				Ok(out)
 			}
 			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
@@ -589,16 +710,17 @@ impl NativeCodegen<Rust> for Message {
 		let mut parts = Vec::new();
 		for (f, e) in entries(&fields, c)? {
 			let value = (cx.lower)(e)?;
+			let field = cx.names.field(id, f.name.as_str());
 			parts.push(match f.label {
 				Label::Single => {
-					quote!($(rname(f.name)): Some($(cx.names.slot_new(id, f.name, value))),)
+					quote!($field: Some($(cx.names.slot_new(id, f.name, value))),)
 				}
-				Label::Repeated => quote!($(rname(f.name)): $value,),
+				Label::Repeated => quote!($field: $value,),
 				Label::Oneof(g) => {
-					let g = Ident::new(g);
 					let member = cx.names.slot_new(id, f.name, value);
-					let group = cx.names.item(id, &rname(&g).to_string()?);
-					quote!($(rname(&g)): Some($group::$(rname(f.name))($member)),)
+					let group = cx.names.item(id, &cx.names.member_type(id, g));
+					let variant = cx.names.variant(id, f.name.as_str());
+					quote!($(cx.names.field(id, g)): Some($group::$variant($member)),)
 				}
 			});
 		}
@@ -615,9 +737,9 @@ impl NativeCodegen<JavaScript> for Message {
 			by_number,
 		} = plan(ctx.types, ctx.native)?;
 		let names = ctx.names;
-		let pb = &js::import("../pds.ts", "protobuf");
-		let pinput = &js::import("../pds.ts", "Input");
-		let poutput = &js::import("../pds.ts", "Output");
+		let pb = &ctx.runtime("protobuf");
+		let pinput = &ctx.runtime("Input");
+		let poutput = &ctx.runtime("Output");
 		let has_args = !ctx.params.is_empty();
 		let args_of = |t: &mir::Type| -> js::Tokens {
 			let a = (ctx.pass_args)(t);
@@ -660,17 +782,50 @@ impl NativeCodegen<JavaScript> for Message {
 				quote!($de($from$(args_of(f.ty))))
 			}
 		};
+		let extend = |f: &MessageField, into: js::Tokens| -> Result<Option<js::Tokens>> {
+			let Some((msg, _)) = embedded_message(ctx.types, f.ty) else {
+				return Ok(None);
+			};
+			let pass = if msg == f.ty.target {
+				args_of(f.ty)
+			} else {
+				ensure!(
+					ctx.types[msg].params.is_empty(),
+					"{:?} reaches a message with arguments through an alias",
+					f.name
+				);
+				quote!()
+			};
+			let ext = names.item(msg, "deserialize_extend");
+			Ok(Some(quote!($ext($pb.len(input)$pass, $into);)))
+		};
 		let arms: Vec<js::Tokens> = fields
 			.iter()
 			.enumerate()
-			.map(|(i, f)| {
+			.map(|(i, f)| -> Result<js::Tokens> {
 				let name = f.name.as_str();
 				let w = (wires[i] as u8).to_string();
 				let expect = quote!($pb.expect(wire, $(&w)););
 				let body = match f.label {
-					Label::Single => quote!($expect out.$name = $(read(i, quote!(input)));),
+					Label::Single => {
+						let set = quote!(out.$name = $(read(i, quote!(input))););
+						match extend(f, quote!(out.$name))? {
+							None => quote!($expect $set),
+							Some(merge) => quote! {
+								$expect
+								if (out.$name === undefined) { $set } else { $merge }
+							},
+						}
+					}
 					Label::Oneof(g) => {
-						quote!($expect out.$g = { kind: $(quoted(name)), value: $(read(i, quote!(input))) };)
+						let set = quote!(out.$g = { kind: $(quoted(name)), value: $(read(i, quote!(input))) };);
+						match extend(f, quote!(out.$g.value))? {
+							None => quote!($expect $set),
+							Some(merge) => quote! {
+								$expect
+								if (out.$g?.kind === $(quoted(name))) { $merge } else { $set }
+							},
+						}
 					}
 					Label::Repeated if wires[i] == Wire::Len => {
 						quote!($expect (out.$name ??= []).push($(read(i, quote!(input))));)
@@ -688,9 +843,9 @@ impl NativeCodegen<JavaScript> for Message {
 						}
 					},
 				};
-				quote!(case $(f.number.to_string()): { $body break; })
+				Ok(quote!(case $(f.number.to_string()): { $body break; }))
 			})
-			.collect();
+			.collect::<Result<_>>()?;
 
 		let size = |i: usize, v: js::Tokens| -> js::Tokens {
 			let size = names.size_of(fields[i].ty.target);
@@ -768,8 +923,7 @@ impl NativeCodegen<JavaScript> for Message {
 			export function serialize(_0: Ty, output: $poutput): void {
 				$(for s in ser join($['\r']) => $s)
 			}
-			export function deserialize(input: $pinput$(if has_args => , $((ctx.args_param)()))): Ty {
-				const out: Ty = {};
+			export function deserialize_extend(input: $pinput$(if has_args => , $((ctx.args_param)())), out: Ty): void {
 				while (input.remaining() > 0) {
 					const [number, wire] = $pb.readKey(input);
 					switch (number) {
@@ -778,6 +932,10 @@ impl NativeCodegen<JavaScript> for Message {
 							$pb.skip(input, wire);
 					}
 				}
+			}
+			export function deserialize(input: $pinput$(if has_args => , $((ctx.args_param)()))): Ty {
+				const out: Ty = {};
+				deserialize_extend(input$(if has_args => , args), out);
 				return out;
 			}
 			export function size_of(_0: Ty): number {

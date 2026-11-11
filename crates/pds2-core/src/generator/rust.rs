@@ -12,6 +12,7 @@ use crate::mir::{self, Construction, Expr, Field, Type, TypeKind, TypeMap, Value
 
 use super::boxing::{self, Boxed};
 use super::common::{self, scalar_of};
+use super::naming::{self, Case, Modules, Scope};
 use super::recursion;
 use super::views;
 use super::GeneratorOutput;
@@ -27,9 +28,50 @@ enum Mode {
 	OwnedInView,
 }
 
+struct MemberNames {
+	fields: Scope,
+	variants: Scope,
+	types: Scope,
+	args: Scope,
+}
+
+fn member_names(types: &TypeMap, reg: &Registry) -> Result<BTreeMap<TypeId, MemberNames>> {
+	let mut out = BTreeMap::new();
+	for (id, def) in &types.0 {
+		let members = match &def.kind {
+			TypeKind::Native(n) => n
+				.specializer
+				.as_ref()
+				.and_then(|(s, _)| reg.layout(s.as_str()))
+				.map(|l| l.members(n))
+				.unwrap_or_default(),
+			TypeKind::Alias(_) => Default::default(),
+		};
+		fn strs(v: &[Ident]) -> Vec<&str> {
+			v.iter().map(Ident::as_str).collect()
+		}
+		let names = (|| -> Result<MemberNames> {
+			Ok(MemberNames {
+				fields: Scope::new(Case::Snake, strs(&members.fields), &[]).context("fields")?,
+				variants: Scope::new(Case::Pascal, strs(&members.variants), &[]).context("variants")?,
+				types: Scope::new(Case::Pascal, strs(&members.types), &["Ty", "Args"])
+					.context("inner types")?,
+				args: Scope::new(Case::Snake, def.params.iter().map(|(n, _)| n.as_str()), &[])
+					.context("arguments")?,
+			})
+		})()
+		.with_context(|| format!("naming members of {}", def.name.readable_name()))?;
+		out.insert(*id, names);
+	}
+	Ok(out)
+}
+
 #[derive(Clone)]
 struct RustMeta<'a> {
 	raw_names: Rc<BTreeMap<TypeId, String>>,
+	modules: Rc<Modules>,
+	members: Rc<BTreeMap<TypeId, MemberNames>>,
+	here: Rc<Vec<String>>,
 	types: &'a TypeMap,
 	reg: &'a Registry,
 	boxed: Rc<Boxed>,
@@ -45,6 +87,9 @@ impl<'a> RustMeta<'a> {
 		}
 		Ok(Self {
 			raw_names: Rc::new(raw_names),
+			modules: Rc::new(naming::rust_modules(source)?),
+			members: Rc::new(member_names(source, reg)?),
+			here: Rc::default(),
 			types: source,
 			reg,
 			boxed: Rc::new(boxing::analyze(source, reg)?),
@@ -59,6 +104,42 @@ impl<'a> RustMeta<'a> {
 			inlining: Rc::default(),
 			..self.clone()
 		}
+	}
+	fn at(&self, here: Vec<String>) -> Self {
+		Self {
+			here: Rc::new(here),
+			inlining: Rc::default(),
+			..self.clone()
+		}
+	}
+	fn owned_module(&self, id: TypeId) -> Vec<String> {
+		self.modules.idents(id).map(str::to_owned).collect()
+	}
+	fn view_module(&self, id: TypeId) -> Vec<String> {
+		std::iter::once("view".to_owned())
+			.chain(self.modules.idents(id).map(str::to_owned))
+			.collect()
+	}
+	fn home(&self, id: TypeId) -> Vec<String> {
+		match self.mode {
+			Mode::Owned => self.owned_module(id),
+			_ => self.view_module(id),
+		}
+	}
+	fn rel(&self, module: &[String]) -> String {
+		let here: Vec<&str> = self.here.iter().map(String::as_str).collect();
+		let to: Vec<&str> = module.iter().map(String::as_str).collect();
+		naming::rust_relative(&here, &to)
+	}
+	fn path_to(&self, module: &[String], item: &str) -> Tokens {
+		quote!($(format!("{}::{item}", self.rel(module))))
+	}
+	fn members_of(&self, owner: TypeId) -> &MemberNames {
+		let mut id = owner;
+		while let TypeKind::Alias(t) = &self.types[id].kind {
+			id = t.target;
+		}
+		&self.members[&id]
 	}
 	fn view(&self) -> Option<&views::ViewSet> {
 		match &self.mode {
@@ -92,29 +173,16 @@ impl<'a> RustMeta<'a> {
 		assert!(type_id.is_valid());
 		format!("pds_{}", self.raw_names[&type_id])
 	}
-	fn name(&self, type_id: TypeId) -> Tokens {
-		assert!(type_id.is_valid());
-		quote!(pds_$(&self.raw_names[&type_id]))
-	}
 	fn imported(&self, type_id: TypeId, ty: impl AsRef<str>) -> Tokens {
-		match &self.mode {
-			Mode::View(v) if v.same(type_id) => {
-				quote!($(format!("super::super::{}::{}", self.name_str(type_id), ty.as_ref())))
-			}
-			Mode::OwnedInView => {
-				quote!($(format!("super::super::{}::{}", self.name_str(type_id), ty.as_ref())))
-			}
-			_ => {
-				let i = import(format!("super::{}", self.name_str(type_id)), ty.as_ref()).qualified();
-				quote!($i)
-			}
-		}
+		assert!(type_id.is_valid());
+		let module = match &self.mode {
+			Mode::View(v) if !v.same(type_id) => self.view_module(type_id),
+			_ => self.owned_module(type_id),
+		};
+		self.path_to(&module, ty.as_ref())
 	}
 	fn owned_path(&self, type_id: TypeId, item: &str) -> Tokens {
-		match self.mode {
-			Mode::Owned => self.imported(type_id, item),
-			_ => quote!($(format!("super::super::{}::{}", self.name_str(type_id), item))),
-		}
+		self.path_to(&self.owned_module(type_id), item)
 	}
 	fn ty(&self, type_id: TypeId) -> Tokens {
 		assert!(type_id.is_valid());
@@ -156,8 +224,9 @@ impl<'a> RustMeta<'a> {
 pub struct RustNames<'a>(RustMeta<'a>);
 
 impl<'a> RustNames<'a> {
-	pub fn new(types: &'a TypeMap, reg: &'a Registry) -> Result<Self> {
-		Ok(Self(RustMeta::new(types, reg)?))
+	pub fn new(types: &'a TypeMap, reg: &'a Registry, here: &[&str]) -> Result<Self> {
+		let meta = RustMeta::new(types, reg)?;
+		Ok(Self(meta.at(here.iter().map(|s| s.to_string()).collect())))
 	}
 	pub fn ty(&self, id: TypeId) -> Tokens {
 		Names::ty(&self.0, id)
@@ -166,7 +235,16 @@ impl<'a> RustNames<'a> {
 		Names::item(&self.0, id, name)
 	}
 	pub fn module(&self, id: TypeId) -> String {
-		self.0.name_str(id)
+		self.0.rel(&self.0.owned_module(id))
+	}
+	pub fn flat_name(&self, id: TypeId) -> &str {
+		&self.0.raw_names[&id]
+	}
+	pub fn field(&self, owner: TypeId, name: &str) -> String {
+		Names::field(&self.0, owner, name)
+	}
+	pub fn variant(&self, owner: TypeId, name: &str) -> String {
+		Names::variant(&self.0, owner, name)
 	}
 	pub fn boxed(&self, owner: TypeId, slot: &Ident) -> bool {
 		Names::boxed(&self.0, owner, slot)
@@ -231,32 +309,29 @@ impl Names<Rust> for RustMeta<'_> {
 			views::Into::Module => {
 				let target = v.into_target(id);
 				let item = if v.moves(target) { "into_view" } else { "view" };
-				let i = import(format!("super::{}", self.name_str(target)), item).qualified();
-				quote!($i)
+				self.path_to(&self.view_module(target), item)
 			}
 			views::Into::Take => quote!(::core::mem::take),
 			views::Into::Copy | views::Into::Alias(_) => quote!(::core::clone::Clone::clone),
 		}
 	}
-}
-
-/// Emit an identifier, raw-prefixed when it collides with a rust keyword
-/// (protodef loves fields named `type`).
-pub fn rname(i: &Ident) -> Tokens {
-	const KEYWORDS: &[&str] = &[
-		"as", "async", "await", "box", "break", "const", "continue", "do", "dyn", "else", "enum",
-		"extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move",
-		"mut", "pub", "ref", "return", "static", "struct", "trait", "true", "type", "unsafe",
-		"use", "where", "while", "yield", "abstract", "become", "final", "macro", "override",
-		"priv", "try", "typeof", "unsized", "virtual", "gen",
-	];
-	const UNRAWABLE: &[&str] = &["self", "Self", "super", "crate"];
-	if KEYWORDS.contains(&i.as_str()) {
-		quote!($(format!("r#{}", i.as_str())))
-	} else if UNRAWABLE.contains(&i.as_str()) {
-		quote!($(format!("{}_", i.as_str())))
-	} else {
-		quote!($i)
+	fn runtime(&self, item: &str) -> Tokens {
+		quote!($(import("crate::pds", item)))
+	}
+	fn field(&self, owner: TypeId, name: &str) -> String {
+		self.members_of(owner).fields.get(name)
+	}
+	fn variant(&self, owner: TypeId, name: &str) -> String {
+		self.members_of(owner).variants.get(name)
+	}
+	fn member_type(&self, owner: TypeId, name: &str) -> String {
+		self.members_of(owner).types.get(name)
+	}
+	fn arg(&self, owner: TypeId, name: &str) -> String {
+		self.members[&owner].args.get(name)
+	}
+	fn guarded(&self, id: TypeId) -> bool {
+		self.guarded.contains(&id)
 	}
 }
 
@@ -316,7 +391,7 @@ fn generate_read_reference(
 			FieldRefSegment::Arg(name) => {
 				assert_eq!(i, 0);
 				quote! {
-					let _0 = args.$(rname(name));
+					let _0 = args.$(Names::arg(types, from, name.as_str()));
 				}
 			}
 			FieldRefSegment::Down { to, .. } => {
@@ -325,7 +400,7 @@ fn generate_read_reference(
 					// `input`/`args`
 					quote!(let _0: &$to_ty = &$(common::local(to));)
 				} else {
-					quote!(let _0: &$to_ty = &_0.$(rname(to));)
+					quote!(let _0: &$to_ty = &_0.$(Names::field(types, from, to.as_str()));)
 				}
 			}
 			FieldRefSegment::Virtual(name) => {
@@ -352,9 +427,9 @@ fn generate_read_reference(
 fn generate_args_passing(types: &RustMeta, input: &Type) -> Tokens {
 	let mut args = vec![];
 	for (name, field) in input.args.iter() {
-		args.push(
-			quote!($(rname(name)): $(generate_read_or_const_reference(types, true, field, None))),
-		)
+		args.push(quote!(
+			$(Names::arg(types, input.target, name.as_str())): $(generate_read_or_const_reference(types, true, field, None))
+		))
 	}
 	quote! {
 		$(types.args(input.target)) {
@@ -485,16 +560,31 @@ fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Registry) -> Result<()> {
 	let meta = RustMeta::new(input, reg)?;
 	let ids: Vec<TypeId> = input.0.keys().copied().collect();
-	let modules = emit(&meta, input, reg, &ids, "", output)?;
-	output.insert(
-		"mod.rs".into(),
-		quote! {
-			$(for m in modules join($['\r']) => $m)
-		}
-		.to_file_string()
-		.expect("formatting should succeed"),
-	);
-	Ok(())
+	emit(&meta, input, reg, &ids, "", output)
+}
+
+fn mod_files(modules: &Modules, ids: &[TypeId], dir: &str, output: &mut GeneratorOutput) {
+	for (path, children) in modules.dirs(ids.iter().copied()) {
+		let decls = children.iter().map(|(m, is_dir)| {
+			if !m.needs_path() {
+				return quote!(pub mod $(&m.ident););
+			}
+			let file = if *is_dir {
+				format!("{}/mod.rs", m.stem)
+			} else {
+				format!("{}.rs", m.stem)
+			};
+			quote!(#[path = $(quoted(file))] pub mod $(&m.ident);)
+		});
+		let stems: Vec<&str> = path.iter().map(|m| m.stem.as_str()).collect();
+		let file = if stems.is_empty() {
+			format!("{dir}mod.rs")
+		} else {
+			format!("{dir}{}/mod.rs", stems.join("/"))
+		};
+		let tokens: Tokens = quote!($(for d in decls join($['\r']) => $d));
+		output.insert(file.into(), tokens.to_file_string().expect("formatting should succeed"));
+	}
 }
 
 pub fn view_generator(
@@ -506,21 +596,35 @@ pub fn view_generator(
 	let owned = RustMeta::new(input, reg)?;
 	let set = Rc::new(views::analyze(input, reg, &owned.boxed, namespace)?);
 	let meta = owned.with_mode(Mode::View(set.clone()));
+	let all: Vec<TypeId> = input.0.keys().copied().collect();
+	let top = meta.modules.dirs(all).remove(&vec![]).unwrap_or_default();
+	if let Some((m, _)) = top.iter().find(|(m, _)| m.ident == "view") {
+		bail!("a top-level {:?} module clashes with the generated views", m.ident);
+	}
 	let ids: Vec<TypeId> = set.included.iter().copied().filter(|id| set.emitted(*id)).collect();
-	let modules = emit(&meta, input, reg, &ids, "view/", output)?;
-	let aliases = set.roots.iter().map(|(name, id)| {
-		let home = if set.same(*id) { "super" } else { "self" };
-		quote!(pub use $home::$(meta.name(*id)) as $(name.as_str());)
-	});
-	output.insert(
-		"view/mod.rs".into(),
-		quote! {
-			$(for m in modules join($['\r']) => $m)
-			$(for a in aliases join($['\r']) => $a)
-		}
-		.to_file_string()
-		.expect("formatting should succeed"),
-	);
+	emit(&meta, input, reg, &ids, "view/", output)?;
+	let view_top = meta.modules.dirs(ids.iter().copied()).remove(&vec![]).unwrap_or_default();
+	let root = meta.at(vec!["view".to_owned()]);
+	let aliases: Vec<String> = set
+		.roots
+		.iter()
+		.filter_map(|(name, id)| {
+			let alias = Scope::empty(Case::Snake).get(name);
+			if view_top.keys().any(|m| m.ident == alias) {
+				return None;
+			}
+			let module = if set.same(*id) {
+				root.owned_module(*id)
+			} else {
+				root.view_module(*id)
+			};
+			Some(format!("pub use {} as {alias};\n", root.rel(&module)))
+		})
+		.collect();
+	output
+		.get_mut(&std::path::PathBuf::from("view/mod.rs"))
+		.ok_or_else(|| anyhow!("views emit their root module"))?
+		.push_str(&aliases.concat());
 	output
 		.get_mut(&std::path::PathBuf::from("mod.rs"))
 		.ok_or_else(|| anyhow!("views need the owned modules generated first"))?
@@ -541,7 +645,7 @@ fn emit(
 	ids: &[TypeId],
 	dir: &str,
 	output: &mut GeneratorOutput,
-) -> Result<Vec<Tokens>> {
+) -> Result<()> {
 	let virtuals_used = common::virtuals_used(input);
 	let elab = Elaborator { types: input, reg };
 	let elaborated = common::elaborate(&elab)?;
@@ -554,11 +658,11 @@ fn emit(
 		}
 	}
 
-	let mut out_module = vec![];
 	let view = meta.view();
 	let lt = &if view.is_some() { quote!(<'i>) } else { quote!() };
 
 	for id in ids {
+		let meta = &meta.at(meta.home(*id));
 		let ty = &input[*id];
 		let pinput = &import("crate::pds", "Input");
 		let poutput = &import("crate::pds", "Output");
@@ -583,7 +687,7 @@ fn emit(
 		let args_struct = quote! {
 			$(if has_args =>
 				pub struct Args<'a$(if args_lt => , 'i)> {
-					$(for (name, par) in ty.params.iter() join($['\r']) => pub $(rname(name)): &'a $(param_ty(*par)),)
+					$(for (name, par) in ty.params.iter() join($['\r']) => pub $(Names::arg(meta, *id, name.as_str())): &'a $(param_ty(*par)),)
 				}
 			)
 		};
@@ -731,12 +835,10 @@ fn emit(
 			def
 		};
 		output.insert(
-			format!("{dir}{}.rs", meta.name_str(*id)).into(),
+			format!("{dir}{}", meta.modules.file(*id, "rs")).into(),
 			def.to_file_string().expect("formatting should succeed"),
 		);
-		out_module.push(quote! {
-			pub mod $(meta.name(*id));
-		})
 	}
-	Ok(out_module)
+	mod_files(&meta.modules, ids, dir, output);
+	Ok(())
 }

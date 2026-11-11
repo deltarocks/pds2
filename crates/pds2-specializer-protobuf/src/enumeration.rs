@@ -6,12 +6,11 @@ use pds2_core::specializer::decode::Input;
 use pds2_core::specializer::encode::{int_of, Encoder, Encoding, Target, Val};
 use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
 use pds2_core::specializer::{
-	specialization_use, AstHir, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout,
-	SlotVisitor,
+	specialization_use, AstHir, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx,
+	NativeLayout, SlotVisitor,
 };
 use pds2_core::ast::Ident;
 use pds2_core::generator::common::scalar_of;
-use pds2_core::generator::rust::rname;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, Value};
 
@@ -78,6 +77,20 @@ impl AstHir for Enum {
 impl NativeLayout for Enum {
 	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor) {
 		pds2_core::specializer::visit_specialization(native, TAG, Embed::Fixed, v);
+	}
+	fn members(&self, native: &mir::NativeType) -> Members {
+		let Some(e) = view(native) else {
+			return Members::default();
+		};
+		Members {
+			variants: e
+				.values
+				.iter()
+				.map(|(v, _)| (*v).clone())
+				.chain([e.unknown.clone()])
+				.collect(),
+			..Default::default()
+		}
 	}
 }
 
@@ -196,7 +209,8 @@ impl NativeCodegen<Rust> for Enum {
 		let lits = literals(ctx, &e)?;
 		let tag = e.tag.target;
 		let names = ctx.names;
-		let unknown = rname(&e.unknown);
+		let unknown = ctx.variant(e.unknown.as_str());
+		let v = |v: &Ident| ctx.variant(v.as_str());
 		let (pinput, poutput, presult) = pds2_core::specializer::pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 		let tag_ty = names.ty(tag);
@@ -204,18 +218,18 @@ impl NativeCodegen<Rust> for Enum {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
 			pub enum Ty {
-				$(for (v, _) in &e.values join($['\r']) => $(rname(v)),)
+				$(for (n, _) in &e.values join($['\r']) => $(v(n)),)
 				$(&unknown)($(&tag_ty)),
 			}
 			pub fn number(_0: &Ty) -> $(&tag_ty) {
 				match _0 {
-					$(for ((v, _), lit) in e.values.iter().zip(&lits) join($['\r']) => Ty::$(rname(v)) => $lit,)
+					$(for ((n, _), lit) in e.values.iter().zip(&lits) join($['\r']) => Ty::$(v(n)) => $lit,)
 					Ty::$(&unknown)(n) => n.clone(),
 				}
 			}
 			pub fn from_number(n: $(&tag_ty)) -> Ty {
 				match n {
-					$(for ((v, _), lit) in e.values.iter().zip(&lits) join($['\r']) => $lit => Ty::$(rname(v)),)
+					$(for ((n, _), lit) in e.values.iter().zip(&lits) join($['\r']) => $lit => Ty::$(v(n)),)
 					n => Ty::$(&unknown)(n),
 				}
 			}
@@ -244,9 +258,9 @@ impl NativeCodegen<Rust> for Enum {
 				let [n] = payload.as_slice() else {
 					bail!("unknown enum value without its number");
 				};
-				quote!($ty::$(rname(&e.unknown))($((cx.lower)(n)?)))
+				quote!($ty::$(cx.names.variant(id, e.unknown.as_str()))($((cx.lower)(n)?)))
 			}
-			Construction::Variant(n, _) => quote!($ty::$(rname(n))),
+			Construction::Variant(n, _) => quote!($ty::$(cx.names.variant(id, n.as_str()))),
 			c => bail!("enum is constructed from a value name, got {c:?}"),
 		})
 	}
@@ -269,8 +283,8 @@ impl NativeCodegen<JavaScript> for Enum {
 		let tag = e.tag.target;
 		let names = ctx.names;
 		let tag_ty = names.ty(tag);
-		let pinput = &js::import("../pds.ts", "Input");
-		let poutput = &js::import("../pds.ts", "Output");
+		let pinput = &ctx.runtime("Input");
+		let poutput = &ctx.runtime("Output");
 		let pass = (ctx.pass_args)(e.tag);
 		Ok(quote! {
 			$((ctx.args_struct)())

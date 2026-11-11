@@ -19,14 +19,14 @@ pub mod pds_native {
 	pub use pds_runtime::protobuf::natives::*;
 }
 
-pub use gen::pds_google_protobuf_DescriptorProto::Ty as DescriptorProto;
-pub use gen::pds_google_protobuf_EnumDescriptorProto::Ty as EnumDescriptorProto;
-pub use gen::pds_google_protobuf_FieldDescriptorProto::Ty as FieldDescriptorProto;
-pub use gen::pds_google_protobuf_FieldDescriptorProto_Label::Ty as Label;
-pub use gen::pds_google_protobuf_FieldDescriptorProto_Type::Ty as Type;
-pub use gen::pds_google_protobuf_FileDescriptorProto::Ty as FileDescriptorProto;
-pub use gen::pds_google_protobuf_FileDescriptorSet::Ty as FileDescriptorSet;
+pub use gen::google::protobuf::descriptor_proto::Ty as DescriptorProto;
+pub use gen::google::protobuf::enum_descriptor_proto::Ty as EnumDescriptorProto;
+pub use gen::google::protobuf::field_descriptor_proto::Ty as FieldDescriptorProto;
+pub use gen::google::protobuf::field_descriptor_proto_label::Ty as Label;
+pub use gen::google::protobuf::field_descriptor_proto_type::Ty as Type;
+pub use gen::google::protobuf::file_descriptor_proto::Ty as FileDescriptorProto;
+pub use gen::google::protobuf::file_descriptor_set::Ty as FileDescriptorSet;
 
 pub fn decode(bytes: &[u8]) -> pds::Result<FileDescriptorSet> {
-	gen::pds_google_protobuf_FileDescriptorSet::deserialize(&mut pds::Input::new(bytes))
+	gen::google::protobuf::file_descriptor_set::deserialize(&mut pds::Input::new(bytes))
 }

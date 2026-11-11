@@ -7,7 +7,8 @@ use genco::prelude::*;
 use pds2_core::ast::{Block, FieldRefSegment, Item, Value};
 use pds2_core::generator::common::scalar_of;
 use pds2_core::generator::recursion::{feedback_vertices, Graph};
-use pds2_core::generator::rust::{rname, RustNames};
+use pds2_core::generator::naming::{Case, Scope};
+use pds2_core::generator::rust::RustNames;
 use pds2_core::hir::TypeId;
 use pds2_core::mir::{self, Expr, FieldItem, TypeKind, TypeMap};
 use pds2_core::specializer::expr::Elaborator;
@@ -421,9 +422,9 @@ impl<'a> Gen<'a> {
 			for (name, ty) in fields {
 				let ident = pds2_core::ast::Ident::new(&name);
 				let value = if self.names.boxed(id, &ident) {
-					quote!((*$(&place).$(rname(&ident))))
+					quote!((*$(&place).$(self.names.field(id, &name))))
 				} else {
-					quote!($(&place).$(rname(&ident)))
+					quote!($(&place).$(self.names.field(id, &name)))
 				};
 				visit(&name, ty, value, out);
 			}
@@ -439,14 +440,14 @@ impl<'a> Gen<'a> {
 				let mut body = Vec::new();
 				visit(name.as_str(), t.target, inner(self.names.boxed(id, name)), &mut body);
 				if !body.is_empty() {
-					arms.push(quote!($(&ty)::$(rname(name))($(&p)) => { $(for b in body => $b) }));
+					arms.push(quote!($(&ty)::$(self.names.variant(id, name.as_str()))($(&p)) => { $(for b in body => $b) }));
 				}
 			}
 			if let Some((name, t)) = u.default.filter(|(_, t)| !void(t.target)) {
 				let mut body = Vec::new();
 				visit("default", t.target, inner(self.names.boxed(id, name)), &mut body);
 				if !body.is_empty() {
-					arms.push(quote!($(&ty)::$(rname(name))(_, $(&p)) => { $(for b in body => $b) }));
+					arms.push(quote!($(&ty)::$(self.names.variant(id, name.as_str()))(_, $(&p)) => { $(for b in body => $b) }));
 				}
 			}
 			if !arms.is_empty() {
@@ -519,7 +520,7 @@ impl<'a> Gen<'a> {
 	fn fresh(&self, step: &Step, dir: Dir, to: TypeId) -> String {
 		let n = self.counter.get();
 		self.counter.set(n + 1);
-		format!("{}_{}_{}_{n}", dir.name(), step.label, self.names.module(to).trim_start_matches("pds_"))
+		format!("{}_{}_{}_{n}", dir.name(), step.label, self.names.flat_name(to))
 	}
 
 	fn apply(&self, conv: &Conv, value: rust::Tokens) -> rust::Tokens {
@@ -916,11 +917,11 @@ impl<'a> Gen<'a> {
 					None => {
 						let nested = r.updated.get(&newer);
 						let unbox = if self.names.boxed(from, &pds2_core::ast::Ident::new(&s)) {
-							quote!(*$(rname(&pds2_core::ast::Ident::new(&s))))
+							quote!(*$(self.names.field(from, &s)))
 						} else {
-							quote!($(rname(&pds2_core::ast::Ident::new(&s))))
+							quote!($(self.names.field(from, &s)))
 						};
-						moved.push(rname(&pds2_core::ast::Ident::new(&s)));
+						moved.push(self.names.field(from, &s));
 						let (fs, ft) = (self.resolve(*sty), self.resolve(*dty));
 						if rule.is_some() && fs != ft && self.numeric(fs) && self.numeric(ft) {
 							self.cast(unbox, ft)
@@ -935,7 +936,7 @@ impl<'a> Gen<'a> {
 				} else {
 					value
 				};
-				fields.push(quote!($(rname(&pds2_core::ast::Ident::new(d))): $value));
+				fields.push(quote!($(self.names.field(to, d)): $value));
 			} else {
 				let (kind, map) = match dir {
 					Dir::Up => ("added", &r.added),
@@ -957,7 +958,7 @@ impl<'a> Gen<'a> {
 				} else {
 					quote!($(&local))
 				};
-				fields.push(quote!($(rname(&pds2_core::ast::Ident::new(d))): $value));
+				fields.push(quote!($(self.names.field(to, d)): $value));
 			}
 		}
 		for (s, _) in &src {
@@ -1023,11 +1024,11 @@ impl<'a> Gen<'a> {
 			let arm_at = format!("{at}/{n}");
 			let src_pat = |bound: bool| {
 				if void(ty.target) {
-					quote!($(&from_ty)::$(rname(name)))
+					quote!($(&from_ty)::$(self.names.variant(from, n)))
 				} else if bound {
-					quote!($(&from_ty)::$(rname(name))(p))
+					quote!($(&from_ty)::$(self.names.variant(from, n))(p))
 				} else {
-					quote!($(&from_ty)::$(rname(name))(_))
+					quote!($(&from_ty)::$(self.names.variant(from, n))(_))
 				}
 			};
 			let t = target_name(n);
@@ -1086,7 +1087,7 @@ impl<'a> Gen<'a> {
 						};
 						let _ = tty;
 						let tag = self.cast(quote!($(*tag as i64)), self.resolve(ut.tag_type));
-						one(quote!($(&to_ty)::$(rname(tname))($tag)))
+						one(quote!($(&to_ty)::$(self.names.variant(to, tname.as_str()))($tag)))
 					}
 					Action::Drop if root => quote!(return Ok(vec![])),
 					Action::Drop => quote!(return Err(crate::pds::convert::Error::Dropped)),
@@ -1109,7 +1110,7 @@ impl<'a> Gen<'a> {
 							Some((_, tname, tty)) if !void(tty.target) => {
 								let Some(v) = self.field_value(action, ty.target, tty.target, &arm_at) else { continue };
 								let v = if self.names.boxed(to, tname) { quote!(Box::new($v)) } else { v };
-								quote!($(&to_ty)::$(rname(tname))($v))
+								quote!($(&to_ty)::$(self.names.variant(to, tname.as_str()))($v))
 							}
 							Some(_) => {
 								self.error(format!("{arm_at}: the target arm carries no data, rename it instead"));
@@ -1128,7 +1129,7 @@ impl<'a> Gen<'a> {
 				continue;
 			}
 			let (_, tname, tty) = target.expect("checked above");
-			let to_arm = quote!($(&to_ty)::$(rname(tname)));
+			let to_arm = quote!($(&to_ty)::$(self.names.variant(to, tname.as_str())));
 			match (void(ty.target), void(tty.target)) {
 				(true, true) => arms.push(quote!($(src_pat(false)) => $(one(to_arm)),)),
 				(false, false) => {
@@ -1164,15 +1165,16 @@ impl<'a> Gen<'a> {
 				return None;
 			};
 			let src_ty = &from_ty;
-			let to_d = quote!($(&to_ty)::$(rname(tname)));
+			let to_d = quote!($(&to_ty)::$(self.names.variant(to, tname.as_str())));
+			let from_d = self.names.variant(from, dname.as_str());
 			match (void(dty.target), void(tty.target)) {
-				(true, true) => arms.push(quote!($src_ty::$(rname(dname))(t) => $(one(quote!($to_d($tag)))),)),
+				(true, true) => arms.push(quote!($src_ty::$(&from_d)(t) => $(one(quote!($to_d($tag)))),)),
 				(false, false) => {
 					let unbox = if self.names.boxed(from, dname) { quote!(*p) } else { quote!(p) };
 					let conv = self.convert(step, dir, dty.target, tty.target, r.updated.get("default"), false, &format!("{at}/default"));
 					let value = self.apply(&conv, unbox);
 					let value = if self.names.boxed(to, tname) { quote!(Box::new($value)) } else { value };
-					arms.push(quote!($src_ty::$(rname(dname))(t, p) => $(one(quote!($to_d($tag, $value)))),));
+					arms.push(quote!($src_ty::$(&from_d)(t, p) => $(one(quote!($to_d($tag, $value)))),));
 				}
 				_ => {
 					self.error(format!("{at}: the default arm changed shape"));
@@ -1255,7 +1257,7 @@ pub fn generate(
 	}
 	let g = Gen {
 		types,
-		names: RustNames::new(types, reg)?,
+		names: RustNames::new(types, reg, &["convert"])?,
 		elab: Elaborator { types, reg },
 		alias_base: {
 			let mut found: BTreeMap<TypeId, Option<String>> = BTreeMap::new();
@@ -1436,13 +1438,15 @@ pub fn generate(
 			for id in roots_of(&tags[i]).into_values() {
 				g.alias_names(id, None, &mut names);
 			}
-			quote! {
+			let scope = Scope::new(Case::Snake, names.keys().map(String::as_str), &[])
+				.with_context(|| format!("aliases of {}", tags[i]))?;
+			Ok(quote! {
 				pub mod $(&tags[i]) {
-					$(for (name, id) in &names join($['\r']) => pub use super::super::$(g.names.module(*id)) as $(rname(&pds2_core::ast::Ident::new(name)));)
+					$(for (name, id) in &names join($['\r']) => pub use super::$(g.names.module(*id)) as $(scope.get(name));)
 				}
-			}
+			})
 		})
-		.collect();
+		.collect::<Result<_>>()?;
 	let guarded = feedback_vertices(&g.calls.borrow());
 	let code: Vec<rust::Tokens> = g.code.borrow().iter().map(|f| f.emit(guarded.contains(&f.name))).collect();
 	let file: rust::Tokens = quote! {
