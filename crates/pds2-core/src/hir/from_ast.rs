@@ -677,7 +677,7 @@ impl Namespace {
 								)),
 							);
 						}
-						(name, NamespaceItem::Inner(Namespace { items }))
+						(name, NamespaceItem::Inner(Namespace { items, overloads: true }))
 					}
 				}
 				"def" => {
@@ -704,6 +704,9 @@ impl Namespace {
 				name
 			);
 		}
-		Ok(Self { items: out })
+		Ok(Self {
+			items: out,
+			overloads: false,
+		})
 	}
 }

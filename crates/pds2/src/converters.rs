@@ -297,6 +297,7 @@ struct Gen<'a> {
 	used: RefCell<BTreeSet<String>>,
 	dirty: RefCell<BTreeMap<(usize, Dir, TypeId), bool>>,
 	counter: Cell<usize>,
+	version_variants: Vec<String>,
 }
 
 fn full_name(types: &TypeMap, id: TypeId) -> String {
@@ -408,8 +409,9 @@ impl<'a> Gen<'a> {
 		let visit = |name: &str, ty: TypeId, value: rust::Tokens, body: &mut Vec<rust::Tokens>| {
 			if let Some(Action::Custom(f)) = r.hooked.get(name).and_then(|c| c.get(dir)) {
 				if self.leaf(ty) {
-					let (f, (a, b)) = (self.custom(f), versions);
-					body.push(quote!($f(&mut $(&value), $a, $b, cx)?;));
+					let f = self.custom(f);
+					let (a, b) = (&self.version_variants[versions.0], &self.version_variants[versions.1]);
+					body.push(quote!($f(&mut $(&value), Version::$a, Version::$b, cx)?;));
 					self.used(format!("{}/hooked({name})", r.path));
 				}
 			}
@@ -1201,6 +1203,39 @@ fn root_variant(name: &str) -> String {
 		.collect()
 }
 
+fn version_range_macro(variants: &[String]) -> String {
+	let all = variants.join(" ");
+	let mut arms = String::new();
+	for (i, v) in variants.iter().enumerate() {
+		let rest = variants[i..].join(" ");
+		arms += &format!(
+			"    (@from {v} $end:tt) => {{ $crate::version_range!(@take $end [] {rest}) }};\n"
+		);
+	}
+	for v in variants {
+		arms += &format!("    (@take [= {v}] [$($acc:ident)*] {v} $($rest:ident)*) => {{ $(Version::$acc |)* Version::{v} }};\n");
+		arms += &format!("    (@take [{v}] [] {v} $($rest:ident)*) => {{ compile_error!(\"empty version range\") }};\n");
+		arms += &format!(
+			"    (@take [{v}] [$($acc:ident)+] {v} $($rest:ident)*) => {{ $(Version::$acc)|+ }};\n"
+		);
+	}
+	format!(
+		"#[macro_export]\n\
+		macro_rules! version_range {{\n    \
+		($a:ident ..= $b:ident) => {{ $crate::version_range!(@from $a [= $b]) }};\n    \
+		($a:ident .. $b:ident) => {{ $crate::version_range!(@from $a [$b]) }};\n    \
+		($a:ident ..) => {{ $crate::version_range!(@from $a []) }};\n    \
+		(..= $b:ident) => {{ $crate::version_range!(@take [= $b] [] {all}) }};\n    \
+		(.. $b:ident) => {{ $crate::version_range!(@take [$b] [] {all}) }};\n\
+		{arms}    \
+		(@from $a:ident $end:tt) => {{ compile_error!(concat!(\"unknown version \", stringify!($a))) }};\n    \
+		(@take [] [$($acc:ident)*]) => {{ $(Version::$acc)|* }};\n    \
+		(@take $end:tt [$($acc:ident)*]) => {{ compile_error!(concat!(\"version range end not reached: \", stringify!($end))) }};\n    \
+		(@take $end:tt [$($acc:ident)*] $head:ident $($rest:ident)*) => {{ $crate::version_range!(@take $end [$($acc)* $head] $($rest)*) }};\n\
+		}}"
+	)
+}
+
 pub fn generate(
 	types: &TypeMap,
 	reg: &Registry,
@@ -1209,6 +1244,7 @@ pub fn generate(
 	migrations: &[Option<Migration>],
 	every: Option<&Migration>,
 	virtual_packets: bool,
+	crates: Option<&str>,
 ) -> Result<String> {
 	let protocols: Vec<(i32, usize)> = versions
 		.iter()
@@ -1250,14 +1286,14 @@ pub fn generate(
 	for name in names {
 		let stripped = tags
 			.iter()
-			.find_map(|t| name.strip_suffix(&format!("_{t}")))
+			.find_map(|t| name.strip_prefix(&format!("{t}::")))
 			.unwrap_or(&name)
 			.to_owned();
 		base.insert(name, stripped);
 	}
 	let g = Gen {
 		types,
-		names: RustNames::new(types, reg, &["convert"])?,
+		names: RustNames::new(types, reg, &["convert"], crates)?,
 		elab: Elaborator { types, reg },
 		alias_base: {
 			let mut found: BTreeMap<TypeId, Option<String>> = BTreeMap::new();
@@ -1288,15 +1324,16 @@ pub fn generate(
 		used: RefCell::default(),
 		dirty: RefCell::default(),
 		counter: Cell::new(0),
+		version_variants: variant_names.clone(),
 	};
 	let roots_of = |tag: &str| -> BTreeMap<String, TypeId> {
 		types
 			.0
-			.iter()
-			.filter_map(|(id, d)| {
+			.keys()
+			.filter_map(|id| {
 				let full = full_name(types, *id);
 				let rest = full.strip_prefix(&format!("{tag}::"))?;
-				matches!(d.kind, TypeKind::Alias(_)).then(|| (rest.to_owned(), g.resolve(*id)))
+				(rest.rsplit("::").next() == Some("packet")).then(|| (rest.to_owned(), g.resolve(*id)))
 			})
 			.collect()
 	};
@@ -1351,7 +1388,8 @@ pub fn generate(
 					}
 				};
 				let arm = format!("step_{}_{fi}_{ti}", variant.to_lowercase());
-				dispatch.push(quote!((Root::$(&variant), $fi, $ti) => $(&arm)(data, cx),));
+				let (vf, vt) = (&variant_names[fi], &variant_names[ti]);
+				dispatch.push(quote!((Root::$(&variant), Version::$vf, Version::$vt) => $(&arm)(data, cx),));
 				arms.push(quote! {
 					fn $(&arm)(data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
 						$body
@@ -1392,7 +1430,7 @@ pub fn generate(
 						.collect();
 					let de = g.names.item(u.tag_type, "deserialize");
 					names.push(quote! {
-						(Root::$(&variant), $i) => {
+						(Root::$(&variant), Version::$(&variant_names[i])) => {
 							let tag = $de(&mut input).ok()? as i64;
 							let table: &[(i64, &str)] = &[$(for (t, n) in &arms join(, ) => ($(*t as i64), $(quoted(n))))];
 							table
@@ -1411,7 +1449,7 @@ pub fn generate(
 				},
 			};
 			let arm = format!("inspect_{}_{i}", variant.to_lowercase());
-			inspect.push(quote!((Root::$(&variant), $i) => $(&arm)(data),));
+			inspect.push(quote!((Root::$(&variant), Version::$(&variant_names[i])) => $(&arm)(data),));
 			arms.push(quote! {
 				fn $(&arm)(data: &[u8]) -> std::result::Result<String, String> {
 					let mut input = crate::pds::Input::new(data);
@@ -1440,9 +1478,16 @@ pub fn generate(
 			}
 			let scope = Scope::new(Case::Snake, names.keys().map(String::as_str), &[])
 				.with_context(|| format!("aliases of {}", tags[i]))?;
+			let path = |id: TypeId| {
+				let module = g.names.module(id);
+				match module.starts_with("::") {
+					true => module,
+					false => format!("super::{module}"),
+				}
+			};
 			Ok(quote! {
 				pub mod $(&tags[i]) {
-					$(for (name, id) in &names join($['\r']) => pub use super::$(g.names.module(*id)) as $(scope.get(name));)
+					$(for (name, id) in &names join($['\r']) => pub use $(path(*id)) as $(scope.get(name));)
 				}
 			})
 		})
@@ -1460,6 +1505,8 @@ pub fn generate(
 
 		impl Version {
 			pub const ALL: &[Version] = &[$(for t in &variant_names join(, ) => Version::$t)];
+			pub const FIRST: Version = Version::$(variant_names.first().expect("at least one version"));
+			pub const LATEST: Version = Version::$(variant_names.last().expect("at least one version"));
 
 			pub fn name(self) -> &'static str {
 				VERSIONS[self as usize]
@@ -1474,30 +1521,65 @@ pub fn generate(
 			}
 
 			pub fn of(name: &str) -> Option<Version> {
-				index_of(name).and_then(Self::at)
+				VERSIONS.iter().position(|v| *v == name).and_then(Self::at)
+			}
+
+			pub fn next(self) -> Option<Version> {
+				Self::at(self as usize + 1)
+			}
+
+			pub fn prev(self) -> Option<Version> {
+				(self as usize).checked_sub(1).and_then(Self::at)
+			}
+
+			pub fn span(range: impl std::ops::RangeBounds<Version>) -> &'static [Version] {
+				use std::ops::Bound;
+				let start = match range.start_bound() {
+					Bound::Included(v) => *v as usize,
+					Bound::Excluded(v) => *v as usize + 1,
+					Bound::Unbounded => 0,
+				};
+				let end = match range.end_bound() {
+					Bound::Included(v) => *v as usize + 1,
+					Bound::Excluded(v) => *v as usize,
+					Bound::Unbounded => Self::ALL.len(),
+				};
+				Self::ALL.get(start..end).unwrap_or(&[])
 			}
 		}
 
-		pub const PROTOCOLS: &[(i32, usize)] = &[$(for (p, i) in &protocols join(, ) => ($(*p), $(*i)))];
+		impl std::fmt::Display for Version {
+			fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+				f.write_str(self.name())
+			}
+		}
 
-		pub fn version_of(protocol: i32) -> Option<usize> {
+		impl std::str::FromStr for Version {
+			type Err = String;
+
+			fn from_str(name: &str) -> Result<Self, String> {
+				Self::of(name).ok_or_else(|| format!("unknown version {name}"))
+			}
+		}
+
+		$(version_range_macro(&variant_names))
+
+		pub const PROTOCOLS: &[(i32, Version)] = &[$(for (p, i) in &protocols join(, ) => ($(*p), Version::$(&variant_names[*i])))];
+
+		pub fn version_of(protocol: i32) -> Option<Version> {
 			PROTOCOLS.iter().find(|(p, _)| *p == protocol).map(|(_, v)| *v)
 		}
 
-		pub const LEGACY_PROTOCOLS: &[(i32, usize)] = &[$(for (p, i) in &legacy join(, ) => ($(*p), $(*i)))];
+		pub const LEGACY_PROTOCOLS: &[(i32, Version)] = &[$(for (p, i) in &legacy join(, ) => ($(*p), Version::$(&variant_names[*i])))];
 
-		pub fn legacy_version_of(protocol: i32) -> Option<usize> {
+		pub fn legacy_version_of(protocol: i32) -> Option<Version> {
 			LEGACY_PROTOCOLS.iter().find(|(p, _)| *p == protocol).map(|(_, v)| *v)
-		}
-
-		pub fn index_of(version: &str) -> Option<usize> {
-			VERSIONS.iter().position(|v| *v == version)
 		}
 
 		pub const STEPS: &[bool] = &[$(for m in migrations join(, ) => $(if m.is_some() { true } else { false }))];
 
-		pub fn reachable(a: usize, b: usize) -> bool {
-			a.max(b) < VERSIONS.len() && STEPS[a.min(b)..a.max(b)].iter().all(|s| *s)
+		pub fn reachable(a: Version, b: Version) -> bool {
+			STEPS[a.min(b) as usize..a.max(b) as usize].iter().all(|s| *s)
 		}
 
 		#[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1511,14 +1593,14 @@ pub fn generate(
 			}
 		}
 
-		pub fn step(root: Root, from: usize, to: usize, data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
+		pub fn step(root: Root, from: Version, to: Version, data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
 			match (root, from, to) {
 				$(for d in dispatch join($['\r']) => $d)
 				_ => crate::pds::convert::unconvertible(format!("no step {from} -> {to} for {root:?}")),
 			}
 		}
 
-		pub fn packet_name(root: Root, version: usize, data: &[u8]) -> Option<&'static str> {
+		pub fn packet_name(root: Root, version: Version, data: &[u8]) -> Option<&'static str> {
 			let mut input = crate::pds::Input::new(data);
 			match (root, version) {
 				$(for n in names => $n)
@@ -1526,11 +1608,15 @@ pub fn generate(
 			}
 		}
 
-		pub fn inspect(root: Root, version: usize, data: &[u8]) -> std::result::Result<String, String> {
+		pub fn inspect(root: Root, version: Version, data: &[u8]) -> std::result::Result<String, String> {
 			match (root, version) {
 				$(for i in inspect join($['\r']) => $i)
-				_ => Err(format!("{root:?} does not exist in {}", VERSIONS[version])),
+				_ => Err(format!("{root:?} does not exist in {version}")),
 			}
+		}
+
+		fn toward(at: Version, to: Version) -> Version {
+			if to > at { at.next() } else { at.prev() }.expect("a version between two versions")
 		}
 
 		$(if virtual_packets {
@@ -1539,7 +1625,7 @@ pub fn generate(
 				Virtual(crate::custom::Virtual),
 			}
 
-			pub fn convert(root: Root, from: usize, to: usize, data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
+			pub fn convert(root: Root, from: Version, to: Version, data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
 				let packets = match crate::custom::virtual_start(root, from, to, data, cx)? {
 					Some(carried) => carried,
 					None => vec![Carrier::Wire(data.to_vec())],
@@ -1547,10 +1633,10 @@ pub fn generate(
 				carry(root, from, to, packets, cx)
 			}
 
-			pub fn carry(root: Root, from: usize, to: usize, mut packets: Vec<Carrier>, cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
+			pub fn carry(root: Root, from: Version, to: Version, mut packets: Vec<Carrier>, cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
 				let mut at = from;
 				while at != to {
-					let next = if to > at { at + 1 } else { at - 1 };
+					let next = toward(at, to);
 					let mut out = Vec::new();
 					for p in packets {
 						match p {
@@ -1574,11 +1660,11 @@ pub fn generate(
 				Ok(wire)
 			}
 		} else {
-			pub fn convert(root: Root, from: usize, to: usize, data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
+			pub fn convert(root: Root, from: Version, to: Version, data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
 				let mut packets = vec![data.to_vec()];
 				let mut at = from;
 				while at != to {
-					let next = if to > at { at + 1 } else { at - 1 };
+					let next = toward(at, to);
 					let mut out = Vec::new();
 					for p in &packets {
 						out.extend(step(root, at, next, p, cx)?);

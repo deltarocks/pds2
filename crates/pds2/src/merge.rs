@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Result};
 use pds2_core::ast::{Attributes, Block, Ident, Item, ItemArgs, Path, Statement, Value};
@@ -189,13 +189,19 @@ pub fn merge(inputs: &[(String, Block)]) -> Result<Merged> {
 			bail!("native {name} differs between versions, natives can't have variants");
 		}
 	}
-	let variant = |name: &str, h: u64| -> String {
+	if inputs.is_empty() {
+		bail!("nothing to merge");
+	}
+	let home = |name: &str, h: u64| -> Option<String> {
 		let list = &shapes[name];
-		if list.len() == 1 {
-			return name.to_owned();
-		}
 		let (_, first) = list.iter().find(|(x, _)| *x == h).expect("hash of this name");
-		format!("{name}_{}", tag(&inputs[*first].0))
+		(!srcs[*first][name].native).then(|| tag(&inputs[*first].0))
+	};
+	let variant = |name: &str, h: u64| -> String {
+		match home(name, h) {
+			Some(module) => format!("{module}::{name}"),
+			None => name.to_owned(),
+		}
 	};
 
 	let mut root = Ns::default();
@@ -213,14 +219,12 @@ pub fn merge(inputs: &[(String, Block)]) -> Result<Merged> {
 				if i == 0 {
 					let Value::Item(head) = v else { continue };
 					rewrite_block(&mut head.block, &map);
-					let own = variant(name, *h);
-					let short = own.rsplit("::").next().expect("non-empty name");
-					head.args = ItemArgs::builder().arg(simple(short)).build();
 				} else {
 					rewrite_value(v, &map, false);
 				}
 			}
-			root.at(&src.ns).statements.push(stmt);
+			let ns: Vec<String> = home(name, *h).into_iter().chain(src.ns.iter().cloned()).collect();
+			root.at(&ns).statements.push(stmt);
 			let used: Vec<String> = deeps
 				.iter()
 				.enumerate()
@@ -235,20 +239,22 @@ pub fn merge(inputs: &[(String, Block)]) -> Result<Merged> {
 	}
 
 	for (vi, (version, _)) in inputs.iter().enumerate() {
-		let packets: BTreeSet<&String> = srcs[vi]
-			.keys()
-			.filter(|n| n.rsplit("::").next() == Some("packet"))
-			.collect();
-		for name in packets {
-			let src = &srcs[vi][name];
+		for (name, src) in &srcs[vi] {
+			if src.native {
+				continue;
+			}
 			let target = variant(name, deeps[vi][name]);
+			if target == format!("{}::{name}", tag(version)) {
+				continue;
+			}
+			let item = name.rsplit("::").next().expect("non-empty name");
 			let mut def = Item {
 				name: Path {
 					absolute: false,
 					path: vec![],
 					item: Ident::new("def"),
 				},
-				args: ItemArgs::builder().arg(simple("packet")).build(),
+				args: ItemArgs::builder().arg(simple(item)).build(),
 				block: Block::default(),
 			};
 			def.block.statements.push(Statement::simple(vec![simple("export")]));
@@ -274,10 +280,23 @@ pub fn merge(inputs: &[(String, Block)]) -> Result<Merged> {
 			})
 			.collect(),
 	);
+	let doc = |string: String| {
+		vec![Value::String {
+			string,
+			is_block: false,
+		}]
+	};
+	let (first, last) = (&inputs[0].0, &inputs[inputs.len() - 1].0);
+	root.attributes.insert(
+		Ident::new("doc"),
+		doc(format!("Minecraft protocol types of versions {first} to {last}")),
+	);
 	for (version, block) in inputs {
+		let ns = root.at(&[tag(version)]);
+		ns.attributes.insert(Ident::new("doc"), doc(format!("Minecraft {version} protocol types")));
 		for key in ["protocol", "legacy_protocol"] {
 			if let Some(protocols) = block.attributes.get(&Ident::new(key)) {
-				root.at(&[tag(version)]).attributes.insert(Ident::new(key), protocols.clone());
+				ns.attributes.insert(Ident::new(key), protocols.clone());
 			}
 		}
 	}

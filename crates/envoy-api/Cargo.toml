@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-pds-runtime = { path = "../pds-runtime" }
+pds-bytes-runtime = { path = "../pds-bytes-runtime" }

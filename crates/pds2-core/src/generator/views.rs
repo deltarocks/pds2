@@ -102,7 +102,7 @@ fn children(types: &TypeMap, reg: &Registry, id: TypeId) -> Result<BTreeSet<Type
 	Ok(out)
 }
 
-fn references(types: &TypeMap, reg: &Registry, id: TypeId) -> Result<BTreeSet<TypeId>> {
+pub(super) fn references(types: &TypeMap, reg: &Registry, id: TypeId) -> Result<BTreeSet<TypeId>> {
 	let def = &types[id];
 	let mut out = children(types, reg, id)?;
 	out.extend(def.params.iter().chain(&def.param_types).map(|(_, t)| *t));

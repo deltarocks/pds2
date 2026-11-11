@@ -19,6 +19,7 @@ pub struct Type {
 #[derive(Debug)]
 pub struct Definition {
 	pub name: Path,
+	pub namespaced: usize,
 	pub params: Vec<(Ident, TypeId)>,
 	pub param_types: Vec<(Ident, TypeId)>,
 	pub kind: TypeKind,

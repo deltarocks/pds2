@@ -10,7 +10,7 @@ members = [
 	"crates/pds2-specializer-minecraft-data",
 	"crates/pds2-specializer-protobuf",
 	"crates/lang-tests",
-	"crates/pds-runtime",
+	"crates/pds-bytes-runtime",
 	"crates/protobuf-descriptor",
 	"crates/envoy-api",
 ]

@@ -1,5 +1,5 @@
 [package]
-name = "pds-runtime"
+name = "pds-bytes-runtime"
 version = "0.1.0"
 edition = "2021"
 

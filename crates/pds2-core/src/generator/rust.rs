@@ -14,11 +14,12 @@ use super::boxing::{self, Boxed};
 use super::common::{self, scalar_of};
 use super::naming::{self, Case, Modules, Scope};
 use super::recursion;
+use super::split::{Layout, Split};
 use super::views;
 use super::GeneratorOutput;
 use crate::specializer::expr::Elaborator;
 use crate::specializer::{LowerCx, Names, NativeCodegen, NativeCodegenCtx, Registry, Scalar};
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::Rust;
 
 #[derive(Clone)]
@@ -71,12 +72,27 @@ fn member_names(
 	Ok(out)
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+struct Loc {
+	krate: Option<usize>,
+	path: Vec<String>,
+}
+
+impl Loc {
+	fn view(mut self) -> Self {
+		self.path.insert(0, "view".to_owned());
+		self
+	}
+}
+
 #[derive(Clone)]
 struct RustMeta<'a> {
 	raw_names: Rc<BTreeMap<TypeId, String>>,
 	modules: Rc<Modules>,
 	members: Rc<BTreeMap<TypeId, MemberNames>>,
-	here: Rc<Vec<String>>,
+	here: Rc<Loc>,
+	layout: Option<Rc<Layout>>,
+	deps: Rc<RefCell<BTreeMap<usize, BTreeSet<usize>>>>,
 	types: &'a TypeMap,
 	reg: &'a Registry,
 	boxed: Rc<Boxed>,
@@ -85,17 +101,22 @@ struct RustMeta<'a> {
 	mode: Mode,
 }
 impl<'a> RustMeta<'a> {
-	fn new(source: &'a TypeMap, reg: &'a Registry) -> Result<Self> {
+	fn new(source: &'a TypeMap, reg: &'a Registry, crates: Option<&str>) -> Result<Self> {
 		let mut raw_names = BTreeMap::new();
 		for (id, ty) in source.0.iter() {
 			raw_names.insert(*id, ty.name.readable_name());
 		}
 		let modules = naming::rust_modules(source)?;
+		let layout = crates
+			.map(|name| Layout::new(source, reg, &modules, name))
+			.transpose()?;
 		Ok(Self {
 			raw_names: Rc::new(raw_names),
 			members: Rc::new(member_names(source, reg, &modules)?),
 			modules: Rc::new(modules),
 			here: Rc::default(),
+			layout: layout.map(Rc::new),
+			deps: Rc::default(),
 			types: source,
 			reg,
 			boxed: Rc::new(boxing::analyze(source, reg)?),
@@ -111,33 +132,68 @@ impl<'a> RustMeta<'a> {
 			..self.clone()
 		}
 	}
-	fn at(&self, here: Vec<String>) -> Self {
+	fn at(&self, here: Loc) -> Self {
 		Self {
 			here: Rc::new(here),
 			inlining: Rc::default(),
 			..self.clone()
 		}
 	}
-	fn owned_module(&self, id: TypeId) -> Vec<String> {
-		self.modules.idents(id).map(str::to_owned).collect()
+	fn located(&self, id: TypeId) -> (Option<usize>, &[naming::Module]) {
+		let path = self.modules.path(id);
+		match &self.layout {
+			None => (None, path),
+			Some(l) if l.strip.contains(&id) => (Some(l.of[&id]), &path[1..]),
+			Some(l) => (Some(l.of[&id]), path),
+		}
 	}
-	fn view_module(&self, id: TypeId) -> Vec<String> {
-		std::iter::once("view".to_owned())
-			.chain(self.modules.idents(id).map(str::to_owned))
-			.collect()
+	fn owned_module(&self, id: TypeId) -> Loc {
+		let (krate, path) = self.located(id);
+		Loc {
+			krate,
+			path: path.iter().map(|m| m.ident.clone()).collect(),
+		}
 	}
-	fn home(&self, id: TypeId) -> Vec<String> {
+	fn view_module(&self, id: TypeId) -> Loc {
+		self.owned_module(id).view()
+	}
+	fn home(&self, id: TypeId) -> Loc {
 		match self.mode {
 			Mode::Owned => self.owned_module(id),
 			_ => self.view_module(id),
 		}
 	}
-	fn rel(&self, module: &[String]) -> String {
-		let here: Vec<&str> = self.here.iter().map(String::as_str).collect();
-		let to: Vec<&str> = module.iter().map(String::as_str).collect();
-		naming::rust_relative(&here, &to)
+	fn file(&self, id: TypeId, dir: &str) -> std::path::PathBuf {
+		let (krate, path) = self.located(id);
+		let stems: Vec<&str> = path.iter().map(|m| m.stem.as_str()).collect();
+		self.dir_file(krate, &format!("{dir}{}.rs", stems.join("/")))
 	}
-	fn path_to(&self, module: &[String], item: &str) -> Tokens {
+	fn dir_file(&self, krate: Option<usize>, file: &str) -> std::path::PathBuf {
+		match (krate, &self.layout) {
+			(Some(k), Some(l)) => l.crates[k].file(file),
+			_ => file.into(),
+		}
+	}
+	fn rel(&self, to: &Loc) -> String {
+		if self.here.krate == to.krate {
+			let here: Vec<&str> = self.here.path.iter().map(String::as_str).collect();
+			let to: Vec<&str> = to.path.iter().map(String::as_str).collect();
+			return naming::rust_relative(&here, &to);
+		}
+		let layout = self.layout.as_ref().expect("only split output spans crates");
+		let target = to.krate.expect("split output places every type in a crate");
+		let head: Vec<String> = match self.here.krate {
+			Some(from) => {
+				self.deps.borrow_mut().entry(from).or_default().insert(target);
+				vec![format!("::{}", layout.crates[target].ident)]
+			}
+			None => std::iter::once(format!("::{}", layout.umbrella))
+				.chain(layout.crates[target].ns.clone())
+				.collect(),
+		};
+		head.into_iter().chain(to.path.iter().cloned()).collect::<Vec<_>>().join("::")
+	}
+	fn path_to(&self, module: &Loc, item: &str) -> Tokens {
 		quote!($(format!("{}::{item}", self.rel(module))))
 	}
 	fn members_of(&self, owner: TypeId) -> &MemberNames {
@@ -179,13 +235,13 @@ impl<'a> RustMeta<'a> {
 		assert!(type_id.is_valid());
 		format!("pds_{}", self.raw_names[&type_id])
 	}
-	fn item_path(&self, type_id: TypeId, mut module: Vec<String>, item: &str) -> Tokens {
+	fn item_path(&self, type_id: TypeId, mut module: Loc, item: &str) -> Tokens {
 		if item != "Ty" {
 			return self.path_to(&module, item);
 		}
 		let ty = self.modules.path(type_id).last().and_then(|m| m.ty.clone());
-		module.pop();
-		module.push(ty.expect("a type module has a type name"));
+		module.path.pop();
+		module.path.push(ty.expect("a type module has a type name"));
 		quote!($(self.rel(&module)))
 	}
 	fn imported(&self, type_id: TypeId, ty: impl AsRef<str>) -> Tokens {
@@ -243,9 +299,12 @@ impl<'a> RustMeta<'a> {
 pub struct RustNames<'a>(RustMeta<'a>);
 
 impl<'a> RustNames<'a> {
-	pub fn new(types: &'a TypeMap, reg: &'a Registry, here: &[&str]) -> Result<Self> {
-		let meta = RustMeta::new(types, reg)?;
-		Ok(Self(meta.at(here.iter().map(|s| s.to_string()).collect())))
+	pub fn new(types: &'a TypeMap, reg: &'a Registry, here: &[&str], crates: Option<&str>) -> Result<Self> {
+		let meta = RustMeta::new(types, reg, crates)?;
+		Ok(Self(meta.at(Loc {
+			krate: None,
+			path: here.iter().map(|s| s.to_string()).collect(),
+		})))
 	}
 	pub fn ty(&self, id: TypeId) -> Tokens {
 		Names::ty(&self.0, id)
@@ -577,55 +636,117 @@ fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 }
 
 pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Registry) -> Result<()> {
-	let meta = RustMeta::new(input, reg)?;
-	let ids: Vec<TypeId> = input.0.keys().copied().collect();
-	emit(&meta, input, reg, &ids, "", output)
+	generate(input, output, reg, None, None)
 }
 
+pub fn generate(
+	input: &mir::TypeMap,
+	output: &mut GeneratorOutput,
+	reg: &Registry,
+	view: Option<&str>,
+	split: Option<&Split>,
+) -> Result<()> {
+	let meta = RustMeta::new(input, reg, split.map(|s| s.name.as_str()))?;
+	let ids: Vec<TypeId> = input.0.keys().copied().collect();
+	emit(&meta, input, reg, &ids, "", output)?;
+	if let Some(namespace) = view {
+		views(&meta, input, reg, namespace, output)?;
+	}
+	match (split, &meta.layout) {
+		(Some(split), Some(layout)) => layout.finish(split, &meta.deps.borrow(), output),
+		_ => Ok(()),
+	}
+}
+
+type Dir = (Option<usize>, Vec<naming::Module>);
+
 fn mod_files(
-	modules: &Modules,
+	meta: &RustMeta,
 	ids: &[TypeId],
 	exports: &BTreeMap<TypeId, bool>,
+	reexports: &BTreeMap<TypeId, TypeId>,
 	dir: &str,
 	output: &mut GeneratorOutput,
-) {
-	let mut uses: BTreeMap<Vec<naming::Module>, Vec<Tokens>> = BTreeMap::new();
+) -> Result<()> {
+	let mut dirs: BTreeMap<Dir, BTreeMap<naming::Module, bool>> = BTreeMap::new();
+	if meta.layout.is_none() {
+		dirs.entry((None, vec![])).or_default();
+	}
+	for id in ids {
+		let (krate, path) = meta.located(*id);
+		dirs.entry((krate, vec![])).or_default();
+		for i in 0..path.len() {
+			dirs.entry((krate, path[..i].to_vec()))
+				.or_default()
+				.insert(path[i].clone(), i + 1 < path.len());
+		}
+	}
+	let mut uses: BTreeMap<Dir, Vec<Tokens>> = BTreeMap::new();
 	for (id, nominal) in exports {
-		let path = modules.path(*id);
+		let (krate, path) = meta.located(*id);
 		let (parent, last) = path.split_at(path.len() - 1);
 		let m = &last[0];
 		let ty = m.ty.as_ref().expect("a type module has a type name");
-		uses.entry(parent.to_vec()).or_default().push(if *nominal {
+		uses.entry((krate, parent.to_vec())).or_default().push(if *nominal {
 			quote!(pub use self::$(&m.ident)::$ty;)
 		} else {
 			quote!(pub use self::$(&m.ident)::Ty as $ty;)
 		});
 	}
-	for (path, children) in modules.dirs(ids.iter().copied()) {
-		let reexports = uses.remove(&path).unwrap_or_default();
-		let decls = children.iter().map(|(m, is_dir)| {
-			if !m.needs_path() {
-				return quote!(pub mod $(&m.ident););
+	let mut aliased: BTreeMap<(Dir, naming::Module), TypeId> = BTreeMap::new();
+	for (alias, target) in reexports {
+		let (krate, path) = meta.located(*alias);
+		let (parent, last) = path.split_at(path.len() - 1);
+		aliased.insert(((krate, parent.to_vec()), last[0].clone()), *target);
+	}
+	for ((krate, path), children) in dirs {
+		let mut idents = BTreeSet::new();
+		for m in children.keys() {
+			if !idents.insert(m.ident.as_str()) {
+				bail!("two modules are named {:?} in {}", m.ident, meta.dir_file(krate, dir).display());
 			}
-			let file = if *is_dir {
-				format!("{}/mod.rs", m.stem)
-			} else {
-				format!("{}.rs", m.stem)
-			};
-			quote!(#[path = $(quoted(file))] pub mod $(&m.ident);)
-		});
-		let stems: Vec<&str> = path.iter().map(|m| m.stem.as_str()).collect();
-		let file = if stems.is_empty() {
-			format!("{dir}mod.rs")
-		} else {
-			format!("{dir}{}/mod.rs", stems.join("/"))
+		}
+		let loc = Loc {
+			krate,
+			path: path.iter().map(|m| m.ident.clone()).collect(),
+		};
+		let at = match meta.mode {
+			Mode::Owned => meta.at(loc),
+			_ => meta.at(loc.view()),
+		};
+		let key = (krate, path);
+		let reexports = uses.remove(&key).unwrap_or_default();
+		let decls = children
+			.iter()
+			.map(|(m, is_dir)| {
+				if let Some(target) = aliased.get(&(key.clone(), m.clone())) {
+					ensure!(!is_dir, "alias {:?} has nested modules", m.ident);
+					return Ok(quote!(pub use $(at.rel(&at.home(*target))) as $(&m.ident);));
+				}
+				if !m.needs_path() {
+					return Ok(quote!(pub mod $(&m.ident);));
+				}
+				let file = if *is_dir {
+					format!("{}/mod.rs", m.stem)
+				} else {
+					format!("{}.rs", m.stem)
+				};
+				Ok(quote!(#[path = $(quoted(file))] pub mod $(&m.ident);))
+			})
+			.collect::<Result<Vec<_>>>()?;
+		let stems: Vec<&str> = key.1.iter().map(|m| m.stem.as_str()).collect();
+		let file = match (krate, stems.is_empty()) {
+			(Some(_), true) if dir.is_empty() => meta.dir_file(krate, "lib.rs"),
+			(_, true) => meta.dir_file(krate, &format!("{dir}mod.rs")),
+			(_, false) => meta.dir_file(krate, &format!("{dir}{}/mod.rs", stems.join("/"))),
 		};
 		let tokens: Tokens = quote! {
 			$(for d in decls join($['\r']) => $d)
 			$(for u in reexports join($['\r']) => $u)
 		};
-		output.insert(file.into(), tokens.to_file_string().expect("formatting should succeed"));
+		output.insert(file, tokens.to_file_string().expect("formatting should succeed"));
 	}
+	Ok(())
 }
 
 pub fn view_generator(
@@ -634,42 +755,58 @@ pub fn view_generator(
 	reg: &Registry,
 	namespace: &str,
 ) -> Result<()> {
-	let owned = RustMeta::new(input, reg)?;
+	views(&RustMeta::new(input, reg, None)?, input, reg, namespace, output)
+}
+
+fn views(
+	owned: &RustMeta,
+	input: &mir::TypeMap,
+	reg: &Registry,
+	namespace: &str,
+	output: &mut GeneratorOutput,
+) -> Result<()> {
 	let set = Rc::new(views::analyze(input, reg, &owned.boxed, namespace)?);
 	let meta = owned.with_mode(Mode::View(set.clone()));
-	let all: Vec<TypeId> = input.0.keys().copied().collect();
-	let top = meta.modules.dirs(all).remove(&vec![]).unwrap_or_default();
-	if let Some((m, _)) = top.iter().find(|(m, _)| m.ident == "view") {
-		bail!("a top-level {:?} module clashes with the generated views", m.ident);
+	for id in input.0.keys() {
+		if let Some(m) = meta.located(*id).1.first().filter(|m| m.ident == "view") {
+			bail!("a top-level {:?} module clashes with the generated views", m.ident);
+		}
 	}
 	let ids: Vec<TypeId> = set.included.iter().copied().filter(|id| set.emitted(*id)).collect();
 	emit(&meta, input, reg, &ids, "view/", output)?;
-	let view_top = meta.modules.dirs(ids.iter().copied()).remove(&vec![]).unwrap_or_default();
-	let root = meta.at(vec!["view".to_owned()]);
-	let aliases: Vec<String> = set
-		.roots
-		.iter()
-		.filter_map(|(name, id)| {
-			let alias = Scope::empty(Case::Snake).get(name);
-			if view_top.keys().any(|m| m.ident == alias || m.ty.as_ref() == Some(&alias)) {
-				return None;
-			}
-			let module = if set.same(*id) {
-				root.owned_module(*id)
-			} else {
-				root.view_module(*id)
-			};
-			Some(format!("pub use {} as {alias};\n", root.rel(&module)))
-		})
-		.collect();
-	output
-		.get_mut(&std::path::PathBuf::from("view/mod.rs"))
-		.ok_or_else(|| anyhow!("views emit their root module"))?
-		.push_str(&aliases.concat());
-	output
-		.get_mut(&std::path::PathBuf::from("mod.rs"))
-		.ok_or_else(|| anyhow!("views need the owned modules generated first"))?
-		.push_str("pub mod view;\n");
+	let mut tops: BTreeMap<Option<usize>, BTreeSet<String>> = BTreeMap::new();
+	for id in &ids {
+		let (krate, path) = meta.located(*id);
+		let names = tops.entry(krate).or_default();
+		names.insert(path[0].ident.clone());
+		names.extend(path[0].ty.clone());
+	}
+	for (name, id) in &set.roots {
+		let alias = Scope::empty(Case::Snake).get(name);
+		let krate = meta.located(*id).0;
+		if tops.get(&krate).is_some_and(|t| t.contains(&alias)) {
+			continue;
+		}
+		let root = meta.at(Loc {
+			krate,
+			path: vec!["view".to_owned()],
+		});
+		let module = if set.same(*id) {
+			root.owned_module(*id)
+		} else {
+			root.view_module(*id)
+		};
+		output
+			.entry(meta.dir_file(krate, "view/mod.rs"))
+			.or_default()
+			.push_str(&format!("pub use {} as {alias};\n", root.rel(&module)));
+	}
+	if meta.layout.is_none() {
+		output
+			.get_mut(&std::path::PathBuf::from("mod.rs"))
+			.ok_or_else(|| anyhow!("views need the owned modules generated first"))?
+			.push_str("pub mod view;\n");
+	}
 	Ok(())
 }
 
@@ -702,11 +839,19 @@ fn emit(
 	let view = meta.view();
 	let lt = &if view.is_some() { quote!(<'i>) } else { quote!() };
 	let mut exports = BTreeMap::new();
+	let mut reexports = BTreeMap::new();
 
 	for id in ids {
+		let ty = &input[*id];
+		if let TypeKind::Alias(target) = &ty.kind {
+			if ty.params.is_empty() && target.args.is_empty() && !meta.guarded.contains(id) {
+				reexports.insert(*id, target.target);
+				exports.insert(*id, false);
+				continue;
+			}
+		}
 		let meta = &meta.at(meta.home(*id));
 		let declared = Cell::new(false);
-		let ty = &input[*id];
 		let pinput = &import("crate::pds", "Input");
 		let poutput = &import("crate::pds", "Output");
 		let presult = &import("crate::pds", "Result");
@@ -887,10 +1032,9 @@ fn emit(
 			def
 		};
 		output.insert(
-			format!("{dir}{}", meta.modules.file(*id, "rs")).into(),
+			meta.file(*id, dir),
 			def.to_file_string().expect("formatting should succeed"),
 		);
 	}
-	mod_files(&meta.modules, ids, &exports, dir, output);
-	Ok(())
+	mod_files(meta, ids, &exports, &reexports, dir, output)
 }

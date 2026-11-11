@@ -12,11 +12,11 @@
 
 pub mod gen;
 pub mod pds {
-	pub use pds_runtime::*;
+	pub use pds_bytes_runtime::*;
 }
 pub mod pds_native {
-	pub use pds_runtime::natives::pds_void;
-	pub use pds_runtime::protobuf::natives::*;
+	pub use pds_bytes_runtime::natives::pds_void;
+	pub use pds_bytes_runtime::protobuf::natives::*;
 }
 
 pub use gen::google::protobuf::{

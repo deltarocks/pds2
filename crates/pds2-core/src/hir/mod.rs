@@ -36,6 +36,7 @@ impl Traverse for NamespaceItem {
 #[derive(Debug)]
 pub struct Namespace {
 	pub items: BTreeMap<Ident, NamespaceItem>,
+	pub overloads: bool,
 }
 impl Namespace {
 	/// The per-variant native types of an overload set, or `None` for a regular

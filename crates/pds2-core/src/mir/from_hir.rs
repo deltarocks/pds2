@@ -112,7 +112,7 @@ impl TypeKind {
 }
 
 impl Definition {
-	fn from_hir(name: Path, hir: &hir::Type) -> Result<Self> {
+	fn from_hir(name: Path, namespaced: usize, hir: &hir::Type) -> Result<Self> {
 		assert!(hir.id().is_valid());
 
 		let param_types: Vec<(Ident, TypeId)> = hir
@@ -122,6 +122,7 @@ impl Definition {
 			.collect();
 		Ok(Definition {
 			name,
+			namespaced,
 			params: hir
 				.params
 				.iter()
@@ -182,12 +183,16 @@ impl Expr {
 pub fn from_hir_internal(
 	hir: &hir::Namespace,
 	path: &mut Vec<Ident>,
+	namespaced: usize,
 	out: &mut HashMap<TypeId, Definition>,
 ) -> Result<()> {
 	for (name, item) in hir.items.iter() {
 		path.push(name.clone());
 		match item {
-			hir::NamespaceItem::Inner(ns) => from_hir_internal(ns, path, out)?,
+			hir::NamespaceItem::Inner(ns) => {
+				let declared = !ns.overloads && namespaced + 1 == path.len();
+				from_hir_internal(ns, path, namespaced + usize::from(declared), out)?
+			}
 			hir::NamespaceItem::Type(d) => {
 				// Template `def_native`s are compile-time only: their use-sites are
 				// inlined/monomorphized away, so they are not emitted to MIR.
@@ -195,7 +200,7 @@ pub fn from_hir_internal(
 					path.pop().expect("stack underflow");
 					continue;
 				}
-				let old = out.insert(d.id(), Definition::from_hir(Path::new(path.clone()), d)?);
+				let old = out.insert(d.id(), Definition::from_hir(Path::new(path.clone()), namespaced, d)?);
 				assert!(old.is_none());
 			}
 		}
@@ -206,7 +211,7 @@ pub fn from_hir_internal(
 
 pub fn from_hir(hir: &hir::Namespace, reg: &Registry) -> Result<TypeMap> {
 	let mut out = HashMap::new();
-	from_hir_internal(hir, &mut Vec::new(), &mut out)?;
+	from_hir_internal(hir, &mut Vec::new(), 0, &mut out)?;
 	let mut out = TypeMap(out.into_iter().collect());
 	super::pass::resolve_types(&mut out)?;
 	super::pass::elaborate(&mut out, reg)?;

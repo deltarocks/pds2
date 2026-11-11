@@ -8,6 +8,7 @@ mod boxing;
 pub mod common;
 pub mod naming;
 pub mod recursion;
+pub mod split;
 mod views;
 pub mod rust;
 pub mod typescript;

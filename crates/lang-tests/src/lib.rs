@@ -12,7 +12,7 @@
 pub mod gen;
 pub mod pds_native;
 pub mod pds {
-	pub use pds_runtime::*;
+	pub use pds_bytes_runtime::*;
 }
 
 #[cfg(test)]
