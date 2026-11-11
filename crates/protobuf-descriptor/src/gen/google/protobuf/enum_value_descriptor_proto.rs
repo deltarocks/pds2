@@ -3,10 +3,10 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub name: Option<super::super::super::string::Ty>,
-    pub number: Option<super::super::super::int32::Ty>,
-    pub options: Option<super::enum_value_options::Ty>,
+pub struct EnumValueDescriptorProto {
+    pub name: Option<super::super::super::String>,
+    pub number: Option<super::super::super::Int32>,
+    pub options: Option<super::EnumValueOptions>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -45,3 +45,4 @@ pub fn size_of(_0: &Ty) -> usize {
     if let Some(v) = &_0.options { n += key_size(3) + len_size(super::enum_value_options::size_of(v)); }
     n
 }
+ pub type Ty = EnumValueDescriptorProto;

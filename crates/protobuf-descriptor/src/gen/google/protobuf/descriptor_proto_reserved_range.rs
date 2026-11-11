@@ -3,9 +3,9 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, read_key, skip, write_key};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub start: Option<super::super::super::int32::Ty>,
-    pub end: Option<super::super::super::int32::Ty>,
+pub struct DescriptorProtoReservedRange {
+    pub start: Option<super::super::super::Int32>,
+    pub end: Option<super::super::super::Int32>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -34,3 +34,4 @@ pub fn size_of(_0: &Ty) -> usize {
     if let Some(v) = &_0.end { n += key_size(2) + super::super::super::int32::size_of(v); }
     n
 }
+ pub type Ty = DescriptorProtoReservedRange;

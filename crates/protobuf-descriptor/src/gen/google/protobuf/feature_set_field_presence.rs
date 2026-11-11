@@ -2,14 +2,14 @@
 use crate::pds::{Input, Output, Result};
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Ty {
+pub enum FeatureSetFieldPresence {
     FieldPresenceUnknown,
     Explicit,
     Implicit,
     LegacyRequired,
-    Unknown(super::super::super::int32::Ty),
+    Unknown(super::super::super::Int32),
 }
-pub fn number(_0: &Ty) -> super::super::super::int32::Ty {
+pub fn number(_0: &Ty) -> super::super::super::Int32 {
     match _0 {
         Ty::FieldPresenceUnknown => 0_i32,
         Ty::Explicit => 1_i32,
@@ -18,7 +18,7 @@ pub fn number(_0: &Ty) -> super::super::super::int32::Ty {
         Ty::Unknown(n) => n.clone(),
     }
 }
-pub fn from_number(n: super::super::super::int32::Ty) -> Ty {
+pub fn from_number(n: super::super::super::Int32) -> Ty {
     match n {
         0_i32 => Ty::FieldPresenceUnknown,
         1_i32 => Ty::Explicit,
@@ -36,3 +36,4 @@ pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
 pub fn size_of(_0: &Ty) -> usize {
     super::super::super::int32::size_of(&number(_0))
 }
+ pub type Ty = FeatureSetFieldPresence;

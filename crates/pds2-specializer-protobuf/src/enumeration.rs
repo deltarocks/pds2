@@ -217,7 +217,7 @@ impl NativeCodegen<Rust> for Enum {
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
-			pub enum Ty {
+			pub enum $(ctx.nominal()) {
 				$(for (n, _) in &e.values join($['\r']) => $(v(n)),)
 				$(&unknown)($(&tag_ty)),
 			}

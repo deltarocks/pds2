@@ -474,6 +474,8 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 								lower: &|e, from_locals| lower(&meta, e, from_locals),
 								view: false,
 								take: false,
+								type_name: None,
+								declared: &Default::default(),
 							})
 							.with_context(|| format!("typescript codegen for {:?}", ty.name))?
 					}

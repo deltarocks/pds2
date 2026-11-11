@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 
 use pds2_core::mir::{self, TypeMap};
-use protobuf_descriptor::gen::google::protobuf::field_descriptor_proto_type as field_type;
 use protobuf_descriptor::gen::google::protobuf::file_descriptor_set as file_set;
+use protobuf_descriptor::gen::google::protobuf::FieldDescriptorProtoType;
 use protobuf_descriptor::pds::{Input, Output};
 
 const DECL: &str = r#"
@@ -224,7 +224,7 @@ fn protobuf_text_encodes_like_generated_code() {
 	let set = file_set::deserialize(&mut Input::new(&bytes)).unwrap();
 	let fields = &set.file[0].message_type[0].field;
 	assert_eq!(fields[0].oneof_index, Some(-1));
-	assert_eq!(fields[1].r#type, Some(field_type::Ty::Unknown(99)));
+	assert_eq!(fields[1].r#type, Some(FieldDescriptorProtoType::Unknown(99)));
 	assert_eq!(fields[1].default_value.as_deref(), Some("\u{e9}\t"));
 	let mut out = Output::new();
 	file_set::serialize(&set, &mut out).unwrap();

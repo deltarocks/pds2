@@ -3,14 +3,14 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub name: Vec<super::uninterpreted_option_name_part::Ty>,
-    pub identifier_value: Option<super::super::super::string::Ty>,
-    pub positive_int_value: Option<super::super::super::uint64::Ty>,
-    pub negative_int_value: Option<super::super::super::int64::Ty>,
-    pub double_value: Option<super::super::super::double::Ty>,
-    pub string_value: Option<super::super::super::bytes::Ty>,
-    pub aggregate_value: Option<super::super::super::string::Ty>,
+pub struct UninterpretedOption {
+    pub name: Vec<super::UninterpretedOptionNamePart>,
+    pub identifier_value: Option<super::super::super::String>,
+    pub positive_int_value: Option<super::super::super::Uint64>,
+    pub negative_int_value: Option<super::super::super::Int64>,
+    pub double_value: Option<super::super::super::Double>,
+    pub string_value: Option<super::super::super::Bytes>,
+    pub aggregate_value: Option<super::super::super::String>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -58,3 +58,4 @@ pub fn size_of(_0: &Ty) -> usize {
     if let Some(v) = &_0.aggregate_value { n += key_size(8) + len_size(super::super::super::string::size_of(v)); }
     n
 }
+ pub type Ty = UninterpretedOption;

@@ -4,18 +4,18 @@ use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, writ
 use crate::pds::stack;
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub name: Option<super::super::super::string::Ty>,
-    pub field: Vec<super::field_descriptor_proto::Ty>,
-    pub extension: Vec<super::field_descriptor_proto::Ty>,
-    pub nested_type: Vec<self::Ty>,
-    pub enum_type: Vec<super::enum_descriptor_proto::Ty>,
-    pub extension_range: Vec<super::descriptor_proto_extension_range::Ty>,
-    pub oneof_decl: Vec<super::oneof_descriptor_proto::Ty>,
-    pub options: Option<super::message_options::Ty>,
-    pub reserved_range: Vec<super::descriptor_proto_reserved_range::Ty>,
-    pub reserved_name: Vec<super::super::super::string::Ty>,
-    pub visibility: Option<super::symbol_visibility::Ty>,
+pub struct DescriptorProto {
+    pub name: Option<super::super::super::String>,
+    pub field: Vec<super::FieldDescriptorProto>,
+    pub extension: Vec<super::FieldDescriptorProto>,
+    pub nested_type: Vec<super::DescriptorProto>,
+    pub enum_type: Vec<super::EnumDescriptorProto>,
+    pub extension_range: Vec<super::DescriptorProtoExtensionRange>,
+    pub oneof_decl: Vec<super::OneofDescriptorProto>,
+    pub options: Option<super::MessageOptions>,
+    pub reserved_range: Vec<super::DescriptorProtoReservedRange>,
+    pub reserved_name: Vec<super::super::super::String>,
+    pub visibility: Option<super::SymbolVisibility>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -86,6 +86,7 @@ pub fn size_of(_0: &Ty) -> usize {
     if let Some(v) = &_0.visibility { n += key_size(11) + super::symbol_visibility::size_of(v); }
     n
 }
+ pub type Ty = DescriptorProto;
 pub fn serialize_guarded(_0: &Ty, output: &mut Output) -> Result<()> {
     stack::check()?;
     serialize(_0, output)

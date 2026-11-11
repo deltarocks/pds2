@@ -622,7 +622,7 @@ impl NativeCodegen<Rust> for Union {
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
-			pub enum $this {
+			pub enum $(ctx.nominal()) {
 				$(for v in &variants_decl join($['\r']) => $v)
 			}
 			pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {

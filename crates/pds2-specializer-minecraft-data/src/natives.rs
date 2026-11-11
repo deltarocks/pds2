@@ -239,7 +239,7 @@ impl NativeCodegen<Rust> for RegistryEntryHolder {
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
-			pub enum $this {
+			pub enum $(ctx.nominal()) {
 				Id($(ctx.names.ty(varint))),
 				Inline($(ctx.slot_ty(iname, ity))),
 			}
@@ -475,7 +475,7 @@ impl NativeCodegen<Rust> for RegistryEntryHolderSet {
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
-			pub enum $this {
+			pub enum $(ctx.nominal()) {
 				Named($(ctx.slot_ty(nname, nty))),
 				Ids(Vec<$(ctx.names.ty(varint))>),
 			}

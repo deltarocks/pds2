@@ -43,6 +43,13 @@ mod tests {
 	}
 
 	#[test]
+	fn types_live_beside_their_codec_modules() {
+		let v: gen::Counted = gen::sample_counted::value();
+		assert!(format!("{v:?}").starts_with("Counted {"), "{v:?}");
+		let _: gen::counted::Ty = v;
+	}
+
+	#[test]
 	fn explicit_cast_widens_before_multiplying() {
 		use gen::widened as t;
 		let mut bytes = vec![200];
@@ -71,7 +78,7 @@ mod tests {
 	#[test]
 	fn def_arguments_reach_nested_fields_elements_arms_and_defs() {
 		use gen::arguments as t;
-		use gen::choice::Ty as Choice;
+		use gen::Choice;
 		let one = [1, 5, 6, 7, 0, 8, 9, 10, 11, 12, 13, 14];
 		let two = [
 			2, 0, 5, 0, 6, 0, 7, 0, 0, 8, 0, 9, 0, 10, 0, 11, 0, 12, 0, 13, 14,

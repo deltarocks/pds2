@@ -3,13 +3,13 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub name: Option<super::super::super::string::Ty>,
-    pub value: Vec<super::enum_value_descriptor_proto::Ty>,
-    pub options: Option<super::enum_options::Ty>,
-    pub reserved_range: Vec<super::enum_descriptor_proto_enum_reserved_range::Ty>,
-    pub reserved_name: Vec<super::super::super::string::Ty>,
-    pub visibility: Option<super::symbol_visibility::Ty>,
+pub struct EnumDescriptorProto {
+    pub name: Option<super::super::super::String>,
+    pub value: Vec<super::EnumValueDescriptorProto>,
+    pub options: Option<super::EnumOptions>,
+    pub reserved_range: Vec<super::EnumDescriptorProtoEnumReservedRange>,
+    pub reserved_name: Vec<super::super::super::String>,
+    pub visibility: Option<super::SymbolVisibility>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -60,3 +60,4 @@ pub fn size_of(_0: &Ty) -> usize {
     if let Some(v) = &_0.visibility { n += key_size(6) + super::symbol_visibility::size_of(v); }
     n
 }
+ pub type Ty = EnumDescriptorProto;

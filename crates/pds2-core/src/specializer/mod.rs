@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{anyhow, bail, Context as _, Result};
@@ -192,6 +193,8 @@ pub struct NativeCodegenCtx<'a, L: Lang> {
 	pub lower: &'a dyn Fn(&mir::Expr, bool) -> Result<Tokens<L>>,
 	pub view: bool,
 	pub take: bool,
+	pub type_name: Option<&'a str>,
+	pub declared: &'a Cell<bool>,
 }
 
 pub struct LowerCx<'a, L: Lang> {
@@ -259,6 +262,15 @@ impl NativeCodegenCtx<'_, Rust> {
 	}
 	pub fn this(&self) -> rust::Tokens {
 		quote!(Ty$(self.lt()))
+	}
+	pub fn nominal(&self) -> rust::Tokens {
+		match self.type_name {
+			Some(name) => {
+				self.declared.set(true);
+				quote!($name$(self.lt()))
+			}
+			None => self.this(),
+		}
 	}
 	pub fn input(&self) -> rust::Tokens {
 		quote!($(rust::import("crate::pds", "Input"))$(self.lt()))

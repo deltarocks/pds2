@@ -3,21 +3,21 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub name: Option<super::super::super::string::Ty>,
-    pub package: Option<super::super::super::string::Ty>,
-    pub dependency: Vec<super::super::super::string::Ty>,
-    pub public_dependency: Vec<super::super::super::int32::Ty>,
-    pub weak_dependency: Vec<super::super::super::int32::Ty>,
-    pub option_dependency: Vec<super::super::super::string::Ty>,
-    pub message_type: Vec<super::descriptor_proto::Ty>,
-    pub enum_type: Vec<super::enum_descriptor_proto::Ty>,
-    pub service: Vec<super::service_descriptor_proto::Ty>,
-    pub extension: Vec<super::field_descriptor_proto::Ty>,
-    pub options: Option<super::file_options::Ty>,
-    pub source_code_info: Option<super::source_code_info::Ty>,
-    pub syntax: Option<super::super::super::string::Ty>,
-    pub edition: Option<super::edition::Ty>,
+pub struct FileDescriptorProto {
+    pub name: Option<super::super::super::String>,
+    pub package: Option<super::super::super::String>,
+    pub dependency: Vec<super::super::super::String>,
+    pub public_dependency: Vec<super::super::super::Int32>,
+    pub weak_dependency: Vec<super::super::super::Int32>,
+    pub option_dependency: Vec<super::super::super::String>,
+    pub message_type: Vec<super::DescriptorProto>,
+    pub enum_type: Vec<super::EnumDescriptorProto>,
+    pub service: Vec<super::ServiceDescriptorProto>,
+    pub extension: Vec<super::FieldDescriptorProto>,
+    pub options: Option<super::FileOptions>,
+    pub source_code_info: Option<super::SourceCodeInfo>,
+    pub syntax: Option<super::super::super::String>,
+    pub edition: Option<super::Edition>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -131,3 +131,4 @@ pub fn size_of(_0: &Ty) -> usize {
     for v in &_0.option_dependency { n += key_size(15) + len_size(super::super::super::string::size_of(v)); }
     n
 }
+ pub type Ty = FileDescriptorProto;

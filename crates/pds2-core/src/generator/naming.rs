@@ -51,6 +51,32 @@ pub struct Scope {
 	names: BTreeMap<String, String>,
 }
 
+pub fn assign(entries: &[(Case, &str)], reserved: &[&str]) -> Result<Vec<String>> {
+	let mut converts_to: BTreeMap<String, usize> = BTreeMap::new();
+	for (case, n) in entries {
+		if let Some(c) = convert(*case, n) {
+			*converts_to.entry(c).or_default() += 1;
+		}
+	}
+	let mut taken: BTreeMap<String, (Case, &str)> = BTreeMap::new();
+	let mut out = Vec::new();
+	for &(case, n) in entries {
+		let chosen = match convert(case, n) {
+			Some(c) if converts_to[&c] == 1 && !reserved.contains(&c.as_str()) => c,
+			_ => n.to_string(),
+		};
+		if reserved.contains(&chosen.as_str()) {
+			bail!("{n:?} clashes with the generated item {chosen:?}");
+		}
+		let chosen = escape(&chosen);
+		if let Some((other_case, other)) = taken.insert(chosen.clone(), (case, n)) {
+			bail!("{other:?} ({other_case:?}) and {n:?} ({case:?}) both generate {chosen:?}");
+		}
+		out.push(chosen);
+	}
+	Ok(out)
+}
+
 impl Scope {
 	pub fn new<'a>(
 		case: Case,
@@ -58,29 +84,12 @@ impl Scope {
 		reserved: &[&str],
 	) -> Result<Self> {
 		let names: BTreeSet<&str> = names.into_iter().collect();
-		let mut converts_to: BTreeMap<String, usize> = BTreeMap::new();
-		for n in &names {
-			if let Some(c) = convert(case, n) {
-				*converts_to.entry(c).or_default() += 1;
-			}
-		}
-		let mut taken: BTreeMap<String, &str> = BTreeMap::new();
-		let mut out = BTreeMap::new();
-		for n in &names {
-			let chosen = match convert(case, n) {
-				Some(c) if converts_to[&c] == 1 && !reserved.contains(&c.as_str()) => c,
-				_ => n.to_string(),
-			};
-			if reserved.contains(&chosen.as_str()) {
-				bail!("{n:?} clashes with the generated item {chosen:?}");
-			}
-			let chosen = escape(&chosen);
-			if let Some(other) = taken.insert(chosen.clone(), n) {
-				bail!("{other:?} and {n:?} both generate {chosen:?}");
-			}
-			out.insert(n.to_string(), chosen);
-		}
-		Ok(Self { case, names: out })
+		let entries: Vec<(Case, &str)> = names.iter().map(|n| (case, *n)).collect();
+		let chosen = assign(&entries, reserved)?;
+		Ok(Self {
+			case,
+			names: names.iter().map(|n| n.to_string()).zip(chosen).collect(),
+		})
 	}
 
 	pub fn empty(case: Case) -> Self {
@@ -102,17 +111,18 @@ impl Scope {
 pub struct Module {
 	pub ident: String,
 	pub stem: String,
+	pub ty: Option<String>,
 }
 
 impl Module {
-	pub fn new(ident: String) -> Self {
+	pub fn new(ident: String, ty: Option<String>) -> Self {
 		let plain = ident.strip_prefix("r#").unwrap_or(&ident);
 		let stem = if plain == "mod" {
 			"mod_".to_owned()
 		} else {
 			plain.to_owned()
 		};
-		Self { ident, stem }
+		Self { ident, stem, ty }
 	}
 	pub fn needs_path(&self) -> bool {
 		self.ident.strip_prefix("r#").unwrap_or(&self.ident) != self.stem
@@ -128,15 +138,16 @@ pub type Dirs = BTreeMap<Vec<Module>, BTreeMap<Module, bool>>;
 impl Modules {
 	pub fn new(
 		types: &TypeMap,
-		name: impl Fn(&BTreeSet<Ident>) -> Result<BTreeMap<Ident, Module>>,
+		name: impl Fn(&BTreeMap<Ident, bool>) -> Result<BTreeMap<Ident, Module>>,
 	) -> Result<Self> {
-		let mut dirs: BTreeMap<Vec<Ident>, BTreeSet<Ident>> = BTreeMap::new();
+		let mut dirs: BTreeMap<Vec<Ident>, BTreeMap<Ident, bool>> = BTreeMap::new();
 		for def in types.0.values() {
 			let full = def.name.segments();
 			for i in 0..full.len() {
-				dirs.entry(full[..i].to_vec())
+				*dirs.entry(full[..i].to_vec())
 					.or_default()
-					.insert(full[i].clone());
+					.entry(full[i].clone())
+					.or_default() |= i + 1 == full.len();
 			}
 		}
 		let mut named = BTreeMap::new();
@@ -192,11 +203,30 @@ impl Modules {
 
 pub fn rust_modules(types: &TypeMap) -> Result<Modules> {
 	Modules::new(types, |children| {
-		let scope = Scope::new(Case::Snake, children.iter().map(Ident::as_str), &[])?;
-		Ok(children
+		let entries: Vec<(Case, &str)> = children
 			.iter()
-			.map(|c| (c.clone(), Module::new(scope.get(c.as_str()))))
-			.collect())
+			.map(|(name, is_type)| {
+				let case = if *is_type { Case::Pascal } else { Case::Snake };
+				(case, name.as_str())
+			})
+			.collect();
+		let primary = assign(&entries, &[])?;
+		let mut taken: BTreeSet<String> = primary.iter().cloned().collect();
+		let mut out = BTreeMap::new();
+		for ((name, is_type), first) in children.iter().zip(primary) {
+			if !is_type {
+				out.insert(name.clone(), Module::new(first, None));
+				continue;
+			}
+			let mut module = convert(Case::Snake, name.as_str()).unwrap_or_else(|| name.to_string());
+			while taken.contains(&escape(&module)) {
+				module.push('_');
+			}
+			let module = escape(&module);
+			taken.insert(module.clone());
+			out.insert(name.clone(), Module::new(module, Some(first)));
+		}
+		Ok(out)
 	})
 }
 
@@ -204,9 +234,24 @@ pub fn raw_modules(types: &TypeMap) -> Result<Modules> {
 	Modules::new(types, |children| {
 		Ok(children
 			.iter()
-			.map(|c| (c.clone(), Module::new(c.as_str().to_owned())))
+			.map(|(name, is_type)| {
+				let raw = name.as_str().to_owned();
+				(name.clone(), Module::new(raw.clone(), is_type.then_some(raw)))
+			})
 			.collect())
 	})
+}
+
+const SHADOWED: &[&str] = &[
+	"Ty", "Args", "Input", "Output", "Result", "Error", "Option", "Some", "None", "Ok", "Err",
+	"Vec", "String", "Box", "Default", "Into", "From", "TryFrom", "TryInto", "Clone", "Copy",
+	"PartialEq", "Eq", "PartialOrd", "Ord", "Debug", "Iterator", "IntoIterator", "FromIterator",
+	"DoubleEndedIterator", "ExactSizeIterator", "Extend", "ToString", "ToOwned", "AsRef", "AsMut",
+	"Send", "Sync", "Sized", "Unpin", "Drop", "Fn", "FnMut", "FnOnce",
+];
+
+pub fn nominal(ty: &str) -> bool {
+	ty.starts_with(|c: char| c.is_ascii_uppercase()) && !SHADOWED.contains(&ty)
 }
 
 pub fn relative<'a>(from: &[&'a str], to: &[&'a str]) -> (usize, Vec<&'a str>) {

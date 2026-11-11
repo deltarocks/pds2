@@ -669,7 +669,7 @@ impl NativeCodegen<Rust> for Message {
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq, Default)]
-			pub struct Ty {
+			pub struct $(ctx.nominal()) {
 				$(for d in decl join($['\r']) => $d)
 			}
 			$(for e in enums join($['\r']) => $e)

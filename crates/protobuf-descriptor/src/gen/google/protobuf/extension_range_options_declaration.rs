@@ -3,12 +3,12 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub number: Option<super::super::super::int32::Ty>,
-    pub full_name: Option<super::super::super::string::Ty>,
-    pub r#type: Option<super::super::super::string::Ty>,
-    pub reserved: Option<super::super::super::bool::Ty>,
-    pub repeated: Option<super::super::super::bool::Ty>,
+pub struct ExtensionRangeOptionsDeclaration {
+    pub number: Option<super::super::super::Int32>,
+    pub full_name: Option<super::super::super::String>,
+    pub r#type: Option<super::super::super::String>,
+    pub reserved: Option<super::super::super::Bool>,
+    pub repeated: Option<super::super::super::Bool>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -48,3 +48,4 @@ pub fn size_of(_0: &Ty) -> usize {
     if let Some(v) = &_0.repeated { n += key_size(6) + super::super::super::bool::size_of(v); }
     n
 }
+ pub type Ty = ExtensionRangeOptionsDeclaration;

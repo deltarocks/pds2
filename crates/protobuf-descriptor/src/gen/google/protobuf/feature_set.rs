@@ -3,16 +3,16 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, read_key, skip, write_key};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub field_presence: Option<super::feature_set_field_presence::Ty>,
-    pub enum_type: Option<super::feature_set_enum_type::Ty>,
-    pub repeated_field_encoding: Option<super::feature_set_repeated_field_encoding::Ty>,
-    pub utf8_validation: Option<super::feature_set_utf8_validation::Ty>,
-    pub message_encoding: Option<super::feature_set_message_encoding::Ty>,
-    pub json_format: Option<super::feature_set_json_format::Ty>,
-    pub enforce_naming_style: Option<super::feature_set_enforce_naming_style::Ty>,
-    pub default_symbol_visibility: Option<super::feature_set_visibility_feature_default_symbol_visibility::Ty>,
-    pub enforce_proto_limits: Option<super::feature_set_proto_limits_feature_enforce_proto_limits::Ty>,
+pub struct FeatureSet {
+    pub field_presence: Option<super::FeatureSetFieldPresence>,
+    pub enum_type: Option<super::FeatureSetEnumType>,
+    pub repeated_field_encoding: Option<super::FeatureSetRepeatedFieldEncoding>,
+    pub utf8_validation: Option<super::FeatureSetUtf8Validation>,
+    pub message_encoding: Option<super::FeatureSetMessageEncoding>,
+    pub json_format: Option<super::FeatureSetJsonFormat>,
+    pub enforce_naming_style: Option<super::FeatureSetEnforceNamingStyle>,
+    pub default_symbol_visibility: Option<super::FeatureSetVisibilityFeatureDefaultSymbolVisibility>,
+    pub enforce_proto_limits: Option<super::FeatureSetProtoLimitsFeatureEnforceProtoLimits>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -62,3 +62,4 @@ pub fn size_of(_0: &Ty) -> usize {
     if let Some(v) = &_0.enforce_proto_limits { n += key_size(9) + super::feature_set_proto_limits_feature_enforce_proto_limits::size_of(v); }
     n
 }
+ pub type Ty = FeatureSet;

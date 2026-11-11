@@ -3,10 +3,10 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub defaults: Vec<super::feature_set_defaults_feature_set_edition_default::Ty>,
-    pub minimum_edition: Option<super::edition::Ty>,
-    pub maximum_edition: Option<super::edition::Ty>,
+pub struct FeatureSetDefaults {
+    pub defaults: Vec<super::FeatureSetDefaultsFeatureSetEditionDefault>,
+    pub minimum_edition: Option<super::Edition>,
+    pub maximum_edition: Option<super::Edition>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -39,3 +39,4 @@ pub fn size_of(_0: &Ty) -> usize {
     if let Some(v) = &_0.maximum_edition { n += key_size(5) + super::edition::size_of(v); }
     n
 }
+ pub type Ty = FeatureSetDefaults;

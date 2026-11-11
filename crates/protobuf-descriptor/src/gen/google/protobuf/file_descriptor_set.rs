@@ -3,8 +3,8 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub file: Vec<super::file_descriptor_proto::Ty>,
+pub struct FileDescriptorSet {
+    pub file: Vec<super::FileDescriptorProto>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -31,3 +31,4 @@ pub fn size_of(_0: &Ty) -> usize {
     for v in &_0.file { n += key_size(1) + len_size(super::file_descriptor_proto::size_of(v)); }
     n
 }
+ pub type Ty = FileDescriptorSet;

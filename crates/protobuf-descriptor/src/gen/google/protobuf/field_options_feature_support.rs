@@ -3,12 +3,12 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub edition_introduced: Option<super::edition::Ty>,
-    pub edition_deprecated: Option<super::edition::Ty>,
-    pub deprecation_warning: Option<super::super::super::string::Ty>,
-    pub edition_removed: Option<super::edition::Ty>,
-    pub removal_error: Option<super::super::super::string::Ty>,
+pub struct FieldOptionsFeatureSupport {
+    pub edition_introduced: Option<super::Edition>,
+    pub edition_deprecated: Option<super::Edition>,
+    pub deprecation_warning: Option<super::super::super::String>,
+    pub edition_removed: Option<super::Edition>,
+    pub removal_error: Option<super::super::super::String>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -48,3 +48,4 @@ pub fn size_of(_0: &Ty) -> usize {
     if let Some(v) = &_0.removal_error { n += key_size(5) + len_size(super::super::super::string::size_of(v)); }
     n
 }
+ pub type Ty = FieldOptionsFeatureSupport;

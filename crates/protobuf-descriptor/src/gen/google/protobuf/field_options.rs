@@ -3,21 +3,21 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub ctype: Option<super::field_options_c_type::Ty>,
-    pub packed: Option<super::super::super::bool::Ty>,
-    pub jstype: Option<super::field_options_js_type::Ty>,
-    pub lazy: Option<super::super::super::bool::Ty>,
-    pub unverified_lazy: Option<super::super::super::bool::Ty>,
-    pub deprecated: Option<super::super::super::bool::Ty>,
-    pub weak: Option<super::super::super::bool::Ty>,
-    pub debug_redact: Option<super::super::super::bool::Ty>,
-    pub retention: Option<super::field_options_option_retention::Ty>,
-    pub targets: Vec<super::field_options_option_target_type::Ty>,
-    pub edition_defaults: Vec<super::field_options_edition_default::Ty>,
-    pub features: Option<super::feature_set::Ty>,
-    pub feature_support: Option<super::field_options_feature_support::Ty>,
-    pub uninterpreted_option: Vec<super::uninterpreted_option::Ty>,
+pub struct FieldOptions {
+    pub ctype: Option<super::FieldOptionsCType>,
+    pub packed: Option<super::super::super::Bool>,
+    pub jstype: Option<super::FieldOptionsJsType>,
+    pub lazy: Option<super::super::super::Bool>,
+    pub unverified_lazy: Option<super::super::super::Bool>,
+    pub deprecated: Option<super::super::super::Bool>,
+    pub weak: Option<super::super::super::Bool>,
+    pub debug_redact: Option<super::super::super::Bool>,
+    pub retention: Option<super::FieldOptionsOptionRetention>,
+    pub targets: Vec<super::FieldOptionsOptionTargetType>,
+    pub edition_defaults: Vec<super::FieldOptionsEditionDefault>,
+    pub features: Option<super::FeatureSet>,
+    pub feature_support: Option<super::FieldOptionsFeatureSupport>,
+    pub uninterpreted_option: Vec<super::UninterpretedOption>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -110,3 +110,4 @@ pub fn size_of(_0: &Ty) -> usize {
     for v in &_0.uninterpreted_option { n += key_size(999) + len_size(super::uninterpreted_option::size_of(v)); }
     n
 }
+ pub type Ty = FieldOptions;

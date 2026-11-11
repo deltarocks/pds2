@@ -2,7 +2,7 @@ use genco::lang::rust::import;
 use genco::prelude::*;
 use genco::quote;
 use rust::Tokens;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -35,7 +35,11 @@ struct MemberNames {
 	args: Scope,
 }
 
-fn member_names(types: &TypeMap, reg: &Registry) -> Result<BTreeMap<TypeId, MemberNames>> {
+fn member_names(
+	types: &TypeMap,
+	reg: &Registry,
+	modules: &Modules,
+) -> Result<BTreeMap<TypeId, MemberNames>> {
 	let mut out = BTreeMap::new();
 	for (id, def) in &types.0 {
 		let members = match &def.kind {
@@ -50,11 +54,12 @@ fn member_names(types: &TypeMap, reg: &Registry) -> Result<BTreeMap<TypeId, Memb
 		fn strs(v: &[Ident]) -> Vec<&str> {
 			v.iter().map(Ident::as_str).collect()
 		}
+		let own = modules.path(*id).last().and_then(|m| m.ty.as_deref()).unwrap_or("Ty");
 		let names = (|| -> Result<MemberNames> {
 			Ok(MemberNames {
 				fields: Scope::new(Case::Snake, strs(&members.fields), &[]).context("fields")?,
 				variants: Scope::new(Case::Pascal, strs(&members.variants), &[]).context("variants")?,
-				types: Scope::new(Case::Pascal, strs(&members.types), &["Ty", "Args"])
+				types: Scope::new(Case::Pascal, strs(&members.types), &["Ty", "Args", own])
 					.context("inner types")?,
 				args: Scope::new(Case::Snake, def.params.iter().map(|(n, _)| n.as_str()), &[])
 					.context("arguments")?,
@@ -85,10 +90,11 @@ impl<'a> RustMeta<'a> {
 		for (id, ty) in source.0.iter() {
 			raw_names.insert(*id, ty.name.readable_name());
 		}
+		let modules = naming::rust_modules(source)?;
 		Ok(Self {
 			raw_names: Rc::new(raw_names),
-			modules: Rc::new(naming::rust_modules(source)?),
-			members: Rc::new(member_names(source, reg)?),
+			members: Rc::new(member_names(source, reg, &modules)?),
+			modules: Rc::new(modules),
 			here: Rc::default(),
 			types: source,
 			reg,
@@ -173,16 +179,29 @@ impl<'a> RustMeta<'a> {
 		assert!(type_id.is_valid());
 		format!("pds_{}", self.raw_names[&type_id])
 	}
+	fn item_path(&self, type_id: TypeId, mut module: Vec<String>, item: &str) -> Tokens {
+		if item != "Ty" {
+			return self.path_to(&module, item);
+		}
+		let ty = self.modules.path(type_id).last().and_then(|m| m.ty.clone());
+		module.pop();
+		module.push(ty.expect("a type module has a type name"));
+		quote!($(self.rel(&module)))
+	}
 	fn imported(&self, type_id: TypeId, ty: impl AsRef<str>) -> Tokens {
 		assert!(type_id.is_valid());
 		let module = match &self.mode {
 			Mode::View(v) if !v.same(type_id) => self.view_module(type_id),
 			_ => self.owned_module(type_id),
 		};
-		self.path_to(&module, ty.as_ref())
+		self.item_path(type_id, module, ty.as_ref())
 	}
 	fn owned_path(&self, type_id: TypeId, item: &str) -> Tokens {
-		self.path_to(&self.owned_module(type_id), item)
+		self.item_path(type_id, self.owned_module(type_id), item)
+	}
+	fn nominal_name(&self, type_id: TypeId) -> Option<&str> {
+		let ty = self.modules.path(type_id).last()?.ty.as_deref()?;
+		naming::nominal(ty).then_some(ty)
 	}
 	fn ty(&self, type_id: TypeId) -> Tokens {
 		assert!(type_id.is_valid());
@@ -563,8 +582,27 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 	emit(&meta, input, reg, &ids, "", output)
 }
 
-fn mod_files(modules: &Modules, ids: &[TypeId], dir: &str, output: &mut GeneratorOutput) {
+fn mod_files(
+	modules: &Modules,
+	ids: &[TypeId],
+	exports: &BTreeMap<TypeId, bool>,
+	dir: &str,
+	output: &mut GeneratorOutput,
+) {
+	let mut uses: BTreeMap<Vec<naming::Module>, Vec<Tokens>> = BTreeMap::new();
+	for (id, nominal) in exports {
+		let path = modules.path(*id);
+		let (parent, last) = path.split_at(path.len() - 1);
+		let m = &last[0];
+		let ty = m.ty.as_ref().expect("a type module has a type name");
+		uses.entry(parent.to_vec()).or_default().push(if *nominal {
+			quote!(pub use self::$(&m.ident)::$ty;)
+		} else {
+			quote!(pub use self::$(&m.ident)::Ty as $ty;)
+		});
+	}
 	for (path, children) in modules.dirs(ids.iter().copied()) {
+		let reexports = uses.remove(&path).unwrap_or_default();
 		let decls = children.iter().map(|(m, is_dir)| {
 			if !m.needs_path() {
 				return quote!(pub mod $(&m.ident););
@@ -582,7 +620,10 @@ fn mod_files(modules: &Modules, ids: &[TypeId], dir: &str, output: &mut Generato
 		} else {
 			format!("{dir}{}/mod.rs", stems.join("/"))
 		};
-		let tokens: Tokens = quote!($(for d in decls join($['\r']) => $d));
+		let tokens: Tokens = quote! {
+			$(for d in decls join($['\r']) => $d)
+			$(for u in reexports join($['\r']) => $u)
+		};
 		output.insert(file.into(), tokens.to_file_string().expect("formatting should succeed"));
 	}
 }
@@ -610,7 +651,7 @@ pub fn view_generator(
 		.iter()
 		.filter_map(|(name, id)| {
 			let alias = Scope::empty(Case::Snake).get(name);
-			if view_top.keys().any(|m| m.ident == alias) {
+			if view_top.keys().any(|m| m.ident == alias || m.ty.as_ref() == Some(&alias)) {
 				return None;
 			}
 			let module = if set.same(*id) {
@@ -660,9 +701,11 @@ fn emit(
 
 	let view = meta.view();
 	let lt = &if view.is_some() { quote!(<'i>) } else { quote!() };
+	let mut exports = BTreeMap::new();
 
 	for id in ids {
 		let meta = &meta.at(meta.home(*id));
+		let declared = Cell::new(false);
 		let ty = &input[*id];
 		let pinput = &import("crate::pds", "Input");
 		let poutput = &import("crate::pds", "Output");
@@ -786,6 +829,8 @@ fn emit(
 						lower: &lower_expr,
 						view: view.is_some(),
 						take,
+						type_name: meta.nominal_name(*id),
+						declared: &declared,
 					};
 					let into_view = || -> Result<Tokens> {
 						codegen
@@ -818,6 +863,13 @@ fn emit(
 				}
 			}
 		};
+		let def = match meta.nominal_name(*id) {
+			Some(name) if declared.get() => quote!($def $['\r'] pub type Ty$lt = $name$lt;),
+			_ => def,
+		};
+		if !take {
+			exports.insert(*id, declared.get());
+		}
 		let def = if meta.guarded.contains(id) && !forward && !take {
 			let check = &import("crate::pds::stack", "check").qualified();
 			quote! {
@@ -839,6 +891,6 @@ fn emit(
 			def.to_file_string().expect("formatting should succeed"),
 		);
 	}
-	mod_files(&meta.modules, ids, dir, output);
+	mod_files(&meta.modules, ids, &exports, dir, output);
 	Ok(())
 }

@@ -3,7 +3,7 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{read_key, skip};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {}
+pub struct FeatureSetVisibilityFeature {}
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
         let (number, wire) = read_key(input)?;
@@ -25,3 +25,4 @@ pub fn size_of(_0: &Ty) -> usize {
     let mut n = 0;
     n
 }
+ pub type Ty = FeatureSetVisibilityFeature;

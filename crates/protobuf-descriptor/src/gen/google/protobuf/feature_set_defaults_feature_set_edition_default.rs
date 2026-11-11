@@ -3,10 +3,10 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub edition: Option<super::edition::Ty>,
-    pub overridable_features: Option<super::feature_set::Ty>,
-    pub fixed_features: Option<super::feature_set::Ty>,
+pub struct FeatureSetDefaultsFeatureSetEditionDefault {
+    pub edition: Option<super::Edition>,
+    pub overridable_features: Option<super::FeatureSet>,
+    pub fixed_features: Option<super::FeatureSet>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -50,3 +50,4 @@ pub fn size_of(_0: &Ty) -> usize {
     if let Some(v) = &_0.fixed_features { n += key_size(5) + len_size(super::feature_set::size_of(v)); }
     n
 }
+ pub type Ty = FeatureSetDefaultsFeatureSetEditionDefault;

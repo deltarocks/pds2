@@ -3,12 +3,12 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub path: Vec<super::super::super::int32::Ty>,
-    pub span: Vec<super::super::super::int32::Ty>,
-    pub leading_comments: Option<super::super::super::string::Ty>,
-    pub trailing_comments: Option<super::super::super::string::Ty>,
-    pub leading_detached_comments: Vec<super::super::super::string::Ty>,
+pub struct SourceCodeInfoLocation {
+    pub path: Vec<super::super::super::Int32>,
+    pub span: Vec<super::super::super::Int32>,
+    pub leading_comments: Option<super::super::super::String>,
+    pub trailing_comments: Option<super::super::super::String>,
+    pub leading_detached_comments: Vec<super::super::super::String>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -77,3 +77,4 @@ pub fn size_of(_0: &Ty) -> usize {
     for v in &_0.leading_detached_comments { n += key_size(6) + len_size(super::super::super::string::size_of(v)); }
     n
 }
+ pub type Ty = SourceCodeInfoLocation;

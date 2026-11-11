@@ -3,18 +3,18 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub name: Option<super::super::super::string::Ty>,
-    pub number: Option<super::super::super::int32::Ty>,
-    pub label: Option<super::field_descriptor_proto_label::Ty>,
-    pub r#type: Option<super::field_descriptor_proto_type::Ty>,
-    pub type_name: Option<super::super::super::string::Ty>,
-    pub extendee: Option<super::super::super::string::Ty>,
-    pub default_value: Option<super::super::super::string::Ty>,
-    pub oneof_index: Option<super::super::super::int32::Ty>,
-    pub json_name: Option<super::super::super::string::Ty>,
-    pub options: Option<super::field_options::Ty>,
-    pub proto3_optional: Option<super::super::super::bool::Ty>,
+pub struct FieldDescriptorProto {
+    pub name: Option<super::super::super::String>,
+    pub number: Option<super::super::super::Int32>,
+    pub label: Option<super::FieldDescriptorProtoLabel>,
+    pub r#type: Option<super::FieldDescriptorProtoType>,
+    pub type_name: Option<super::super::super::String>,
+    pub extendee: Option<super::super::super::String>,
+    pub default_value: Option<super::super::super::String>,
+    pub oneof_index: Option<super::super::super::Int32>,
+    pub json_name: Option<super::super::super::String>,
+    pub options: Option<super::FieldOptions>,
+    pub proto3_optional: Option<super::super::super::Bool>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -81,3 +81,4 @@ pub fn size_of(_0: &Ty) -> usize {
     if let Some(v) = &_0.proto3_optional { n += key_size(17) + super::super::super::bool::size_of(v); }
     n
 }
+ pub type Ty = FieldDescriptorProto;

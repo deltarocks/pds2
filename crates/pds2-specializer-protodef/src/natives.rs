@@ -165,7 +165,7 @@ impl NativeCodegen<Rust> for Bitfield {
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
-			pub struct Ty {
+			pub struct $(ctx.nominal()) {
 				$(for (e, (_, ty)) in entries.iter().zip(ctx.native.fields.iter()) join($['\r']) =>
 					pub $(fname(e)): $(ctx.names.ty(ty.target)),
 				)
@@ -299,7 +299,7 @@ impl NativeCodegen<Rust> for Bitflags {
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
-			pub struct Ty {
+			pub struct $(ctx.nominal()) {
 				$(for (name, ty) in ctx.native.fields.iter() join($['\r']) =>
 					pub $(ctx.field(name.as_str())): $(ctx.names.ty(ty.target)),
 				)

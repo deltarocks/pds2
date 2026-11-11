@@ -3,9 +3,9 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub edition: Option<super::edition::Ty>,
-    pub value: Option<super::super::super::string::Ty>,
+pub struct FieldOptionsEditionDefault {
+    pub edition: Option<super::Edition>,
+    pub value: Option<super::super::super::String>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -35,3 +35,4 @@ pub fn size_of(_0: &Ty) -> usize {
     if let Some(v) = &_0.edition { n += key_size(3) + super::edition::size_of(v); }
     n
 }
+ pub type Ty = FieldOptionsEditionDefault;

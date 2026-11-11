@@ -309,7 +309,7 @@ impl NativeCodegen<Rust> for Container {
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
-			pub struct $this {
+			pub struct $(ctx.nominal()) {
 				$(for field in fields.iter() join($['\r']) =>
 					$(if field.load_from.is_none() {
 						pub $(fname(field)): $(ctx.slot_ty(field.name, field.ty.target)),

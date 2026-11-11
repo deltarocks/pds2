@@ -3,10 +3,10 @@ use crate::pds::{Input, Output, Result};
 use crate::pds::protobuf::{expect, key_size, len, len_size, read_key, skip, write_key, write_len};
 
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Ty {
-    pub features: Option<super::feature_set::Ty>,
-    pub deprecated: Option<super::super::super::bool::Ty>,
-    pub uninterpreted_option: Vec<super::uninterpreted_option::Ty>,
+pub struct ServiceOptions {
+    pub features: Option<super::FeatureSet>,
+    pub deprecated: Option<super::super::super::Bool>,
+    pub uninterpreted_option: Vec<super::UninterpretedOption>,
 }
 pub fn deserialize_extend(input: &mut Input, out: &mut Ty) -> Result<()> {
     while input.remaining() > 0 {
@@ -45,3 +45,4 @@ pub fn size_of(_0: &Ty) -> usize {
     for v in &_0.uninterpreted_option { n += key_size(999) + len_size(super::uninterpreted_option::size_of(v)); }
     n
 }
+ pub type Ty = ServiceOptions;

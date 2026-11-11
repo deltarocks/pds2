@@ -2,15 +2,15 @@
 use crate::pds::{Input, Output, Result};
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Ty {
+pub enum FeatureSetVisibilityFeatureDefaultSymbolVisibility {
     DefaultSymbolVisibilityUnknown,
     ExportAll,
     ExportTopLevel,
     LocalAll,
     Strict,
-    Unknown(super::super::super::int32::Ty),
+    Unknown(super::super::super::Int32),
 }
-pub fn number(_0: &Ty) -> super::super::super::int32::Ty {
+pub fn number(_0: &Ty) -> super::super::super::Int32 {
     match _0 {
         Ty::DefaultSymbolVisibilityUnknown => 0_i32,
         Ty::ExportAll => 1_i32,
@@ -20,7 +20,7 @@ pub fn number(_0: &Ty) -> super::super::super::int32::Ty {
         Ty::Unknown(n) => n.clone(),
     }
 }
-pub fn from_number(n: super::super::super::int32::Ty) -> Ty {
+pub fn from_number(n: super::super::super::Int32) -> Ty {
     match n {
         0_i32 => Ty::DefaultSymbolVisibilityUnknown,
         1_i32 => Ty::ExportAll,
@@ -39,3 +39,4 @@ pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
 pub fn size_of(_0: &Ty) -> usize {
     super::super::super::int32::size_of(&number(_0))
 }
+ pub type Ty = FeatureSetVisibilityFeatureDefaultSymbolVisibility;
