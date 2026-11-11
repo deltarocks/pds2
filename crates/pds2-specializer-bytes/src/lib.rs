@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, ensure, Result};
 use pds2_core::generator::common::scalar_of;
-use pds2_core::mir::{Construction, Expr, Value};
+use pds2_core::hir::TypeId;
+use pds2_core::mir::{self, Construction, Expr, Value};
 use pds2_core::specializer::decode::Input;
 use pds2_core::specializer::encode::{
 	bits_of, float_of, int_of, width, wrap, write_varint, Encoder, Encoding, Target, Val,
@@ -159,6 +160,16 @@ impl Encoder for ScalarEncoding {
 			(e, s) => bail!("`@encoding {}` can't decode {s:?} ({})", e.name(), cx.name(t.id)),
 		};
 		Ok(Construction::Literal(value))
+	}
+
+	fn min_size(&self, cx: &Encoding, id: TypeId, _native: &mir::NativeType) -> usize {
+		match self {
+			ScalarEncoding::Le | ScalarEncoding::Be => scalar_of(cx.types(), id)
+				.and_then(width)
+				.map_or(0, |bits| (bits / 8) as usize),
+			ScalarEncoding::Varint | ScalarEncoding::Varint64 | ScalarEncoding::Zigzag => 1,
+			ScalarEncoding::Raw => 0,
+		}
 	}
 }
 

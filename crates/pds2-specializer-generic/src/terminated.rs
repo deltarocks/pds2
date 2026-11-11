@@ -147,6 +147,9 @@ fn end_of(native: &mir::NativeType) -> Result<&mir::Expr> {
 }
 
 impl Encoder for Terminated {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
+		pds2_core::specializer::specialization_use(native, "End").map_or(0, |e| cx.min_size(e.target))
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let end = cx.eval(end_of(v.native)?, &v.scope())?;
 		let mut terminator = Vec::new();

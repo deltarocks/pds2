@@ -316,6 +316,24 @@ fn tag_of(cx: &Encoding, v: &Val) -> Result<Expr> {
 }
 
 impl Encoder for Union {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
+		let Some(u) = view(native) else {
+			return 0;
+		};
+		let tag = match u.tag {
+			TagView::Inline(t) => cx.min_size(t.target),
+			TagView::External(_) => 0,
+		};
+		let payload = u
+			.arms
+			.iter()
+			.map(|(_, _, t)| *t)
+			.chain(u.default.map(|(_, t)| t))
+			.map(|t| cx.min_size(t.target))
+			.min()
+			.unwrap_or(0);
+		tag.saturating_add(payload)
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let u = view(v.native).ok_or_else(|| anyhow!("malformed union"))?;
 		let (name, payload) = variant_of(v.c)?;
@@ -528,6 +546,8 @@ impl NativeCodegen<Rust> for Union {
 				quote!($(names.ty(t)))
 			}
 		};
+		let min = Encoding::new(ctx.elab).min_size(ctx.id);
+		let expect = (min > 0).then(|| quote!(input.expect($(min.to_string()))?;));
 		let de_value = |u: &mir::Type, boxed: bool| -> rust::Tokens {
 			let read = quote!($(names.deserialize(u.target))(input, $(args_of(u)))?);
 			if boxed {
@@ -635,6 +655,7 @@ impl NativeCodegen<Rust> for Union {
 				})
 			}
 			pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
+				$expect
 				$read_tag
 				$(for b in &de_branches join($['\r']) => $b)
 				$de_default

@@ -451,10 +451,17 @@ impl NativeCodegen<Rust> for Array {
 		};
 		let lt = &ctx.lt();
 		let this = &ctx.this();
+		let min = Encoding::new(ctx.elab).min_size(value);
+		let expect = match min {
+			0 => None,
+			1 => Some(quote!(input.expect(count)?;)),
+			n => Some(quote!(input.expect(count.saturating_mul($(n.to_string())))?;)),
+		};
 		let read_items = &match bytes {
 			Some("i8") => quote!(input.bytes(count).map($(rust::import("crate::pds::view", "as_i8")))),
 			Some(_) => quote!(input.bytes(count)),
 			None => quote! {
+				$expect
 				let mut out = Vec::with_capacity(count.min(input.remaining()));
 				for _ in 0..count {
 					out.push($(ctx.deserialize_call(value_use))?);
@@ -673,9 +680,7 @@ impl NativeCodegen<Rust> for Buffer {
 			quote!(input.bytes(count))
 		} else {
 			quote! {
-				if count > input.remaining() {
-					return Err($perror::NotEnoughData);
-				}
+				input.expect(count)?;
 				let mut out = Vec::with_capacity(count);
 				for _ in 0..count {
 					out.push($(ctx.names.deserialize(u8id))(input)?);
@@ -974,9 +979,7 @@ impl NativeCodegen<Rust> for PString {
 			}
 			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
 				let count: usize = $(ctx.names.deserialize(count))(input)?.try_into().map_err(|_| $perror::InvalidValue)?;
-				if count > input.remaining() {
-					return Err($perror::NotEnoughData);
-				}
+				input.expect(count)?;
 				let mut out = Vec::with_capacity(count);
 				for _ in 0..count {
 					out.push($(ctx.names.deserialize(u8id))(input)?);
@@ -1006,7 +1009,17 @@ impl Upgrade for PString {
 	}
 }
 
+fn counted_min_size(cx: &Encoding, native: &mir::NativeType) -> usize {
+	match native.specializer.as_ref().map(|(_, v)| v.as_str()) {
+		Some("sized") => 0,
+		_ => specialization_use(native, "Count").map_or(0, |c| cx.min_size(c.target)),
+	}
+}
+
 impl Encoder for OptionP {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, _native: &mir::NativeType) -> usize {
+		cx.min_size_of("bool")
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let boolean = cx.resolve_name("bool")?;
 		let present = matches!(v.c, Construction::Wrap(_));
@@ -1035,6 +1048,9 @@ impl Encoder for OptionP {
 }
 
 impl Encoder for Array {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
+		counted_min_size(cx, native)
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let items = list_of(v.c)?;
 		if variant_name(v) == "inline" {
@@ -1075,6 +1091,9 @@ impl ValueModel for Bitfield {
 }
 
 impl Encoder for Bitfield {
+	fn min_size(&self, _cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
+		bitfield_entries(&native.body).map_or(0, |e| (e.iter().map(|e| e.size).sum::<u32>() / 8) as usize)
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let entries = bitfield_entries(&v.native.body)?;
 		let given = record_of(v.c)?;
@@ -1178,6 +1197,9 @@ impl ValueModel for Bitflags {
 }
 
 impl Encoder for Bitflags {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
+		specialization_use(native, VALUE).map_or(0, |v| cx.min_size(v.target))
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let mut acc: i128 = 0;
 		for (i, (n, _)) in v.native.fields.iter().enumerate() {
@@ -1232,6 +1254,9 @@ impl ValueModel for Buffer {
 }
 
 impl Encoder for Buffer {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
+		counted_min_size(cx, native)
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let bytes = bytes_of(v.c)?;
 		if variant_name(v) == "inline" {
@@ -1278,6 +1303,9 @@ impl ValueModel for PString {
 }
 
 impl Encoder for PString {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
+		counted_min_size(cx, native)
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let bytes = bytes_of(v.c)?;
 		let count = use_of(v.native, "Count")?;

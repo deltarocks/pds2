@@ -84,6 +84,21 @@ fn roundtrip(schema: &str, ty: &str, bytes: &[u8]) -> String {
 }
 
 #[test]
+fn minimum_wire_sizes_are_known_at_compile_time() {
+	let reg = pds2::registry();
+	let types = constant("").unwrap();
+	let elab = pds2_core::specializer::expr::Elaborator { types: &types, reg: &reg };
+	let enc = pds2_core::specializer::encode::Encoding::new(&elab);
+	let min = |name: &str| enc.min_size(elab.resolve_name(name).unwrap());
+	assert_eq!(min("u16"), 2);
+	assert_eq!(min("sint"), 1);
+	assert_eq!(min("text"), 0);
+	assert_eq!(min("Counted"), 1);
+	assert_eq!(min("Shape"), 1);
+	assert_eq!(min("Numbers"), 1 + 2 + 4 + 8 + 1 + 1 + 1);
+}
+
+#[test]
 fn deserialized_values_take_their_type_from_context() {
 	constant("def(c) => const(value: Counted(deserialized(b\"\\x02\\x07\\x08\")));").unwrap();
 	constant("def(c) => const(value: [deserialized(b\"\\x00\"), (dot: (x: 1, y: 2))]) => array(count: 2) => Shape;")

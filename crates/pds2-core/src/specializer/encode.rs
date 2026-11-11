@@ -84,11 +84,15 @@ pub trait Encoder {
 	fn cast(&self, cx: &Encoding, v: &Val, to: TypeId) -> Result<Expr> {
 		bail!("{} can't be cast to {}", cx.name(v.id), cx.name(to))
 	}
+	fn min_size(&self, _cx: &Encoding, _id: TypeId, _native: &mir::NativeType) -> usize {
+		0
+	}
 }
 
 pub struct Encoding<'a> {
 	pub elab: &'a Elaborator<'a>,
 	skipped: RefCell<BTreeMap<String, usize>>,
+	sizes: RefCell<BTreeMap<TypeId, Option<usize>>>,
 }
 
 pub fn write_varint(out: &mut Vec<u8>, mut v: u64) {
@@ -181,7 +185,29 @@ impl<'a> Encoding<'a> {
 		Encoding {
 			elab,
 			skipped: RefCell::default(),
+			sizes: RefCell::default(),
 		}
+	}
+
+	pub fn min_size(&self, id: TypeId) -> usize {
+		let id = self.elab.resolve(id);
+		if self.types().is_void(id) {
+			return 0;
+		}
+		if let Some(known) = self.sizes.borrow().get(&id) {
+			return known.unwrap_or(0);
+		}
+		let Ok((native, encoder)) = self.encoder(id) else {
+			return 0;
+		};
+		self.sizes.borrow_mut().insert(id, None);
+		let n = encoder.min_size(self, id, native);
+		self.sizes.borrow_mut().insert(id, Some(n));
+		n
+	}
+
+	pub fn min_size_of(&self, name: &str) -> usize {
+		self.resolve_name(name).map_or(0, |id| self.min_size(id))
 	}
 
 	pub fn skip(&self, what: String) {

@@ -108,6 +108,13 @@ impl ValueModel for Container {
 }
 
 impl Encoder for Container {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
+		view(native)
+			.into_iter()
+			.flatten()
+			.map(|f| cx.min_size(f.ty.target))
+			.fold(0, usize::saturating_add)
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let fields = view(v.native).ok_or_else(|| anyhow!("malformed container"))?;
 		let scope = v.scope();
@@ -278,6 +285,8 @@ impl NativeCodegen<Rust> for Container {
 	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let fields = view(ctx.native).ok_or_else(|| anyhow!("malformed container"))?;
+		let min = Encoding::new(ctx.elab).min_size(ctx.id);
+		let expect = (min > 0).then(|| quote!(input.expect($(min.to_string()))?;));
 		let names = ctx.names;
 		let poutput = &rust::import("crate::pds", "Output");
 		let presult = &rust::import("crate::pds", "Result");
@@ -329,6 +338,7 @@ impl NativeCodegen<Rust> for Container {
 				Ok(())
 			}
 			pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
+				$expect
 				$(for field in fields.iter() join($['\r']) =>
 					let $(local(field.name)) = $(names.deserialize(field.ty.target))(
 						input,

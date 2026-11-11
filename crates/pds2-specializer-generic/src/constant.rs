@@ -50,6 +50,9 @@ impl ValueModel for Const {
 }
 
 impl Encoder for Const {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
+		pds2_core::specializer::specialization_use(native, VALUE).map_or(0, |v| cx.min_size(v.target))
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let value_use = pds2_core::specializer::specialization_use(v.native, VALUE)
 			.ok_or_else(|| anyhow!("const needs its `Value` type"))?;

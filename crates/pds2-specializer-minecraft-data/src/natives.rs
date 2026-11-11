@@ -696,6 +696,9 @@ fn holder_literal(
 }
 
 impl Encoder for RegistryEntryHolder {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, _native: &mir::NativeType) -> usize {
+		cx.min_size_of("varint")
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let varint = cx.resolve_name("varint")?;
 		match variant_of(v.c)? {
@@ -751,6 +754,9 @@ impl ValueModel for RegistryEntryHolderSet {
 }
 
 impl Encoder for RegistryEntryHolderSet {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, _native: &mir::NativeType) -> usize {
+		cx.min_size_of("varint")
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let varint = cx.resolve_name("varint")?;
 		match variant_of(v.c)? {

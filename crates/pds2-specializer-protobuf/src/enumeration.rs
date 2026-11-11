@@ -163,6 +163,9 @@ impl ValueModel for Enum {
 }
 
 impl Encoder for Enum {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
+		specialization_use(native, TAG).map_or(0, |t| cx.min_size(t.target))
+	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let e = view_of(v.native)?;
 		let n = number_of(cx.elab, &e, v.c)?;
