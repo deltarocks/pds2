@@ -8,6 +8,7 @@ use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
 use crate::union::{self, TagView, UnionView};
 use pds2_core::specializer::{
 	AstHir, BoxCost, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor,
+	ViewPolicy,
 };
 use pds2_core::ast::{FieldRefSegment, Ident};
 use pds2_core::generator::common::local;
@@ -246,12 +247,36 @@ fn assert_tag_arg<'a>(
 }
 
 impl NativeCodegen<Rust> for Container {
+	fn view_policy(&self) -> ViewPolicy {
+		ViewPolicy::Composite
+	}
+	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
+		let fields = view(ctx.native).ok_or_else(|| anyhow!("malformed container"))?;
+		let parts = fields.iter().filter(|f| f.load_from.is_none()).map(|f| {
+			let v = ctx.slot_new(
+				f.name,
+				quote!($(ctx.names.into_view_fn(f.ty.target))(&mut _0.$(rname(f.name)))),
+			);
+			quote!($(rname(f.name)): $v)
+		});
+		Ok(Some(ctx.into_view_fn(quote! {
+			$(ctx.into_path()) {
+				$(for p in parts join(,) => $p)
+			}
+		})))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let fields = view(ctx.native).ok_or_else(|| anyhow!("malformed container"))?;
 		let names = ctx.names;
-		let pinput = &rust::import("crate::pds", "Input");
 		let poutput = &rust::import("crate::pds", "Output");
 		let presult = &rust::import("crate::pds", "Result");
+		let lt = &ctx.lt();
+		let this = &ctx.this();
+		let stored: Vec<&ContainerField> = fields.iter().filter(|f| f.load_from.is_none()).collect();
+		let view_fields = stored.iter().map(|f| {
+			let v = ctx.slot_new(f.name, quote!($(names.view_fn(f.ty.target))(&_0.$(rname(f.name)))));
+			quote!($(rname(f.name)): $v)
+		});
 		let assert_tag_call = |field: &ContainerField| -> rust::Tokens {
 			let Some(val) = assert_tag_arg(ctx.types, &fields, field) else {
 				return quote!();
@@ -272,7 +297,7 @@ impl NativeCodegen<Rust> for Container {
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
-			pub struct Ty {
+			pub struct $this {
 				$(for field in fields.iter() join($['\r']) =>
 					$(if field.load_from.is_none() {
 						pub $(rname(field.name)): $(ctx.slot_ty(field.name, field.ty.target)),
@@ -281,7 +306,7 @@ impl NativeCodegen<Rust> for Container {
 					})
 				)
 			}
-			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+			pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 				$(for field in fields.iter() join($['\r']) =>
 					$(assert_tag_call(field))
 					$(names.serialize(field.ty.target))(
@@ -291,7 +316,7 @@ impl NativeCodegen<Rust> for Container {
 				)
 				Ok(())
 			}
-			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+			pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
 				$(for field in fields.iter() join($['\r']) =>
 					let $(local(field.name)) = $(names.deserialize(field.ty.target))(
 						input,
@@ -310,7 +335,7 @@ impl NativeCodegen<Rust> for Container {
 					)
 				})
 			}
-			pub fn size_of(_0: &Ty) -> usize {
+			pub fn size_of$lt(_0: &$this) -> usize {
 				0
 				$(for field in fields.iter() join($['\r']) =>
 					+ $(names.size_of(field.ty.target))(
@@ -318,6 +343,13 @@ impl NativeCodegen<Rust> for Container {
 					)
 				)
 			}
+			$(if ctx.view =>
+				pub fn view<'i>(_0: &'i $(ctx.owned_this())) -> Ty<'i> {
+					Ty {
+						$(for v in view_fields join(,) => $v)
+					}
+				}
+			)
 		})
 	}
 	fn construct(

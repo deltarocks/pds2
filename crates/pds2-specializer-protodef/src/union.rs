@@ -9,7 +9,7 @@ use pds2_core::specializer::encode::{Encoder, Encoding, Scope, Target, Val};
 use pds2_core::specializer::expr::{value_eq, Elaborator, ValueModel};
 use pds2_core::specializer::{
 	AstHir, BoxCost, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, Projection,
-	SlotVisitor,
+	SlotVisitor, ViewPolicy,
 };
 use crate::upgrade::{NativeSig, NativeSigVariant, Upgrade};
 use pds2_core::ast::{FieldRefSegment, Ident};
@@ -418,13 +418,55 @@ fn variant_of<'c>(c: &'c Construction) -> Result<(&'c Ident, &'c [Expr])> {
 }
 
 impl NativeCodegen<Rust> for Union {
+	fn view_policy(&self) -> ViewPolicy {
+		ViewPolicy::Composite
+	}
+	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
+		let u = view(ctx.native).ok_or_else(|| anyhow!("malformed union"))?;
+		let names = ctx.names;
+		let owned = &ctx.owned_this();
+		let path = &ctx.into_path();
+		let mut arms = Vec::new();
+		for (_, variant, vty) in &u.arms {
+			let v = rname(variant);
+			if ctx.types.is_void(vty.target) {
+				arms.push(quote!($owned::$(&v) => $path::$(&v),));
+			} else {
+				let payload = ctx.slot_new(variant, quote!($(names.into_view_fn(vty.target))(__v)));
+				arms.push(quote!($owned::$(&v)(__v) => $path::$(&v)($payload),));
+			}
+		}
+		if let Some((dname, dty)) = u.default {
+			let d = rname(dname);
+			let tag = quote!($(names.into_view_fn(u.tag_type))(__t));
+			if ctx.types.is_void(dty.target) {
+				arms.push(quote!($owned::$(&d)(__t) => $path::$(&d)($tag),));
+			} else {
+				let payload = ctx.slot_new(dname, quote!($(names.into_view_fn(dty.target))(__v)));
+				arms.push(quote!($owned::$(&d)(__t, __v) => $path::$(&d)($tag, $payload),));
+			}
+		}
+		let head = if arms.is_empty() {
+			quote!(match *_0)
+		} else {
+			quote!(match _0)
+		};
+		Ok(Some(ctx.into_view_fn(quote! {
+			$head {
+				$(for a in arms join($['\r']) => $a)
+			}
+		})))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let u = view(ctx.native).ok_or_else(|| anyhow!("malformed union"))?;
 		let input = ctx.types;
 		let names = ctx.names;
-		let pinput = &rust::import("crate::pds", "Input");
 		let poutput = &rust::import("crate::pds", "Output");
 		let presult = &rust::import("crate::pds", "Result");
+		let lt = &ctx.lt();
+		let this = &ctx.this();
+		let owned = &ctx.owned_this();
+		let mut view_arms: Vec<rust::Tokens> = Vec::new();
 		let args_of = |t: &mir::Type| (ctx.pass_args)(t);
 		let is_inline = matches!(u.tag, TagView::Inline(_));
 		let read_tag = match u.tag {
@@ -487,8 +529,17 @@ impl NativeCodegen<Rust> for Union {
 		let mut vtag_arms: Vec<rust::Tokens> = Vec::new();
 		let mut assert_arms: Vec<rust::Tokens> = Vec::new();
 		let mut de_branches: Vec<rust::Tokens> = Vec::new();
+		let mut name_arms: Vec<rust::Tokens> = Vec::new();
 		for ((value, variant, vty), cond) in u.arms.iter().zip(&conds) {
 			let v = rname(variant);
+			if input.is_void(vty.target) {
+				name_arms.push(quote!(Ty::$(&v) => $(quoted(variant.as_str())),));
+				view_arms.push(quote!($owned::$(&v) => Ty::$(&v),));
+			} else {
+				name_arms.push(quote!(Ty::$(&v)(_) => $(quoted(variant.as_str())),));
+				let payload = ctx.slot_new(variant, quote!($(names.view_fn(vty.target))(__v)));
+				view_arms.push(quote!($owned::$(&v)(__v) => Ty::$(&v)($payload),));
+			}
 			if input.is_void(vty.target) {
 				variants_decl.push(quote!($(&v),));
 				ser_arms.push(quote!(Ty::$(&v) => Ok(()),));
@@ -513,6 +564,14 @@ impl NativeCodegen<Rust> for Union {
 		}
 		let de_default: rust::Tokens = if let Some((dname, dty)) = u.default {
 			let d = rname(dname);
+			name_arms.push(quote!(Ty::$(&d)(..) => $(quoted(dname.as_str())),));
+			let view_tag = quote!($(names.view_fn(tag_ty))(__t));
+			if input.is_void(dty.target) {
+				view_arms.push(quote!($owned::$(&d)(__t) => Ty::$(&d)($view_tag),));
+			} else {
+				let payload = ctx.slot_new(dname, quote!($(names.view_fn(dty.target))(__v)));
+				view_arms.push(quote!($owned::$(&d)(__t, __v) => Ty::$(&d)($view_tag, $payload),));
+			}
 			let boxed = ctx.boxed(dname);
 			let dpay = de_value(dty, boxed);
 			let tag_owned = if is_inline {
@@ -550,10 +609,10 @@ impl NativeCodegen<Rust> for Union {
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
-			pub enum Ty {
+			pub enum $this {
 				$(for v in &variants_decl join($['\r']) => $v)
 			}
-			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+			pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 				$(if is_empty => match *_0 {})
 				$(if !is_empty {
 					$write_tag
@@ -562,12 +621,12 @@ impl NativeCodegen<Rust> for Union {
 					}
 				})
 			}
-			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+			pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
 				$read_tag
 				$(for b in &de_branches join($['\r']) => $b)
 				$de_default
 			}
-			pub fn size_of(_0: &Ty) -> usize {
+			pub fn size_of$lt(_0: &$this) -> usize {
 				$(if is_empty => match *_0 {})
 				$(if !is_empty {
 					$tag_own_size + $match_head {
@@ -575,8 +634,13 @@ impl NativeCodegen<Rust> for Union {
 					}
 				})
 			}
+			pub fn name$lt(_0: &$this) -> &'static str {
+				$match_head {
+					$(for a in &name_arms join($['\r']) => $a)
+				}
+			}
 			$(if !is_inline && !is_empty =>
-				pub fn debug_assert_tag(_0: &Ty, __tag: &$(names.ty(tag_ty))) {
+				pub fn debug_assert_tag$lt(_0: &$this, __tag: &$(names.ty(tag_ty))) {
 					debug_assert!(
 						$match_head {
 							$(for a in &assert_arms join($['\r']) => $a)
@@ -586,13 +650,20 @@ impl NativeCodegen<Rust> for Union {
 				}
 			)
 			$(if expose_tag =>
-				pub fn virtual_tag(_0: &Ty) -> $(names.ty(tag_ty)) {
+				pub fn virtual_tag$lt(_0: &$this) -> $(names.ty(tag_ty)) {
 					$(if is_empty => match *_0 {})
 					$(if !is_empty {
 						$match_head {
 							$(for a in &vtag_arms join($['\r']) => $a)
 						}
 					})
+				}
+			)
+			$(if ctx.view =>
+				pub fn view<'i>(_0: &'i $owned) -> Ty<'i> {
+					$match_head {
+						$(for a in &view_arms join($['\r']) => $a)
+					}
 				}
 			)
 		})

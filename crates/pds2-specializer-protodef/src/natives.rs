@@ -18,7 +18,7 @@ use pds2_core::specializer::reflect::{
 use pds2_core::specializer::{
 	construct_vec, list_value, pds_io, specialization_use, vec_of_value, visit_fields,
 	visit_specialization, AstHir, BoxCost, Embed, LowerCx, Names, NativeCodegen, NativeCodegenCtx,
-	NativeLayout, SlotVisitor, VALUE,
+	NativeLayout, SlotVisitor, ViewPolicy, byte_scalar, into_view_vec, view_vec, VALUE,
 };
 
 use crate::upgrade::{NativeSig, NativeSigVariant, Upgrade, UpgradeCtx};
@@ -406,31 +406,72 @@ impl NativeCodegen<Rust> for Array {
 	) -> Result<rust::Tokens> {
 		construct_vec(cx, c)
 	}
+	fn view_policy(&self) -> ViewPolicy {
+		ViewPolicy::Composite
+	}
+	fn view_borrows(&self, types: &mir::TypeMap, native: &mir::NativeType) -> bool {
+		specialization_use(native, VALUE).is_some_and(|v| byte_scalar(types, v.target).is_some())
+	}
+	fn view_take(&self) -> bool {
+		true
+	}
+	fn view_heap(&self) -> bool {
+		true
+	}
+	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
+		let value = ctx.specialization("Value").context("array element type")?;
+		Ok(Some(match byte_scalar(ctx.types, value) {
+			Some(_) => ctx.into_view_fn(quote!(_0.as_slice())),
+			None => into_view_vec(ctx, value),
+		}))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let value_use = ctx
 			.specialization_use("Value")
 			.context("array element type")?;
 		let value = value_use.target;
-		let ty = self
-			.inline_ty(ctx.id, ctx.native, ctx.names)
-			.context("array type")?;
-		let de_value = |ctx: &NativeCodegenCtx<Rust>| ctx.deserialize_call(value_use);
-		let (pinput, poutput, presult) = pds_io();
-		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let bytes = byte_scalar(ctx.types, value).filter(|_| ctx.view);
+		let ty = match bytes {
+			Some(b) => quote!(&'i [$b]),
+			None => vec_of_value(ctx.native, ctx.names).context("array type")?,
+		};
+		let lt = &ctx.lt();
+		let this = &ctx.this();
+		let read_items = &match bytes {
+			Some("i8") => quote!(input.bytes(count).map($(rust::import("crate::pds::view", "as_i8")))),
+			Some(_) => quote!(input.bytes(count)),
+			None => quote! {
+				let mut out = Vec::with_capacity(count.min(input.remaining()));
+				for _ in 0..count {
+					out.push($(ctx.deserialize_call(value_use))?);
+				}
+				Ok(out)
+			},
+		};
+		let adapter = match bytes {
+			Some(_) => quote! {
+				pub fn view<'i>(_0: &'i $(ctx.owned_this())) -> Ty<'i> {
+					_0.as_slice()
+				}
+			},
+			None => view_vec(ctx, value),
+		};
+		let (_, poutput, presult) = pds_io();
+		let (poutput, presult) = (&poutput, &presult);
 		let perror = &rust::import("crate::pds", "Error");
 		let virt = ctx.virtual_field("size");
 		let check_size = match virt {
-			Some(virt) => quote! {
+			Some(virt) if (ctx.virtual_used)("size") => quote! {
 				let _: $(ctx.names.ty(virt)) = _0.len().try_into().map_err(|_| $perror::InvalidValue)?;
 			},
-			None => quote!(),
+			_ => quote!(),
 		};
 
 		let main = match ctx.variant.as_str() {
 			"inline" => {
 				let count = ctx.specialization("Count").context("array count type")?;
 				quote! {
-					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+					pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 						$(&check_size)
 						$(ctx.names.serialize(count))(&_0.len().try_into().map_err(|_| $perror::InvalidValue)?, output)?;
 						for e in _0.iter() {
@@ -438,15 +479,11 @@ impl NativeCodegen<Rust> for Array {
 						}
 						Ok(())
 					}
-					pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+					pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
 						let count: usize = $(ctx.names.deserialize(count))(input)?.try_into().map_err(|_| $perror::InvalidValue)?;
-						let mut out = Vec::with_capacity(count.min(input.remaining()));
-						for _ in 0..count {
-							out.push($(de_value(ctx))?);
-						}
-						Ok(out)
+						$read_items
 					}
-					pub fn size_of(_0: &Ty) -> usize {
+					pub fn size_of$lt(_0: &$this) -> usize {
 						let mut n = $(ctx.names.size_of(count))(&_0.len().try_into().unwrap_or_default());
 						for e in _0.iter() { n += $(ctx.names.size_of(value))(e); }
 						n
@@ -459,22 +496,18 @@ impl NativeCodegen<Rust> for Array {
 					"array::sized needs a `count` argument"
 				);
 				quote! {
-					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+					pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 						$(&check_size)
 						for e in _0.iter() {
 							$(ctx.names.serialize(value))(e, output)?;
 						}
 						Ok(())
 					}
-					pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+					pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
 						let count: usize = (*args.count).try_into().map_err(|_| $perror::InvalidValue)?;
-						let mut out = Vec::with_capacity(count.min(input.remaining()));
-						for _ in 0..count {
-							out.push($(de_value(ctx))?);
-						}
-						Ok(out)
+						$read_items
 					}
-					pub fn size_of(_0: &Ty) -> usize {
+					pub fn size_of$lt(_0: &$this) -> usize {
 						let mut n = 0;
 						for e in _0.iter() { n += $(ctx.names.size_of(value))(e); }
 						n
@@ -487,7 +520,7 @@ impl NativeCodegen<Rust> for Array {
 		// the runtime length, referencable as `@size` (e.g. by a virtual length field)
 		let virtual_size = match virt {
 			Some(virt) => quote! {
-				pub fn virtual_size(_0: &Ty) -> $(ctx.names.ty(virt)) {
+				pub fn virtual_size$lt(_0: &$this) -> $(ctx.names.ty(virt)) {
 					_0.len().try_into().unwrap_or_default()
 				}
 			},
@@ -496,9 +529,10 @@ impl NativeCodegen<Rust> for Array {
 
 		Ok(quote! {
 			$((ctx.args_struct)())
-			pub type Ty = $ty;
+			pub type $this = $ty;
 			$main
 			$virtual_size
+			$(if ctx.view => $adapter)
 		})
 	}
 }
@@ -540,6 +574,7 @@ impl Upgrade for Array {
 			is_void: false,
 			scalar: None,
 			encoding: None,
+			view: None,
 			default: NativeSigVariant {
 				value_generic: true,
 				..Default::default()
@@ -588,30 +623,51 @@ impl NativeCodegen<Rust> for Buffer {
 	) -> Option<rust::Tokens> {
 		Some(quote!(Vec<u8>))
 	}
+	fn view_borrows(&self, _types: &mir::TypeMap, _native: &mir::NativeType) -> bool {
+		true
+	}
+	fn view_take(&self) -> bool {
+		true
+	}
+	fn view_heap(&self) -> bool {
+		true
+	}
+	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
+		Ok(Some(ctx.into_view_fn(quote!(_0.as_slice()))))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
-		let ty = self
-			.inline_ty(ctx.id, ctx.native, ctx.names)
-			.context("buffer type")?;
+		let ty = if ctx.view {
+			quote!(&'i [u8])
+		} else {
+			self.inline_ty(ctx.id, ctx.native, ctx.names)
+				.context("buffer type")?
+		};
+		let lt = &ctx.lt();
+		let this = &ctx.this();
 		let u8id = (ctx.resolve)("u8").ok_or_else(|| anyhow!("buffer needs the `u8` native"))?;
-		let (pinput, poutput, presult) = pds_io();
-		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let (_, poutput, presult) = pds_io();
+		let (poutput, presult) = (&poutput, &presult);
 		let perror = &rust::import("crate::pds", "Error");
 		let virt = ctx.virtual_field("size");
 		let check_size = match virt {
-			Some(virt) => quote! {
+			Some(virt) if (ctx.virtual_used)("size") => quote! {
 				let _: $(ctx.names.ty(virt)) = _0.len().try_into().map_err(|_| $perror::InvalidValue)?;
 			},
-			None => quote!(),
+			_ => quote!(),
 		};
-		let read_bytes = quote! {
-			if count > input.remaining() {
-				return Err($perror::NotEnoughData);
+		let read_bytes = if ctx.view {
+			quote!(input.bytes(count))
+		} else {
+			quote! {
+				if count > input.remaining() {
+					return Err($perror::NotEnoughData);
+				}
+				let mut out = Vec::with_capacity(count);
+				for _ in 0..count {
+					out.push($(ctx.names.deserialize(u8id))(input)?);
+				}
+				Ok(out)
 			}
-			let mut out = Vec::with_capacity(count);
-			for _ in 0..count {
-				out.push($(ctx.names.deserialize(u8id))(input)?);
-			}
-			Ok(out)
 		};
 		let write_bytes = quote! {
 			$check_size
@@ -623,31 +679,31 @@ impl NativeCodegen<Rust> for Buffer {
 			"inline" => {
 				let count = ctx.specialization("Count").context("buffer count type")?;
 				quote! {
-					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+					pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 						$(ctx.names.serialize(count))(&_0.len().try_into().map_err(|_| $perror::InvalidValue)?, output)?;
 						$write_bytes
 						Ok(())
 					}
-					pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+					pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
 						let count: usize = $(ctx.names.deserialize(count))(input)?.try_into().map_err(|_| $perror::InvalidValue)?;
 						$read_bytes
 					}
-					pub fn size_of(_0: &Ty) -> usize {
+					pub fn size_of$lt(_0: &$this) -> usize {
 						$(ctx.names.size_of(count))(&_0.len().try_into().unwrap_or_default()) + _0.len()
 					}
 				}
 			}
 			"sized" => {
 				quote! {
-					pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+					pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 						$write_bytes
 						Ok(())
 					}
-					pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+					pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
 						let count: usize = (*args.count).try_into().map_err(|_| $perror::InvalidValue)?;
 						$read_bytes
 					}
-					pub fn size_of(_0: &Ty) -> usize {
+					pub fn size_of$lt(_0: &$this) -> usize {
 						_0.len()
 					}
 				}
@@ -656,7 +712,7 @@ impl NativeCodegen<Rust> for Buffer {
 		};
 		let virtual_size = match virt {
 			Some(virt) => quote! {
-				pub fn virtual_size(_0: &Ty) -> $(ctx.names.ty(virt)) {
+				pub fn virtual_size$lt(_0: &$this) -> $(ctx.names.ty(virt)) {
 					_0.len().try_into().unwrap_or_default()
 				}
 			},
@@ -664,9 +720,14 @@ impl NativeCodegen<Rust> for Buffer {
 		};
 		Ok(quote! {
 			$((ctx.args_struct)())
-			pub type Ty = $ty;
+			pub type $this = $ty;
 			$main
 			$virtual_size
+			$(if ctx.view =>
+				pub fn view<'i>(_0: &'i $(ctx.owned_this())) -> Ty<'i> {
+					_0.as_slice()
+				}
+			)
 		})
 	}
 }
@@ -717,42 +778,59 @@ impl NativeCodegen<Rust> for OptionP {
 		let value = specialization_use(native, VALUE)?.target;
 		Some(quote!(Option<$(names.slot_ty(id, &Ident::new(VALUE), value))>))
 	}
+	fn view_policy(&self) -> ViewPolicy {
+		ViewPolicy::Composite
+	}
+	fn view_take(&self) -> bool {
+		true
+	}
+	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
+		let value = ctx.specialization("Value").context("option value type")?;
+		let inner = ctx.slot_new(&Ident::new(VALUE), quote!($(ctx.names.into_view_fn(value))(v)));
+		Ok(Some(ctx.into_view_fn(quote!(_0.as_mut().map(|v| $inner)))))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let value_use = ctx
 			.specialization_use("Value")
 			.context("option value type")?;
 		let value = value_use.target;
-		let ty = self
-			.inline_ty(ctx.id, ctx.native, ctx.names)
-			.context("option type")?;
 		let value_slot = Ident::new(VALUE);
+		let ty = quote!(Option<$(ctx.slot_ty(&value_slot, value))>);
 		let read_value = ctx.slot_new(&value_slot, quote!($(ctx.deserialize_call(value_use))?));
 		let boolean =
 			(ctx.resolve)("bool").ok_or_else(|| anyhow!("option needs the `bool` native"))?;
-		let (pinput, poutput, presult) = pds_io();
-		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let (_, poutput, presult) = pds_io();
+		let (poutput, presult) = (&poutput, &presult);
+		let lt = &ctx.lt();
+		let this = &ctx.this();
+		let view_value = ctx.slot_new(&value_slot, quote!($(ctx.names.view_fn(value))(v)));
 		Ok(quote! {
 			$((ctx.args_struct)())
-			pub type Ty = $ty;
-			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+			pub type $this = $ty;
+			pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 				$(ctx.names.serialize(boolean))(&_0.is_some(), output)?;
 				if let Some(v) = _0 {
 					$(ctx.names.serialize(value))(v, output)?;
 				}
 				Ok(())
 			}
-			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+			pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
 				Ok(if $(ctx.names.deserialize(boolean))(input)? {
 					Some($read_value)
 				} else {
 					None
 				})
 			}
-			pub fn size_of(_0: &Ty) -> usize {
+			pub fn size_of$lt(_0: &$this) -> usize {
 				let mut n = $(ctx.names.size_of(boolean))(&_0.is_some());
 				if let Some(v) = _0 { n += $(ctx.names.size_of(value))(v); }
 				n
 			}
+			$(if ctx.view =>
+				pub fn view<'i>(_0: &'i $(ctx.owned_this())) -> Ty<'i> {
+					_0.as_ref().map(|v| $view_value)
+				}
+			)
 		})
 	}
 	fn construct(
@@ -828,6 +906,18 @@ impl NativeCodegen<Rust> for PString {
 	) -> Option<rust::Tokens> {
 		Some(quote!(String))
 	}
+	fn view_borrows(&self, _types: &mir::TypeMap, _native: &mir::NativeType) -> bool {
+		true
+	}
+	fn view_take(&self) -> bool {
+		true
+	}
+	fn view_heap(&self) -> bool {
+		true
+	}
+	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
+		Ok(Some(ctx.into_view_fn(quote!(_0.as_str()))))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let count = ctx.specialization("Count").context("pstring count type")?;
 		let ty = self
@@ -837,6 +927,27 @@ impl NativeCodegen<Rust> for PString {
 		let (pinput, poutput, presult) = pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 		let perror = &rust::import("crate::pds", "Error");
+		if ctx.view {
+			return Ok(quote! {
+				$((ctx.args_struct)())
+				pub type Ty<'i> = &'i str;
+				pub fn serialize<'i>(_0: &Ty<'i>, output: &mut $poutput) -> $presult<()> {
+					$(ctx.names.serialize(count))(&_0.len().try_into().map_err(|_| $perror::InvalidValue)?, output)?;
+					output.write(_0.as_bytes());
+					Ok(())
+				}
+				pub fn deserialize<'i>(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<Ty<'i>> {
+					let count: usize = $(ctx.names.deserialize(count))(input)?.try_into().map_err(|_| $perror::InvalidValue)?;
+					std::str::from_utf8(input.bytes(count)?).map_err(|_| $perror::InvalidValue)
+				}
+				pub fn size_of<'i>(_0: &Ty<'i>) -> usize {
+					$(ctx.names.size_of(count))(&_0.len().try_into().unwrap_or_default()) + _0.len()
+				}
+				pub fn view<'i>(_0: &'i $(ctx.owned_this())) -> Ty<'i> {
+					_0.as_str()
+				}
+			});
+		}
 		Ok(quote! {
 			$((ctx.args_struct)())
 			pub type Ty = $ty;

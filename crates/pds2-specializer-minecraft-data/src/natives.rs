@@ -13,7 +13,9 @@ use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
 use pds2_core::specializer::reflect::{list_of, use_of, variant_of};
 use pds2_core::specializer::{
 	construct_vec, pds_io, vec_of_value, visit_specialization, AstHir, BoxCost, Embed,
-	LowerCx, Names, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor, VALUE,
+	LowerCx, Names, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor, ViewPolicy,
+	into_view_vec, view_vec,
+	VALUE,
 };
 use pds2_specializer_protodef::upgrade::{NativeSig, NativeSigVariant, Upgrade, UpgradeCtx};
 
@@ -45,21 +47,34 @@ impl NativeCodegen<Rust> for TopBitSetTerminatedArray {
 	) -> Option<rust::Tokens> {
 		vec_of_value(native, names)
 	}
+	fn view_policy(&self) -> ViewPolicy {
+		ViewPolicy::Composite
+	}
+	fn view_take(&self) -> bool {
+		true
+	}
+	fn view_heap(&self) -> bool {
+		true
+	}
+	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
+		let value = ctx.specialization("Value").context("topBitSetTerminatedArray value")?;
+		Ok(Some(into_view_vec(ctx, value)))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let value_use = ctx
 			.specialization_use("Value")
 			.context("topBitSetTerminatedArray value")?;
 		let value = value_use.target;
-		let ty = self
-			.inline_ty(ctx.id, ctx.native, ctx.names)
-			.context("topBitSetTerminatedArray type")?;
-		let (pinput, poutput, presult) = pds_io();
-		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let ty = vec_of_value(ctx.native, ctx.names).context("topBitSetTerminatedArray type")?;
+		let (_, poutput, presult) = pds_io();
+		let (poutput, presult) = (&poutput, &presult);
 		let perror = &rust::import("crate::pds", "Error");
+		let lt = &ctx.lt();
+		let this = &ctx.this();
 		Ok(quote! {
 			$((ctx.args_struct)())
-			pub type Ty = $ty;
-			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+			pub type $this = $ty;
+			pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 				if _0.is_empty() {
 					return Err($perror::InvalidValue);
 				}
@@ -80,7 +95,7 @@ impl NativeCodegen<Rust> for TopBitSetTerminatedArray {
 				}
 				Ok(())
 			}
-			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+			pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
 				let mut out = Vec::new();
 				loop {
 					let more = input.peek()? & 0x80 != 0;
@@ -91,11 +106,12 @@ impl NativeCodegen<Rust> for TopBitSetTerminatedArray {
 					}
 				}
 			}
-			pub fn size_of(_0: &Ty) -> usize {
+			pub fn size_of$lt(_0: &$this) -> usize {
 				let mut n = 0;
 				for e in _0.iter() { n += $(ctx.names.size_of(value))(e); }
 				n
 			}
+			$(if ctx.view => $(view_vec(ctx, value)))
 		})
 	}
 }
@@ -189,25 +205,45 @@ impl NativeCodegen<Rust> for RegistryEntryHolder {
 	) -> Result<rust::Tokens> {
 		construct_holder_rust(cx, id, native, c)
 	}
+	fn view_policy(&self) -> ViewPolicy {
+		ViewPolicy::Composite
+	}
+	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
+		let Some((iname, ity_use)) = ctx.native.fields.first() else {
+			bail!("registryEntryHolder needs an inline field from its body");
+		};
+		let (owned, path) = (&ctx.owned_this(), &ctx.into_path());
+		let inline = ctx.slot_new(iname, quote!($(ctx.names.into_view_fn(ity_use.target))(v)));
+		Ok(Some(ctx.into_view_fn(quote! {
+			match _0 {
+				$owned::Id(id) => $path::Id(*id),
+				$owned::Inline(v) => $path::Inline($inline),
+			}
+		})))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let varint = (ctx.resolve)("varint")
 			.ok_or_else(|| anyhow!("registryEntryHolder needs the `varint` native"))?;
-		let (pinput, poutput, presult) = pds_io();
-		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let (_, poutput, presult) = pds_io();
+		let (poutput, presult) = (&poutput, &presult);
+		let lt = &ctx.lt();
+		let this = &ctx.this();
+		let owned = &ctx.owned_this();
 		// the projected use-site body field is the inline (id 0) representation
 		let Some((iname, ity_use)) = ctx.native.fields.first() else {
 			bail!("registryEntryHolder needs an inline field from its body");
 		};
 		let ity = ity_use.target;
 		let read_inline = ctx.slot_new(iname, quote!($(ctx.deserialize_call(ity_use))?));
+		let view_inline = ctx.slot_new(iname, quote!($(ctx.names.view_fn(ity))(v)));
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
-			pub enum Ty {
+			pub enum $this {
 				Id($(ctx.names.ty(varint))),
 				Inline($(ctx.slot_ty(iname, ity))),
 			}
-			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+			pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 				match _0 {
 					Ty::Id(id) => $(ctx.names.serialize(varint))(&(id + 1), output),
 					Ty::Inline(v) => {
@@ -216,7 +252,7 @@ impl NativeCodegen<Rust> for RegistryEntryHolder {
 					}
 				}
 			}
-			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+			pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
 				let n = $(ctx.names.deserialize(varint))(input)?;
 				Ok(if n == 0 {
 					Ty::Inline($read_inline)
@@ -224,12 +260,20 @@ impl NativeCodegen<Rust> for RegistryEntryHolder {
 					Ty::Id(n - 1)
 				})
 			}
-			pub fn size_of(_0: &Ty) -> usize {
+			pub fn size_of$lt(_0: &$this) -> usize {
 				match _0 {
 					Ty::Id(id) => $(ctx.names.size_of(varint))(&(id + 1)),
 					Ty::Inline(v) => $(ctx.names.size_of(varint))(&0) + $(ctx.names.size_of(ity))(v),
 				}
 			}
+			$(if ctx.view =>
+				pub fn view<'i>(_0: &'i $owned) -> Ty<'i> {
+					match _0 {
+						$owned::Id(id) => Ty::Id(*id),
+						$owned::Inline(v) => Ty::Inline($view_inline),
+					}
+				}
+			)
 		})
 	}
 }
@@ -312,11 +356,24 @@ impl Upgrade for UUID {
 	}
 }
 
+fn viewed(how: &'static str) -> NativeSig {
+	NativeSig {
+		view: Some(how),
+		..Default::default()
+	}
+}
+
 pub struct Opaque(pub &'static str);
 
 impl Upgrade for Opaque {
 	fn name(&self) -> String {
 		self.0.to_owned()
+	}
+	fn sig(&self) -> NativeSig {
+		match self.0 {
+			"nbt" | "optionalNbt" => viewed("take"),
+			_ => NativeSig::default(),
+		}
 	}
 }
 
@@ -326,6 +383,9 @@ impl Upgrade for AnonOptionalNbt {
 	fn name(&self) -> String {
 		"anonOptionalNbt".to_owned()
 	}
+	fn sig(&self) -> NativeSig {
+		viewed("take")
+	}
 }
 
 pub struct AnonymousNbt;
@@ -334,6 +394,9 @@ impl Upgrade for AnonymousNbt {
 	fn name(&self) -> String {
 		"anonymousNbt".to_owned()
 	}
+	fn sig(&self) -> NativeSig {
+		viewed("take")
+	}
 }
 
 pub struct LpVec3;
@@ -341,6 +404,9 @@ pub struct LpVec3;
 impl Upgrade for LpVec3 {
 	fn name(&self) -> String {
 		"lpVec3".to_owned()
+	}
+	fn sig(&self) -> NativeSig {
+		viewed("borrow")
 	}
 }
 
@@ -370,24 +436,50 @@ impl NativeCodegen<Rust> for RegistryEntryHolderSet {
 	) -> Result<rust::Tokens> {
 		construct_holder_rust(cx, id, native, c)
 	}
+	fn view_policy(&self) -> ViewPolicy {
+		ViewPolicy::Composite
+	}
+	fn view_heap(&self) -> bool {
+		true
+	}
+	fn view_moves(&self) -> bool {
+		true
+	}
+	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
+		let Some((nname, nty_use)) = ctx.native.fields.first() else {
+			bail!("registryEntryHolderSet needs a named field from its body");
+		};
+		let (owned, path) = (&ctx.owned_this(), &ctx.into_path());
+		let named = ctx.slot_new(nname, quote!($(ctx.names.into_view_fn(nty_use.target))(v)));
+		Ok(Some(ctx.into_view_fn(quote! {
+			match _0 {
+				$owned::Named(v) => $path::Named($named),
+				$owned::Ids(ids) => $path::Ids(::core::mem::take(ids)),
+			}
+		})))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let varint = (ctx.resolve)("varint")
 			.ok_or_else(|| anyhow!("registryEntryHolderSet needs the `varint` native"))?;
-		let (pinput, poutput, presult) = pds_io();
-		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let (_, poutput, presult) = pds_io();
+		let (poutput, presult) = (&poutput, &presult);
+		let lt = &ctx.lt();
+		let this = &ctx.this();
+		let owned = &ctx.owned_this();
 		let Some((nname, nty_use)) = ctx.native.fields.first() else {
 			bail!("registryEntryHolderSet needs a named field from its body");
 		};
 		let nty = nty_use.target;
 		let read_named = ctx.slot_new(nname, quote!($(ctx.deserialize_call(nty_use))?));
+		let view_named = ctx.slot_new(nname, quote!($(ctx.names.view_fn(nty))(v)));
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
-			pub enum Ty {
+			pub enum $this {
 				Named($(ctx.slot_ty(nname, nty))),
 				Ids(Vec<$(ctx.names.ty(varint))>),
 			}
-			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+			pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 				match _0 {
 					Ty::Named(v) => {
 						$(ctx.names.serialize(varint))(&0, output)?;
@@ -402,7 +494,7 @@ impl NativeCodegen<Rust> for RegistryEntryHolderSet {
 					}
 				}
 			}
-			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+			pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
 				let n: usize = $(ctx.names.deserialize(varint))(input)?.try_into().map_err(|_| $(rust::import("crate::pds", "Error"))::InvalidValue)?;
 				Ok(if n == 0 {
 					Ty::Named($read_named)
@@ -414,7 +506,7 @@ impl NativeCodegen<Rust> for RegistryEntryHolderSet {
 					Ty::Ids(ids)
 				})
 			}
-			pub fn size_of(_0: &Ty) -> usize {
+			pub fn size_of$lt(_0: &$this) -> usize {
 				match _0 {
 					Ty::Named(v) => 1 + $(ctx.names.size_of(nty))(v),
 					Ty::Ids(ids) => {
@@ -424,6 +516,14 @@ impl NativeCodegen<Rust> for RegistryEntryHolderSet {
 					}
 				}
 			}
+			$(if ctx.view =>
+				pub fn view<'i>(_0: &'i $owned) -> Ty<'i> {
+					match _0 {
+						$owned::Named(v) => Ty::Named($view_named),
+						$owned::Ids(ids) => Ty::Ids(ids.clone()),
+					}
+				}
+			)
 		})
 	}
 }

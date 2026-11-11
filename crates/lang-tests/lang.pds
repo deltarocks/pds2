@@ -274,6 +274,14 @@ def(Arguments) {
 	field(nested) => Nested(k: ../k);
 };
 
+def(Tree) {
+	export;
+} => container {
+	field(n) => u8;
+
+	field(children) => array(count: ../n) => Tree;
+};
+
 def(Kind) => union(Tag: u8) {
 	variant(a, match: 1);
 

@@ -433,6 +433,8 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 									read_or_const_reference(&meta, from_locals, v, TypeId::default())
 								},
 								lower: &|e, from_locals| lower(&meta, e, from_locals),
+								view: false,
+								take: false,
 							})
 							.with_context(|| format!("typescript codegen for {:?}", ty.name))?
 					}

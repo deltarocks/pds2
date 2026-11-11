@@ -6,6 +6,7 @@ use genco::lang::rust;
 use genco::prelude::*;
 use pds2_core::ast::{Block, FieldRefSegment, Item, Value};
 use pds2_core::generator::common::scalar_of;
+use pds2_core::generator::recursion::{feedback_vertices, Graph};
 use pds2_core::generator::rust::{rname, RustNames};
 use pds2_core::hir::TypeId;
 use pds2_core::mir::{self, Expr, FieldItem, TypeKind, TypeMap};
@@ -263,6 +264,24 @@ enum Conv {
 	Call(String),
 }
 
+struct ConvFn {
+	name: String,
+	from: rust::Tokens,
+	ret: rust::Tokens,
+	body: rust::Tokens,
+}
+impl ConvFn {
+	fn emit(&self, guarded: bool) -> rust::Tokens {
+		let (name, from, ret, body) = (&self.name, &self.from, &self.ret, &self.body);
+		quote! {
+			pub fn $name(v: $from, cx: &mut crate::Session) -> crate::pds::convert::Result<$ret> {
+				$(if guarded => crate::pds::stack::check()?;)
+				$body
+			}
+		}
+	}
+}
+
 struct Gen<'a> {
 	types: &'a TypeMap,
 	names: RustNames<'a>,
@@ -270,7 +289,9 @@ struct Gen<'a> {
 	base: BTreeMap<String, String>,
 	alias_base: BTreeMap<TypeId, String>,
 	fns: RefCell<BTreeMap<(usize, Dir, TypeId, TypeId, bool, Option<String>), String>>,
-	code: RefCell<Vec<rust::Tokens>>,
+	code: RefCell<Vec<ConvFn>>,
+	calls: RefCell<Graph<String>>,
+	current: RefCell<Vec<String>>,
 	errors: RefCell<BTreeSet<String>>,
 	used: RefCell<BTreeSet<String>>,
 	dirty: RefCell<BTreeMap<(usize, Dir, TypeId), bool>>,
@@ -669,10 +690,13 @@ impl<'a> Gen<'a> {
 		}
 		let key = (step.index, dir, from, to, root, rules.map(|r| r.path.clone()));
 		if let Some(name) = self.fns.borrow().get(&key) {
+			self.call(name);
 			return Conv::Call(name.clone());
 		}
 		let name = self.fresh(step, dir, to);
+		self.call(&name);
 		self.fns.borrow_mut().insert(key, name.clone());
+		self.current.borrow_mut().push(name.clone());
 		let (from_ty, to_ty) = (self.names.ty(from), self.names.ty(to));
 		let ret = if root { quote!(Vec<$(&to_ty)>) } else { to_ty.clone() };
 		let mut hooks = Vec::new();
@@ -694,12 +718,20 @@ impl<'a> Gen<'a> {
 				$body
 			}
 		};
-		self.code.borrow_mut().push(quote! {
-			pub fn $(&name)(v: $from_ty, cx: &mut crate::Session) -> crate::pds::convert::Result<$ret> {
-				$body
-			}
+		self.current.borrow_mut().pop();
+		self.code.borrow_mut().push(ConvFn {
+			name: name.clone(),
+			from: from_ty,
+			ret,
+			body,
 		});
 		Conv::Call(name)
+	}
+
+	fn call(&self, callee: &str) {
+		if let Some(caller) = self.current.borrow().last() {
+			self.calls.borrow_mut().entry(caller.clone()).or_default().insert(callee.to_owned());
+		}
 	}
 
 	fn body(
@@ -1248,6 +1280,8 @@ pub fn generate(
 		base,
 		fns: RefCell::default(),
 		code: RefCell::default(),
+		calls: RefCell::default(),
+		current: RefCell::default(),
 		errors: RefCell::default(),
 		used: RefCell::default(),
 		dirty: RefCell::default(),
@@ -1265,6 +1299,7 @@ pub fn generate(
 			.collect()
 	};
 	let mut dispatch = Vec::new();
+	let mut arms = Vec::new();
 	let mut root_names = BTreeSet::new();
 	for (i, rules) in migrations.iter().enumerate() {
 		let Some(rules) = rules else { continue };
@@ -1313,7 +1348,13 @@ pub fn generate(
 							.collect()
 					}
 				};
-				dispatch.push(quote!((Root::$(&variant), $fi, $ti) => { $body }));
+				let arm = format!("step_{}_{fi}_{ti}", variant.to_lowercase());
+				dispatch.push(quote!((Root::$(&variant), $fi, $ti) => $(&arm)(data, cx),));
+				arms.push(quote! {
+					fn $(&arm)(data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
+						$body
+					}
+				});
 			}
 		}
 		let unused: Vec<String> = rules.all.difference(&g.used.borrow()).cloned().collect();
@@ -1361,12 +1402,19 @@ pub fn generate(
 				}
 			}
 			let de = g.names.item(id, "deserialize");
-			inspect.push(quote! {
-				(Root::$(&variant), $i) => {
+			let name = match native(types, id).and_then(union::view) {
+				Some(_) => quote!($(g.names.item(id, "name"))(&p).to_owned()),
+				None => quote! {
+					format!("{p:?}").split(|c| c == '(' || c == ' ').next().unwrap_or_default().to_owned()
+				},
+			};
+			let arm = format!("inspect_{}_{i}", variant.to_lowercase());
+			inspect.push(quote!((Root::$(&variant), $i) => $(&arm)(data),));
+			arms.push(quote! {
+				fn $(&arm)(data: &[u8]) -> std::result::Result<String, String> {
 					let mut input = crate::pds::Input::new(data);
 					let p = $de(&mut input).map_err(|e| format!("{e:?}"))?;
-					let name = format!("{p:?}");
-					let name = name.split(|c| c == '(' || c == ' ').next().unwrap_or_default().to_owned();
+					let name = $name;
 					match input.remaining() {
 						0 => Ok(name),
 						n => Err(format!("{n} bytes left after {name}")),
@@ -1395,7 +1443,8 @@ pub fn generate(
 			}
 		})
 		.collect();
-	let code = g.code.borrow();
+	let guarded = feedback_vertices(&g.calls.borrow());
+	let code: Vec<rust::Tokens> = g.code.borrow().iter().map(|f| f.emit(guarded.contains(&f.name))).collect();
 	let file: rust::Tokens = quote! {
 		pub const VERSIONS: &[&str] = &[$(for v in &versions join(, ) => $(quoted(v)))];
 
@@ -1460,7 +1509,7 @@ pub fn generate(
 
 		pub fn step(root: Root, from: usize, to: usize, data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
 			match (root, from, to) {
-				$(for d in dispatch => $d)
+				$(for d in dispatch join($['\r']) => $d)
 				_ => crate::pds::convert::unconvertible(format!("no step {from} -> {to} for {root:?}")),
 			}
 		}
@@ -1475,7 +1524,7 @@ pub fn generate(
 
 		pub fn inspect(root: Root, version: usize, data: &[u8]) -> std::result::Result<String, String> {
 			match (root, version) {
-				$(for i in inspect => $i)
+				$(for i in inspect join($['\r']) => $i)
 				_ => Err(format!("{root:?} does not exist in {}", VERSIONS[version])),
 			}
 		}
@@ -1538,6 +1587,8 @@ pub fn generate(
 		})
 
 		$(for m in version_mods join($['\n']) => $m)
+
+		$(for a in arms join($['\n']) => $a)
 
 		$(for c in code.iter() join($['\n']) => $c)
 	};

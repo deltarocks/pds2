@@ -98,6 +98,63 @@ mod tests {
 		assert!(roundtrip(t::deserialize, t::serialize, &[8, 0]).is_none());
 	}
 
+	#[test]
+	fn recursion_fails_cleanly_past_stack_budget() {
+		use crate::pds::{stack, Error};
+		use pds_Tree as t;
+		let v = roundtrip(t::deserialize, t::serialize, &[2, 0, 1, 0]).unwrap();
+		assert_eq!(v.children[1].children.len(), 1);
+		let mut deep = vec![1u8; 1 << 20];
+		deep.push(0);
+		let r = stack::budget(256 << 10, || t::deserialize(&mut Input::new(&deep)));
+		assert!(matches!(r, Err(Error::TooDeep)));
+		let shallow = [1, 1, 1, 0];
+		let r = stack::budget(256 << 10, || t::deserialize(&mut Input::new(&shallow)));
+		assert!(r.is_ok());
+	}
+
+	#[test]
+	fn views_borrow_from_input_and_from_owned_values() {
+		use crate::gen::view;
+		let owned = pds_sample_blob::value();
+		let bytes = pds_encoded_blob::value();
+		let range = bytes.as_ptr_range();
+		let parsed = view::pds_Blob::deserialize(&mut Input::new(&bytes)).unwrap();
+		assert_eq!(parsed.name, "pds");
+		assert!(range.contains(&parsed.name.as_ptr()));
+		assert!(range.contains(&parsed.raw.as_ptr()));
+		let adapted = view::pds_Blob::view(&owned);
+		assert_eq!(adapted.name.as_ptr(), owned.name.as_ptr());
+		assert_eq!(adapted, parsed);
+		let mut out = Output::new();
+		view::pds_Blob::serialize(&adapted, &mut out).unwrap();
+		assert_eq!(out.into_inner(), bytes);
+		assert_eq!(view::pds_Blob::size_of(&parsed), bytes.len());
+	}
+
+	#[test]
+	fn into_view_borrows_leaves_and_takes_the_rest() {
+		use crate::gen::view;
+		let blob = pds_sample_blob::value();
+		assert_eq!(view::pds_Blob::view(&blob).name.as_ptr(), blob.name.as_ptr());
+
+		let mut tree = pds_Tree::deserialize(&mut Input::new(&[2, 0, 1, 0])).unwrap();
+		let children = tree.children.as_ptr();
+		let taken = view::pds_Tree::into_view(&mut tree);
+		assert_eq!(taken.children.as_ptr(), children);
+		assert_eq!(taken.children.len(), 2);
+		assert!(tree.children.is_empty());
+	}
+
+	#[test]
+	fn views_keep_unborrowable_fields_owned() {
+		use crate::gen::view;
+		let sample = pds_sample_blob::value();
+		let blob = view::pds_Blob::view(&sample);
+		let n: u8 = blob.n;
+		assert_eq!(n, 3);
+	}
+
 	fn encodes<T: PartialEq + std::fmt::Debug>(
 		value: T,
 		de: fn(&mut Input) -> Result<T>,

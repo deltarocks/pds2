@@ -7,6 +7,8 @@ use crate::hir::TypeId;
 use crate::mir::{TypeKind, TypeMap};
 use crate::specializer::{BoxCost, Embed, Registry, SlotVisitor};
 
+use super::recursion::{self, Graph};
+
 pub type Boxed = BTreeSet<(TypeId, Ident)>;
 
 pub fn visit_type(
@@ -114,64 +116,10 @@ fn same_component(comp: &BTreeMap<TypeId, usize>, e: &Edge) -> bool {
 }
 
 fn components(edges: &[Edge]) -> BTreeMap<TypeId, usize> {
-	let mut adj: BTreeMap<TypeId, Vec<TypeId>> = BTreeMap::new();
+	let mut adj: Graph<TypeId> = BTreeMap::new();
 	for e in edges.iter().filter(|e| e.by_value()) {
-		adj.entry(e.owner).or_default().push(e.target);
+		adj.entry(e.owner).or_default().insert(e.target);
 		adj.entry(e.target).or_default();
 	}
-	let mut t = Tarjan {
-		adj: &adj,
-		index: BTreeMap::new(),
-		low: BTreeMap::new(),
-		stack: Vec::new(),
-		on_stack: BTreeSet::new(),
-		comp: BTreeMap::new(),
-	};
-	for v in adj.keys() {
-		if !t.index.contains_key(v) {
-			t.strong(*v);
-		}
-	}
-	t.comp
-}
-
-struct Tarjan<'a> {
-	adj: &'a BTreeMap<TypeId, Vec<TypeId>>,
-	index: BTreeMap<TypeId, usize>,
-	low: BTreeMap<TypeId, usize>,
-	stack: Vec<TypeId>,
-	on_stack: BTreeSet<TypeId>,
-	comp: BTreeMap<TypeId, usize>,
-}
-impl Tarjan<'_> {
-	fn strong(&mut self, v: TypeId) {
-		let i = self.index.len();
-		self.index.insert(v, i);
-		self.low.insert(v, i);
-		self.stack.push(v);
-		self.on_stack.insert(v);
-		for &w in &self.adj[&v] {
-			if !self.index.contains_key(&w) {
-				self.strong(w);
-				let lw = self.low[&w];
-				let lv = self.low.get_mut(&v).expect("visited");
-				*lv = (*lv).min(lw);
-			} else if self.on_stack.contains(&w) {
-				let iw = self.index[&w];
-				let lv = self.low.get_mut(&v).expect("visited");
-				*lv = (*lv).min(iw);
-			}
-		}
-		if self.low[&v] == self.index[&v] {
-			let c = i;
-			loop {
-				let w = self.stack.pop().expect("v is on the stack");
-				self.on_stack.remove(&w);
-				self.comp.insert(w, c);
-				if w == v {
-					break;
-				}
-			}
-		}
-	}
+	recursion::components(&adj)
 }

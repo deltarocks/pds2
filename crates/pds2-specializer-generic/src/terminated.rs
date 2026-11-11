@@ -11,8 +11,9 @@ use pds2_core::specializer::encode::{const_eq, Args, Encoder, Encoding, Target, 
 use pds2_core::specializer::expr::{Elaborator, ValueModel};
 use pds2_core::specializer::reflect::{list_of, use_of};
 use pds2_core::specializer::{
-	construct_vec, list_value, pds_io, vec_of_value, visit_specialization, AstHir, Embed, LowerCx, Names,
-	NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor, VALUE,
+	construct_vec, list_value, pds_io, vec_of_value, visit_specialization, AstHir, Embed, LowerCx,
+	Names, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor, ViewPolicy, into_view_vec,
+	view_vec, VALUE,
 };
 
 impl ValueModel for Terminated {
@@ -67,27 +68,40 @@ impl NativeCodegen<Rust> for Terminated {
 	) -> Result<rust::Tokens> {
 		construct_vec(cx, c)
 	}
+	fn view_policy(&self) -> ViewPolicy {
+		ViewPolicy::Composite
+	}
+	fn view_take(&self) -> bool {
+		true
+	}
+	fn view_heap(&self) -> bool {
+		true
+	}
+	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
+		let value = ctx.specialization("Value").context("terminated array value")?;
+		Ok(Some(into_view_vec(ctx, value)))
+	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		let value_use = ctx
 			.specialization_use("Value")
 			.context("terminated array value")?;
 		let value = value_use.target;
-		let ty = self
-			.inline_ty(ctx.id, ctx.native, ctx.names)
-			.context("terminated array type")?;
+		let ty = vec_of_value(ctx.native, ctx.names).context("terminated array type")?;
 		let (end_ty, end) = terminator(ctx)?;
-		let (pinput, poutput, presult) = pds_io();
-		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
+		let (_, poutput, presult) = pds_io();
+		let (poutput, presult) = (&poutput, &presult);
+		let lt = &ctx.lt();
+		let this = &ctx.this();
 		Ok(quote! {
 			$((ctx.args_struct)())
-			pub type Ty = $ty;
-			pub fn serialize(_0: &Ty, output: &mut $poutput) -> $presult<()> {
+			pub type $this = $ty;
+			pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 				for e in _0.iter() {
 					$(ctx.names.serialize(value))(e, output)?;
 				}
 				$(ctx.names.serialize(end_ty))(&$(&end), output)
 			}
-			pub fn deserialize(input: &mut $pinput, $((ctx.args_param)())) -> $presult<Ty> {
+			pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
 				let mut out = Vec::new();
 				loop {
 					let at = input.offset();
@@ -98,11 +112,12 @@ impl NativeCodegen<Rust> for Terminated {
 					out.push($(ctx.deserialize_call(value_use))?);
 				}
 			}
-			pub fn size_of(_0: &Ty) -> usize {
+			pub fn size_of$lt(_0: &$this) -> usize {
 				let mut n = $(ctx.names.size_of(end_ty))(&$(&end));
 				for e in _0.iter() { n += $(ctx.names.size_of(value))(e); }
 				n
 			}
+			$(if ctx.view => $(view_vec(ctx, value)))
 		})
 	}
 }

@@ -5,7 +5,7 @@ envoy_roots := "envoy/config/cluster/v3/cluster.proto envoy/extensions/upstreams
 
 lang:
 	rm -rf crates/lang-tests/src/gen ts/lang-tests/gen
-	cargo run compile crates/lang-tests/lang.pds rust --to crates/lang-tests/src/gen
+	cargo run compile crates/lang-tests/lang.pds rust --to crates/lang-tests/src/gen --view ''
 	cargo run compile crates/lang-tests/lang.pds typescript --to ts/lang-tests/gen
 
 descriptor-set:

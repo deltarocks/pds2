@@ -97,6 +97,21 @@ pub trait Names<L: Lang> {
 	fn slot_new(&self, owner: TypeId, slot: &Ident, value: Tokens<L>) -> Tokens<L>;
 	fn scalar(&self, id: TypeId) -> Option<Scalar>;
 	fn item(&self, id: TypeId, name: &str) -> Tokens<L>;
+	fn owned(&self, id: TypeId) -> Tokens<L> {
+		self.ty(id)
+	}
+	fn view_fn(&self, id: TypeId) -> Tokens<L> {
+		self.item(id, "view")
+	}
+	fn into_view_fn(&self, id: TypeId) -> Tokens<L> {
+		self.item(id, "into_view")
+	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewPolicy {
+	Opaque,
+	Composite,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -149,6 +164,8 @@ pub struct NativeCodegenCtx<'a, L: Lang> {
 	pub virtual_used: &'a dyn Fn(&str) -> bool,
 	pub read: &'a dyn Fn(&mir::Expr, bool) -> Tokens<L>,
 	pub lower: &'a dyn Fn(&mir::Expr, bool) -> Result<Tokens<L>>,
+	pub view: bool,
+	pub take: bool,
 }
 
 pub struct LowerCx<'a, L: Lang> {
@@ -188,6 +205,48 @@ impl<L: Lang> NativeCodegenCtx<'_, L> {
 			.iter()
 			.find(|(n, _)| n.as_str() == name)
 			.map(|(_, t)| t.target)
+	}
+}
+
+impl NativeCodegenCtx<'_, Rust> {
+	pub fn lt(&self) -> rust::Tokens {
+		if self.view {
+			quote!(<'i>)
+		} else {
+			quote!()
+		}
+	}
+	pub fn this(&self) -> rust::Tokens {
+		quote!(Ty$(self.lt()))
+	}
+	pub fn input(&self) -> rust::Tokens {
+		quote!($(rust::import("crate::pds", "Input"))$(self.lt()))
+	}
+	pub fn owned_this(&self) -> rust::Tokens {
+		self.names.owned(self.id)
+	}
+	pub fn into_path(&self) -> rust::Tokens {
+		if self.take {
+			self.owned_this()
+		} else {
+			quote!(Ty)
+		}
+	}
+	pub fn into_view_fn(&self, body: rust::Tokens) -> rust::Tokens {
+		let owned = self.owned_this();
+		if self.take {
+			quote! {
+				pub fn into_view(_0: &mut $(&owned)) -> $(&owned) {
+					$body
+				}
+			}
+		} else {
+			quote! {
+				pub fn into_view<'i>(_0: &'i mut $(&owned)) -> Ty<'i> {
+					$body
+				}
+			}
+		}
 	}
 }
 
@@ -261,6 +320,24 @@ pub trait NativeCodegen<L: Lang> {
 	fn wraps_nullable(&self, _native: &mir::NativeType, _slot: &Ident) -> bool {
 		false
 	}
+	fn view_policy(&self) -> ViewPolicy {
+		ViewPolicy::Opaque
+	}
+	fn view_borrows(&self, _types: &mir::TypeMap, _native: &mir::NativeType) -> bool {
+		false
+	}
+	fn view_take(&self) -> bool {
+		false
+	}
+	fn view_heap(&self) -> bool {
+		false
+	}
+	fn view_moves(&self) -> bool {
+		false
+	}
+	fn into_view(&self, _ctx: &NativeCodegenCtx<L>) -> Result<Option<Tokens<L>>> {
+		Ok(None)
+	}
 }
 
 pub const VALUE: &str = "Value";
@@ -297,6 +374,26 @@ pub fn visit_fields(native: &mir::NativeType, embed: Embed, v: &mut dyn SlotVisi
 pub fn vec_of_value(native: &mir::NativeType, names: &dyn Names<Rust>) -> Option<rust::Tokens> {
 	let value = specialization_use(native, VALUE)?.target;
 	Some(quote!(Vec<$(names.ty(value))>))
+}
+
+pub fn byte_scalar(types: &mir::TypeMap, value: TypeId) -> Option<&'static str> {
+	match crate::generator::common::scalar_of(types, value) {
+		Some(Scalar::U8) => Some("u8"),
+		Some(Scalar::I8) => Some("i8"),
+		_ => None,
+	}
+}
+
+pub fn view_vec(ctx: &NativeCodegenCtx<Rust>, value: TypeId) -> rust::Tokens {
+	quote! {
+		pub fn view<'i>(_0: &'i $(ctx.owned_this())) -> Ty<'i> {
+			_0.iter().map(|e| $(ctx.names.view_fn(value))(e)).collect()
+		}
+	}
+}
+
+pub fn into_view_vec(ctx: &NativeCodegenCtx<Rust>, value: TypeId) -> rust::Tokens {
+	ctx.into_view_fn(quote!(_0.iter_mut().map(|e| $(ctx.names.into_view_fn(value))(e)).collect()))
 }
 
 #[derive(Default)]

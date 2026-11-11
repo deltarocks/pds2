@@ -49,6 +49,10 @@ pub struct CompileArgs {
 	/// Where to write generated files to
 	#[arg(long)]
 	pub to: Option<PathBuf>,
+
+	/// Also generate borrowing views (`view/`) of the types under NAMESPACE (rust only)
+	#[arg(long, value_name = "NAMESPACE")]
+	pub view: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -82,6 +86,7 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 		print_mir,
 		consts,
 		to,
+		view,
 	} = args;
 	let data = std::fs::read_to_string(from)?;
 	let mut parsed = ast::parse(&data)?;
@@ -114,6 +119,12 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 
 	let mut out = Default::default();
 	GeneratorTypes::from(generator).generator()(&mir, &mut out, reg)?;
+	if let Some(namespace) = &view {
+		let Target::Rust = generator else {
+			bail!("--view is only supported for rust");
+		};
+		pds2_core::generator::rust::view_generator(&mir, &mut out, reg, namespace)?;
+	}
 
 	if let Some(to) = &to {
 		std::fs::create_dir_all(to)?;
@@ -122,6 +133,9 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 		let mut file = to.clone();
 		if let Some(file) = &mut file {
 			file.push(_file);
+			if let Some(parent) = file.parent() {
+				std::fs::create_dir_all(parent)?;
+			}
 		}
 		let out = value; /*dprint_core::formatting::format(
 				 || value,

@@ -55,7 +55,7 @@ pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
                 out.weak_dependency.push(pds_int32::deserialize(input, )?);
             } }
             15 => { expect(wire, 2)?; out.option_dependency.push({ let mut sub = len(input)?; pds_string::deserialize(&mut sub, )? }); }
-            4 => { expect(wire, 2)?; out.message_type.push({ let mut sub = len(input)?; pds_google_protobuf_DescriptorProto::deserialize(&mut sub, )? }); }
+            4 => { expect(wire, 2)?; out.message_type.push({ let mut sub = len(input)?; pds_google_protobuf_DescriptorProto::deserialize_guarded(&mut sub, )? }); }
             5 => { expect(wire, 2)?; out.enum_type.push({ let mut sub = len(input)?; pds_google_protobuf_EnumDescriptorProto::deserialize(&mut sub, )? }); }
             6 => { expect(wire, 2)?; out.service.push({ let mut sub = len(input)?; pds_google_protobuf_ServiceDescriptorProto::deserialize(&mut sub, )? }); }
             7 => { expect(wire, 2)?; out.extension.push({ let mut sub = len(input)?; pds_google_protobuf_FieldDescriptorProto::deserialize(&mut sub, )? }); }
@@ -76,7 +76,7 @@ pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
     for v in &_0.dependency { write_key(output, 3, 2); write_len(output, pds_string::size_of(v));
     pds_string::serialize(v, output)?; }
     for v in &_0.message_type { write_key(output, 4, 2); write_len(output, pds_google_protobuf_DescriptorProto::size_of(v));
-    pds_google_protobuf_DescriptorProto::serialize(v, output)?; }
+    pds_google_protobuf_DescriptorProto::serialize_guarded(v, output)?; }
     for v in &_0.enum_type { write_key(output, 5, 2); write_len(output, pds_google_protobuf_EnumDescriptorProto::size_of(v));
     pds_google_protobuf_EnumDescriptorProto::serialize(v, output)?; }
     for v in &_0.service { write_key(output, 6, 2); write_len(output, pds_google_protobuf_ServiceDescriptorProto::size_of(v));
