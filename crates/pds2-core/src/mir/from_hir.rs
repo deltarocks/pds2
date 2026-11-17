@@ -133,6 +133,7 @@ impl Definition {
 				.collect(),
 			param_types,
 			kind: TypeKind::from_hir(&hir.kind)?,
+			derives: hir.derives.clone(),
 		})
 	}
 }

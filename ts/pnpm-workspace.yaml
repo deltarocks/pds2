@@ -1,0 +1,4 @@
+packages:
+  - pds-bytes-runtime
+
+enableGlobalVirtualStore: true

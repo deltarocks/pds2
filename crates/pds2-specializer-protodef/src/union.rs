@@ -11,6 +11,7 @@ use pds2_core::specializer::{
 	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
 	Projection, SlotVisitor, ViewPolicy,
 };
+use crate::natives::{is_constant, sized_count};
 use crate::upgrade::{NativeSig, NativeSigVariant, Upgrade};
 use pds2_core::ast::{FieldRefSegment, Ident};
 use pds2_core::generator::common::sanitize;
@@ -583,8 +584,18 @@ impl NativeCodegen<Rust> for Union {
 			} else {
 				let boxed = ctx.boxed(variant);
 				variants_decl.push(quote!($(&v)($(payload_ty(vty.target, boxed))),));
-				ser_arms
-					.push(quote!(Ty::$(&v)(__v) => $(names.serialize(vty.target))(__v, output),));
+				let check = match sized_count(ctx.types, vty).filter(|e| is_constant(e)) {
+					Some(count) => quote! {
+						$(names.item(vty.target, "check_count"))(__v, $((ctx.read)(count, false)))?;
+					},
+					None => quote!(),
+				};
+				ser_arms.push(quote! {
+					Ty::$(&v)(__v) => {
+						$check
+						$(names.serialize(vty.target))(__v, output)
+					}
+				});
 				size_arms.push(quote!(Ty::$(&v)(__v) => $(names.size_of(vty.target))(__v),));
 				vtag_arms.push(quote!(Ty::$(&v)(_) => $(tag_value(value)?),));
 				assert_arms.push(quote!(Ty::$(&v)(_) => $cond,));
@@ -641,7 +652,7 @@ impl NativeCodegen<Rust> for Union {
 		let expose_tag = is_inline || (ctx.virtual_used)("tag") || !ctx.cast_to.is_empty();
 		Ok(quote! {
 			$((ctx.args_struct)())
-			#[derive(Debug, Clone, PartialEq)]
+			$(ctx.derive())
 			pub enum $(ctx.nominal()) {
 				$(for v in &variants_decl join($['\r']) => $v)
 			}
@@ -813,8 +824,14 @@ impl NativeCodegen<JavaScript> for Union {
 				});
 			} else {
 				variants.push(quote!({ kind: $(&kind); value: $(names.ty(vty.target)) }));
+				let check = match sized_count(ctx.types, vty).filter(|e| is_constant(e)) {
+					Some(count) => quote! {
+						$(names.item(vty.target, "check_count"))(_0.value, $((ctx.read)(count, false)));
+					},
+					None => quote!(),
+				};
 				ser.push(
-					quote!(case $(&kind): $(names.serialize(vty.target))(_0.value, output); return;),
+					quote!(case $(&kind): $check $(names.serialize(vty.target))(_0.value, output); return;),
 				);
 				size.push(
 					quote!(case $(&kind): return __n + $(names.size_of(vty.target))(_0.value);),

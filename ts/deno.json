@@ -1,4 +1,5 @@
 {
+	"exclude": ["**/dist", "pnpm-lock.yaml"],
 	"fmt": {
 		"useTabs": true,
 		"lineWidth": 100

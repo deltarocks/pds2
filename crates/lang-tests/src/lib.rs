@@ -227,6 +227,7 @@ mod tests {
 		encoded_like_runtime!(sample_loop, encoded_loop);
 		encoded_like_runtime!(sample_top_bits, encoded_top_bits);
 		encoded_like_runtime!(sample_arguments, encoded_arguments);
+		encoded_like_runtime!(sample_mapped, encoded_mapped);
 		let widened = gen::encoded_widened::value();
 		let v = roundtrip(gen::widened::deserialize, gen::widened::serialize, &widened).unwrap();
 		assert_eq!(v.items, vec![1, 2, 3, 0xffff]);
@@ -246,5 +247,33 @@ mod tests {
 		assert_eq!(gen::decoded_loop::value(), gen::sample_loop::value());
 		assert_eq!(gen::decoded_top_bits::value(), gen::sample_top_bits::value());
 		assert_eq!(gen::decoded_arguments::value(), gen::sample_arguments::value());
+		assert_eq!(gen::decoded_mapped::value(), gen::sample_mapped::value());
+	}
+
+	#[test]
+	fn sized_lengths_are_checked_on_serialize() {
+		let mut blob = gen::sample_blob::value();
+		blob.fixed.pop();
+		assert!(gen::blob::serialize(&blob, &mut Output::new()).is_err());
+		let short = gen::FixedArm::Four(vec![1, 2, 3]);
+		assert!(gen::fixed_arm::serialize(&short, &mut Output::new()).is_err());
+		let exact = gen::FixedArm::Four(vec![1, 2, 3, 4]);
+		assert!(gen::fixed_arm::serialize(&exact, &mut Output::new()).is_ok());
+	}
+
+	#[test]
+	fn map_rejects_duplicate_keys() {
+		use gen::mapped as t;
+		let bytes = [2, 1, b'a', 0, 1, 1, b'a', 0, 2];
+		assert!(t::deserialize(&mut Input::new(&bytes)).is_err());
+	}
+
+	#[test]
+	fn def_derives_extend_generated_ones() {
+		fn copy_eq<T: Copy + Eq>(v: T) -> (T, T) {
+			(v, v)
+		}
+		let (a, b) = copy_eq(gen::Kind::B(3));
+		assert_eq!(a, b);
 	}
 }

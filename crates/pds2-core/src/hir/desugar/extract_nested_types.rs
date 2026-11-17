@@ -100,6 +100,7 @@ impl Visitor for TypeReceiver {
 			params: collector.params,
 			kind: vty,
 			export: false,
+			derives: Vec::new(),
 		});
 		Ok(())
 	}

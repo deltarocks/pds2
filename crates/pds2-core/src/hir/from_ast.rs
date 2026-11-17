@@ -265,6 +265,7 @@ impl Type {
 		let mut param_types = BTreeMap::new();
 		let mut types = BTreeMap::new();
 		let mut export = false;
+		let mut derives = Vec::new();
 		for stmt in block.statements {
 			let (_attrs, item, mut items) = stmt.pop_item()?;
 			match item.name.expect_simple_name()?.as_str() {
@@ -281,6 +282,16 @@ impl Type {
 					item.args.verify_unused()?;
 					ensure!(!export, "export set twice");
 					export = true;
+				}
+				"derive" => {
+					ensure!(items.is_empty(), "derive has no items");
+					ensure!(item.args.positional_count() > 0, "derive needs at least one trait");
+					for i in 0..item.args.positional_count() {
+						let name: Ident = item.args.arg(i, "derived trait")?;
+						ensure!(!derives.contains(&name), "derive {name:?} set twice");
+						derives.push(name);
+					}
+					item.args.verify_unused()?;
 				}
 				"type" => {
 					let name: Ident = item.args.arg(0, "generic name")?;
@@ -311,6 +322,7 @@ impl Type {
 			param_types,
 			kind: TypeKind::from_ast(value, items)?,
 			export,
+			derives,
 		})
 	}
 }
@@ -587,6 +599,7 @@ impl Namespace {
 								params: self.params,
 								param_types: self.param_types,
 								export: false,
+								derives: Vec::new(),
 							}
 						}
 					}

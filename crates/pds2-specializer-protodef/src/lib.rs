@@ -9,7 +9,7 @@ pub mod upgrade;
 mod upgraders;
 
 use container::Container;
-use natives::{Array, Bitfield, Bitflags, Buffer, OptionP, PString};
+use natives::{Array, Bitfield, Bitflags, Buffer, MapP, OptionP, PString};
 use union::Union;
 pub use upgrade::{upgrade, Upgrade, UpgradeRegistry};
 use upgraders::*;
@@ -35,6 +35,13 @@ pub fn register(reg: &mut Registry) {
 	reg.register_codegen::<JavaScript>("array", Array);
 	reg.register_value("array", Array);
 	reg.register_encoder("array", Array);
+
+	reg.register_asthir("map", MapP);
+	reg.register_layout("map", MapP);
+	reg.register_codegen::<Rust>("map", MapP);
+	reg.register_codegen::<JavaScript>("map", MapP);
+	reg.register_value("map", MapP);
+	reg.register_encoder("map", MapP);
 
 	reg.register_layout("option", OptionP);
 	reg.register_codegen::<Rust>("option", OptionP);

@@ -105,6 +105,15 @@ def_native(array) {
 	};
 };
 
+@specializer map
+def_native(map) {
+	type(Count);
+
+	type(Key);
+
+	type(Value);
+};
+
 @specializer option
 def_native(option) {
 	type(Value);
@@ -282,7 +291,9 @@ def(Tree) {
 	field(children) => array(count: ../n) => Tree;
 };
 
-def(Kind) => union(Tag: u8) {
+def(Kind) {
+	derive(Copy, Eq);
+} => union(Tag: u8) {
 	variant(a, match: 1);
 
 	variant(b, match: 2) => u8;
@@ -355,6 +366,26 @@ def(Blob) {
 
 	field(rest) => bytes;
 };
+
+def(FixedArm) {
+	export;
+} => union(Tag: u8) {
+	variant(four, match: 0) => buffer(count: 4);
+};
+
+def(Mapped) {
+	export;
+} => container {
+	field(entries) => map(Count: varint, Key: pstring(Count: u8)) => u16;
+};
+
+def(sample_mapped) => const(value: Mapped(entries: [(key: "a", value: 1), (key: "bc", value: 513)]));
+
+def(encoded_mapped) => const(
+	value: serialized(Mapped(entries: [(key: "a", value: 1), (key: "bc", value: 513)])),
+) => bytes;
+
+def(decoded_mapped) => const(value: Mapped(deserialized(b"\x02\x01a\x00\x01\x02bc\x02\x01")));
 
 def(Holders) {
 	export;

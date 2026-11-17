@@ -1,4 +1,4 @@
-export { pds_void } from "../pds-runtime/mod.ts";
+export { pds_void } from "../pds-bytes-runtime/mod.ts";
 export {
 	pds_bool,
 	pds_bytes,
@@ -15,4 +15,4 @@ export {
 	pds_string,
 	pds_uint32,
 	pds_uint64,
-} from "../pds-runtime/protobuf.ts";
+} from "../pds-bytes-runtime/protobuf.ts";

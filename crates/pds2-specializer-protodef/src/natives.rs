@@ -15,7 +15,7 @@ use pds2_core::specializer::reflect::{
 	encode_items, list_of, record_fields, record_of, use_of, variant_name,
 };
 use pds2_core::specializer::{
-	construct_vec, list_value, pds_io, specialization_use, vec_of_value, visit_fields,
+	construct_vec, list_value, param_ty, pds_io, specialization_use, vec_of_value, visit_fields,
 	visit_specialization, AstHir, BoxCost, Embed, LowerCx, Members, Names, NativeCodegen,
 	NativeCodegenCtx, NativeLayout, SlotVisitor, ViewPolicy, byte_scalar, into_view_vec, view_vec,
 	VALUE,
@@ -164,7 +164,7 @@ impl NativeCodegen<Rust> for Bitfield {
 
 		Ok(quote! {
 			$((ctx.args_struct)())
-			#[derive(Debug, Clone, PartialEq)]
+			$(ctx.derive())
 			pub struct $(ctx.nominal()) {
 				$(for (e, (_, ty)) in entries.iter().zip(ctx.native.fields.iter()) join($['\r']) =>
 					pub $(fname(e)): $(ctx.names.ty(ty.target)),
@@ -298,7 +298,7 @@ impl NativeCodegen<Rust> for Bitflags {
 
 		Ok(quote! {
 			$((ctx.args_struct)())
-			#[derive(Debug, Clone, PartialEq)]
+			$(ctx.derive())
 			pub struct $(ctx.nominal()) {
 				$(for (name, ty) in ctx.native.fields.iter() join($['\r']) =>
 					pub $(ctx.field(name.as_str())): $(ctx.names.ty(ty.target)),
@@ -517,6 +517,7 @@ impl NativeCodegen<Rust> for Array {
 					"array::sized needs a `count` argument"
 				);
 				quote! {
+					$(check_count_rust(ctx))
 					pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 						$(&check_size)
 						for e in _0.iter() {
@@ -620,6 +621,250 @@ impl Upgrade for Array {
 	}
 }
 
+pub struct MapP;
+
+pub const KEY: &str = "Key";
+
+pub fn map_pairs(c: &Construction) -> Result<Vec<(&Expr, &Expr)>> {
+	list_of(c)?
+		.iter()
+		.map(|e| match e {
+			Expr::List(pair) if pair.len() == 2 => Ok((&pair[0], &pair[1])),
+			e => bail!("map entry is a key-value pair, got {e:?}"),
+		})
+		.collect()
+}
+
+impl NativeLayout for MapP {
+	fn visit(&self, native: &mir::NativeType, v: &mut dyn SlotVisitor) {
+		visit_specialization(native, KEY, Embed::Indirect, v);
+		visit_specialization(native, VALUE, Embed::Indirect, v);
+	}
+}
+
+impl ValueModel for MapP {
+	fn construct(
+		&self,
+		cx: &Elaborator,
+		id: TypeId,
+		native: &mir::NativeType,
+		value: &mir::Expr,
+	) -> Result<mir::Construction> {
+		let mir::Expr::List(entries) = value else {
+			bail!("{} is written as a list `[(key: ..., value: ...), ...]`", cx.name(id));
+		};
+		let key = use_of(native, KEY)?.target;
+		let value = use_of(native, VALUE)?.target;
+		let entries = entries
+			.iter()
+			.enumerate()
+			.map(|(i, e)| {
+				let mir::Expr::Record(fields) = e else {
+					bail!("entry {i} is written as `(key: ..., value: ...)`");
+				};
+				let field = |name: &str| {
+					fields
+						.iter()
+						.find(|(n, _)| n.as_str() == name)
+						.map(|(_, e)| e.clone())
+						.ok_or_else(|| anyhow!("entry {i} needs {name:?}"))
+				};
+				ensure!(fields.len() == 2, "entry {i} has only `key` and `value`");
+				Ok(mir::Expr::List(vec![
+					cx.coerce(field("key")?, key).with_context(|| format!("entry {i} key"))?,
+					cx.coerce(field("value")?, value).with_context(|| format!("entry {i} value"))?,
+				]))
+			})
+			.collect::<Result<_>>()?;
+		Ok(mir::Construction::List(entries))
+	}
+}
+
+impl NativeCodegen<Rust> for MapP {
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		native: &mir::NativeType,
+		names: &dyn Names<Rust>,
+	) -> Option<rust::Tokens> {
+		let key = specialization_use(native, KEY)?.target;
+		let value = specialization_use(native, VALUE)?.target;
+		Some(quote!($(rust::import("std::collections", "BTreeMap"))<$(names.ty(key)), $(names.ty(value))>))
+	}
+	fn construct(
+		&self,
+		cx: &LowerCx<Rust>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<rust::Tokens> {
+		let pairs = map_pairs(c)?
+			.into_iter()
+			.map(|(k, v)| Ok(quote!(($((cx.lower)(k)?), $((cx.lower)(v)?)))))
+			.collect::<Result<Vec<_>>>()?;
+		Ok(quote!($(rust::import("std::collections", "BTreeMap"))::from([$(for p in pairs join(, ) => $p)])))
+	}
+	fn view_take(&self) -> bool {
+		true
+	}
+	fn view_heap(&self) -> bool {
+		true
+	}
+	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
+		let key_use = ctx.specialization_use(KEY).context("map key type")?;
+		let value_use = ctx.specialization_use(VALUE).context("map value type")?;
+		let (key, value) = (key_use.target, value_use.target);
+		let count = ctx.specialization("Count").context("map count type")?;
+		let ty = self
+			.inline_ty(ctx.id, ctx.native, ctx.names)
+			.context("map type")?;
+		let lt = &ctx.lt();
+		let this = &ctx.this();
+		let enc = Encoding::new(ctx.elab);
+		let expect = match enc.min_size(key) + enc.min_size(value) {
+			0 => None,
+			1 => Some(quote!(input.expect(count)?;)),
+			n => Some(quote!(input.expect(count.saturating_mul($(n.to_string())))?;)),
+		};
+		let (_, poutput, presult) = pds_io();
+		let (poutput, presult) = (&poutput, &presult);
+		let perror = &rust::import("crate::pds", "Error");
+		Ok(quote! {
+			$((ctx.args_struct)())
+			pub type $this = $ty;
+			pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
+				$(ctx.names.serialize(count))(&_0.len().try_into().map_err(|_| $perror::InvalidValue)?, output)?;
+				for (k, v) in _0.iter() {
+					$(ctx.names.serialize(key))(k, output)?;
+					$(ctx.names.serialize(value))(v, output)?;
+				}
+				Ok(())
+			}
+			pub fn deserialize$lt(input: &mut $(ctx.input()), $((ctx.args_param)())) -> $presult<$this> {
+				let count: usize = $(ctx.names.deserialize(count))(input)?.try_into().map_err(|_| $perror::InvalidValue)?;
+				$expect
+				let mut out = $(rust::import("std::collections", "BTreeMap"))::new();
+				for _ in 0..count {
+					let k = $(ctx.deserialize_call(key_use))?;
+					let v = $(ctx.deserialize_call(value_use))?;
+					if out.insert(k, v).is_some() {
+						return Err($perror::InvalidValue);
+					}
+				}
+				Ok(out)
+			}
+			pub fn size_of$lt(_0: &$this) -> usize {
+				let mut n = $(ctx.names.size_of(count))(&_0.len().try_into().unwrap_or_default());
+				for (k, v) in _0.iter() {
+					n += $(ctx.names.size_of(key))(k);
+					n += $(ctx.names.size_of(value))(v);
+				}
+				n
+			}
+		})
+	}
+}
+
+impl AstHir for MapP {
+	fn fields(&self, ctx: &HirSpecializerCtx) -> Result<Vec<(Ident, hir::TypeKind)>> {
+		ensure!(ctx.body.is_empty(), "map does not accept a body, got {:?}", ctx.body);
+		ensure!(
+			ctx.types.contains_key(&Ident::new("Count")),
+			"map needs a `Count:` type binding"
+		);
+		ensure!(
+			ctx.types.contains_key(&Ident::new(KEY)),
+			"map needs a `Key:` type binding"
+		);
+		Ok(vec![])
+	}
+}
+
+impl Encoder for MapP {
+	fn min_size(&self, cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
+		counted_min_size(cx, native)
+	}
+	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
+		let pairs = map_pairs(v.c)?;
+		let count = use_of(v.native, "Count")?;
+		let n = cx.number(count.target, pairs.len() as i128)?;
+		let scope = v.scope();
+		cx.encode_use(count, &n, &scope, out).context("count")?;
+		let (key, value) = (use_of(v.native, KEY)?, use_of(v.native, VALUE)?);
+		let mut seen = Vec::new();
+		for (i, (k, e)) in pairs.into_iter().enumerate() {
+			let mut kb = Vec::new();
+			cx.encode_use(key, k, &scope, &mut kb)
+				.with_context(|| format!("entry {i} key"))?;
+			ensure!(!seen.contains(&kb), "entry {i} repeats key {}", describe(k));
+			out.extend_from_slice(&kb);
+			seen.push(kb);
+			cx.encode_use(value, e, &scope, out)
+				.with_context(|| format!("entry {i} value"))?;
+		}
+		Ok(())
+	}
+	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
+		let scope = t.scope();
+		let n = cx
+			.decode_use(use_of(t.native, "Count")?, &scope, input)
+			.context("count")?;
+		let n = cx.count(&n).context("count")?;
+		let (key, value) = (use_of(t.native, KEY)?, use_of(t.native, VALUE)?);
+		let entries = (0..n)
+			.map(|i| {
+				let k = cx
+					.decode_use(key, &scope, input)
+					.with_context(|| format!("entry {i} key"))?;
+				let v = cx
+					.decode_use(value, &scope, input)
+					.with_context(|| format!("entry {i} value"))?;
+				Ok(Expr::List(vec![k, v]))
+			})
+			.collect::<Result<_>>()?;
+		Ok(Construction::List(entries))
+	}
+}
+
+pub fn sized_count<'a>(types: &mir::TypeMap, ty: &'a mir::Type) -> Option<&'a Expr> {
+	let mir::TypeKind::Native(n) = &types.0.get(&ty.target)?.kind else {
+		return None;
+	};
+	match n.specializer.as_ref().map(|(s, v)| (s.as_str(), v.as_str())) {
+		Some(("buffer" | "array", "sized")) => {}
+		_ => return None,
+	}
+	ty.args.iter().find(|(n, _)| n.as_str() == "count").map(|(_, e)| e)
+}
+
+pub fn is_constant(e: &Expr) -> bool {
+	let mut constant = true;
+	e.walk(&mut |e| {
+		if matches!(e, Expr::Field(_) | Expr::Var(..)) {
+			constant = false;
+		}
+	});
+	constant
+}
+
+fn check_count_rust(ctx: &NativeCodegenCtx<Rust>) -> rust::Tokens {
+	let (_, _, presult) = pds_io();
+	let perror = &rust::import("crate::pds", "Error");
+	let count = ctx
+		.params
+		.iter()
+		.find(|(n, _)| n.as_str() == "count")
+		.map_or_else(|| quote!(usize), |(_, id)| param_ty(ctx, *id));
+	quote! {
+		pub fn check_count$(ctx.lt())(_0: &$(ctx.this()), count: &$count) -> $presult<()> {
+			if usize::try_from(*count).ok() != Some(_0.len()) {
+				return Err($perror::InvalidValue);
+			}
+			Ok(())
+		}
+	}
+}
+
 pub struct Buffer;
 
 impl NativeLayout for Buffer {
@@ -714,6 +959,7 @@ impl NativeCodegen<Rust> for Buffer {
 			}
 			"sized" => {
 				quote! {
+					$(check_count_rust(ctx))
 					pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 						$write_bytes
 						Ok(())

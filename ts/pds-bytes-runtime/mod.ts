@@ -52,7 +52,7 @@ export class Input {
 		this.#offset = offset;
 	}
 
-	read_bytes(n: number): Uint8Array {
+	read_bytes(n: number): Uint8Array<ArrayBuffer> {
 		if (n > this.remaining()) {
 			throw new PdsError("NotEnoughData");
 		}
@@ -64,7 +64,7 @@ export class Input {
 		return out;
 	}
 
-	read_rest(): Uint8Array {
+	read_rest(): Uint8Array<ArrayBuffer> {
 		return this.read_bytes(this.remaining());
 	}
 
@@ -105,7 +105,7 @@ export class Output {
 		this.#buf[this.#len++] = byte & 0xff;
 	}
 
-	into_inner(): Uint8Array {
+	into_inner(): Uint8Array<ArrayBuffer> {
 		return this.#buf.slice(0, this.#len);
 	}
 }
@@ -116,6 +116,17 @@ export function equal(a: unknown, b: unknown): boolean {
 	}
 	if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
 		return false;
+	}
+	if (a instanceof Map || b instanceof Map) {
+		if (!(a instanceof Map && b instanceof Map) || a.size !== b.size) {
+			return false;
+		}
+		for (const [k, v] of a) {
+			if (!b.has(k) || !equal(v, b.get(k))) {
+				return false;
+			}
+		}
+		return true;
 	}
 	if (ArrayBuffer.isView(a) || Array.isArray(a)) {
 		const x = a as ArrayLike<unknown>;

@@ -9,9 +9,89 @@ use pds2_core::specializer::ts::{
 	array_ty, collect, construct_array, int_as, pds, read_count, value_of, wide, Ctx,
 	Tokens,
 };
-use pds2_core::specializer::{LowerCx, Names, NativeCodegen, VALUE};
+use pds2_core::specializer::{specialization_use, LowerCx, Names, NativeCodegen, VALUE};
 
-use crate::natives::{bitfield_entries, Array, Bitfield, Bitflags, Buffer, OptionP, PString};
+use crate::natives::{
+	bitfield_entries, map_pairs, Array, Bitfield, Bitflags, Buffer, MapP, OptionP, PString, KEY,
+};
+
+fn check_count_js(ctx: &Ctx) -> Tokens {
+	let perror = &pds(ctx.names, "PdsError");
+	quote! {
+		export function check_count(_0: Ty, count: number | bigint): void {
+			if (Number(count) !== _0.length) {
+				throw new $perror("InvalidValue", "length does not match count");
+			}
+		}
+	}
+}
+
+impl NativeCodegen<JavaScript> for MapP {
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		native: &mir::NativeType,
+		names: &dyn Names<JavaScript>,
+	) -> Option<Tokens> {
+		let key = specialization_use(native, KEY)?.target;
+		let value = value_of(native)?;
+		Some(quote!(Map<$(names.ty(key)), $(names.ty(value))>))
+	}
+	fn construct(
+		&self,
+		cx: &LowerCx<JavaScript>,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		c: &mir::Construction,
+	) -> Result<Tokens> {
+		let pairs = map_pairs(c)?
+			.into_iter()
+			.map(|(k, v)| Ok(quote!([$((cx.lower)(k)?), $((cx.lower)(v)?)])))
+			.collect::<Result<Vec<_>>>()?;
+		Ok(quote!(new Map([$(for p in pairs join(, ) => $p)])))
+	}
+	fn generate(&self, ctx: &Ctx) -> Result<Tokens> {
+		let key_use = ctx.specialization_use(KEY).context("map key type")?;
+		let value_use = ctx.specialization_use(VALUE).context("map value type")?;
+		let (key, value) = (key_use.target, value_use.target);
+		let count = ctx.specialization("Count").context("map count type")?;
+		let ty = self
+			.inline_ty(ctx.id, ctx.native, ctx.names)
+			.context("map type")?;
+		let (pinput, poutput) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"));
+		let perror = &pds(ctx.names, "PdsError");
+		Ok(quote! {
+			$((ctx.args_struct)())
+			export type Ty = $ty;
+			export function serialize(_0: Ty, output: $poutput): void {
+				$(ctx.names.serialize(count))($(int_as(ctx.names, count, quote!(_0.size))), output);
+				for (const [k, v] of _0) {
+					$(ctx.names.serialize(key))(k, output);
+					$(ctx.names.serialize(value))(v, output);
+				}
+			}
+			export function deserialize(input: $pinput$(if !ctx.params.is_empty() => , $((ctx.args_param)()))): Ty {
+				$(read_count(ctx, quote!($(ctx.names.deserialize(count))(input))))
+				const out: Ty = new Map();
+				for (let i = 0; i < count; i++) {
+					const k = $(ctx.deserialize_call(key_use));
+					if (out.has(k)) {
+						throw new $perror("InvalidValue", "duplicate map key");
+					}
+					out.set(k, $(ctx.deserialize_call(value_use)));
+				}
+				return out;
+			}
+			export function size_of(_0: Ty): number {
+				let n = $(ctx.names.size_of(count))($(int_as(ctx.names, count, quote!(_0.size))));
+				for (const [k, v] of _0) {
+					n += $(ctx.names.size_of(key))(k) + $(ctx.names.size_of(value))(v);
+				}
+				return n;
+			}
+		})
+	}
+}
 
 impl NativeCodegen<JavaScript> for Array {
 	fn inline_ty(
@@ -69,6 +149,7 @@ impl NativeCodegen<JavaScript> for Array {
 					bail!("array::sized needs a `count` argument");
 				}
 				quote! {
+					$(check_count_js(ctx))
 					export function serialize(_0: Ty, output: $poutput): void {
 						for (const e of _0) {
 							$(ctx.names.serialize(value))(e, output);
@@ -211,6 +292,7 @@ impl NativeCodegen<JavaScript> for Buffer {
 				}
 			}
 			"sized" => quote! {
+				$(check_count_js(ctx))
 				export function serialize(_0: Ty, output: $poutput): void {
 					output.write(_0);
 				}

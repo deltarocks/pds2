@@ -117,6 +117,17 @@ pub enum Error {
 	InvalidValue,
 	TooDeep,
 }
+impl std::fmt::Display for Error {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.write_str(match self {
+			Error::NotEnoughData => "not enough data",
+			Error::TooLargeInteger => "integer too large",
+			Error::InvalidValue => "invalid value",
+			Error::TooDeep => "nesting too deep",
+		})
+	}
+}
+impl std::error::Error for Error {}
 impl From<stack::TooDeep> for Error {
 	fn from(_: stack::TooDeep) -> Self {
 		Error::TooDeep

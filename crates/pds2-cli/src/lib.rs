@@ -74,6 +74,38 @@ pub struct CompileArgs {
 	/// Workspace dependency of every generated crate
 	#[arg(long = "crate-dependency", value_name = "NAME", requires = "crates")]
 	pub crate_dependencies: Vec<String>,
+
+	#[command(flatten)]
+	pub rustfmt: Rustfmt,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct Rustfmt {
+	/// rustfmt config for generated rust code, by default rustfmt looks it up from the output
+	/// directory upwards
+	#[arg(long, value_name = "FILE")]
+	pub rustfmt_config: Option<PathBuf>,
+	/// Edition generated rust code is formatted for
+	#[arg(long, default_value = "2021")]
+	pub edition: String,
+}
+impl Default for Rustfmt {
+	fn default() -> Self {
+		Self {
+			rustfmt_config: None,
+			edition: "2021".to_owned(),
+		}
+	}
+}
+impl Rustfmt {
+	fn command(&self) -> Command {
+		let mut cmd = Command::new("rustfmt");
+		cmd.args(["--edition", &self.edition]);
+		if let Some(config) = &self.rustfmt_config {
+			cmd.arg("--config-path").arg(config);
+		}
+		cmd
+	}
 }
 
 #[derive(Debug, Args)]
@@ -111,6 +143,7 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 		crates,
 		crate_prelude,
 		crate_dependencies,
+		rustfmt: fmt,
 	} = args;
 	let data = std::fs::read_to_string(from)?;
 	let mut parsed = ast::parse(&data)?;
@@ -198,7 +231,7 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 			println!("{out}");
 		}
 	}
-	rustfmt(&written);
+	rustfmt(&written, &fmt);
 	Ok(())
 }
 
@@ -258,7 +291,7 @@ fn namespace_docs(block: &ast::Block) -> BTreeMap<String, String> {
 		.collect()
 }
 
-pub fn rustfmt(written: &[PathBuf]) {
+pub fn rustfmt(written: &[PathBuf], fmt: &Rustfmt) {
 	let rust: HashSet<&Path> = written
 		.iter()
 		.map(PathBuf::as_path)
@@ -280,18 +313,19 @@ pub fn rustfmt(written: &[PathBuf]) {
 		return;
 	}
 	roots.sort();
-	match Command::new("rustfmt").args(["--edition", "2021"]).args(&roots).status() {
+	match fmt.command().args(&roots).status() {
 		Ok(status) if status.success() => {}
 		Ok(status) => tracing::warn!("rustfmt exited with {status}, generated code may be left unformatted"),
 		Err(e) => tracing::warn!("can't run rustfmt ({e}), generated code is left unformatted"),
 	}
 }
 
-pub fn rustfmt_alone(file: &Path) {
+pub fn rustfmt_alone(file: &Path, fmt: &Rustfmt) {
 	let run = || -> io::Result<Option<Vec<u8>>> {
 		let source = std::fs::read(file)?;
-		let mut child = Command::new("rustfmt")
-			.args(["--edition", "2021", "--emit", "stdout"])
+		let mut child = fmt
+			.command()
+			.args(["--emit", "stdout"])
 			.current_dir(file.parent().unwrap_or(Path::new(".")))
 			.stdin(Stdio::piped())
 			.stdout(Stdio::piped())

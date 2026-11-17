@@ -1,0 +1,17 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies:
+      pnpm-prepare:
+        specifier: link:../../../Projects/contrib/pnpm-prepare
+        version: link:../../../Projects/contrib/pnpm-prepare
+
+  pds-bytes-runtime:
+    linkDirectory: false
+    publishDirectory: dist

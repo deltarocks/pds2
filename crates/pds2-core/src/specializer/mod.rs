@@ -275,6 +275,15 @@ impl NativeCodegenCtx<'_, Rust> {
 	pub fn input(&self) -> rust::Tokens {
 		quote!($(rust::import("crate::pds", "Input"))$(self.lt()))
 	}
+	pub fn derive(&self) -> rust::Tokens {
+		let extra = self
+			.types
+			.0
+			.get(&self.id)
+			.map(|d| d.derives.as_slice())
+			.unwrap_or_default();
+		quote!(#[derive(Debug, Clone, PartialEq$(for d in extra => , $(d.as_str())))])
+	}
 	pub fn owned_this(&self) -> rust::Tokens {
 		self.names.owned(self.id)
 	}

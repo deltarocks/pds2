@@ -1,0 +1,14 @@
+{
+	"name": "@deltarocks/pds2-ts-workspace",
+	"private": true,
+	"type": "module",
+	"workspaces": [
+		"pds-bytes-runtime"
+	],
+	"scripts": {
+		"build": "pnpm -r run prepack"
+	},
+	"devDependencies": {
+		"pnpm-prepare": "link:../../../Projects/contrib/pnpm-prepare"
+	}
+}

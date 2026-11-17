@@ -5,6 +5,7 @@ use genco::prelude::*;
 use pds2_core::specializer::decode::Input;
 use pds2_core::specializer::encode::{const_eq, Encoder, Encoding, Scope, Target, Val};
 use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
+use crate::natives::sized_count;
 use crate::union::{self, TagView, UnionView};
 use pds2_core::specializer::{
 	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
@@ -243,6 +244,10 @@ fn assert_tag_arg<'a>(
 	// closure-converted param (threaded only at deserialize time, e.g. a
 	// bitflags field passed down through an array) is not available in
 	// serialize, so skip the check there.
+	readable_in_serialize(siblings, val).then_some(val)
+}
+
+fn readable_in_serialize(siblings: &[ContainerField], val: &Expr) -> bool {
 	let mut readable = true;
 	val.walk(&mut |e| {
 		let Expr::Field(f) = e else {
@@ -260,7 +265,18 @@ fn assert_tag_arg<'a>(
 			_ => {}
 		}
 	});
-	readable.then_some(val)
+	readable
+}
+
+fn count_check_arg<'a>(
+	types: &'a TypeMap,
+	siblings: &[ContainerField],
+	field: &'a ContainerField,
+) -> Option<&'a Expr> {
+	if field.load_from.is_some() {
+		return None;
+	}
+	sized_count(types, field.ty).filter(|val| readable_in_serialize(siblings, val))
 }
 
 impl NativeCodegen<Rust> for Container {
@@ -309,6 +325,17 @@ impl NativeCodegen<Rust> for Container {
 				);
 			}
 		};
+		let check_count_call = |field: &ContainerField| -> rust::Tokens {
+			let Some(val) = count_check_arg(ctx.types, &fields, field) else {
+				return quote!();
+			};
+			quote! {
+				$(names.item(field.ty.target, "check_count"))(
+					&_0.$(ctx.field(field.name.as_str())),
+					$((ctx.read)(val, false)),
+				)?;
+			}
+		};
 		let value_of = |field: &ContainerField| -> rust::Tokens {
 			match field.load_from {
 				None => quote!(&_0.$(ctx.field(field.name.as_str()))),
@@ -317,7 +344,7 @@ impl NativeCodegen<Rust> for Container {
 		};
 		Ok(quote! {
 			$((ctx.args_struct)())
-			#[derive(Debug, Clone, PartialEq)]
+			$(ctx.derive())
 			pub struct $(ctx.nominal()) {
 				$(for field in fields.iter() join($['\r']) =>
 					$(if field.load_from.is_none() {
@@ -330,6 +357,7 @@ impl NativeCodegen<Rust> for Container {
 			pub fn serialize$lt(_0: &$this, output: &mut $poutput) -> $presult<()> {
 				$(for field in fields.iter() join($['\r']) =>
 					$(assert_tag_call(field))
+					$(check_count_call(field))
 					$(names.serialize(field.ty.target))(
 						$(value_of(field)),
 						output,
@@ -415,6 +443,14 @@ impl NativeCodegen<JavaScript> for Container {
 				$(names.item(field.ty.target, "assert_tag"))(_0.$(field.name.as_str()), $((ctx.read)(val, false)));
 			}
 		};
+		let check_count_call = |field: &ContainerField| -> js::Tokens {
+			let Some(val) = count_check_arg(ctx.types, &fields, field) else {
+				return quote!();
+			};
+			quote! {
+				$(names.item(field.ty.target, "check_count"))(_0.$(field.name.as_str()), $((ctx.read)(val, false)));
+			}
+		};
 		let value_of = |field: &ContainerField| -> js::Tokens {
 			match field.load_from {
 				None => quote!(_0.$(field.name.as_str())),
@@ -430,6 +466,7 @@ impl NativeCodegen<JavaScript> for Container {
 			export function serialize(_0: Ty, output: $poutput): void {
 				$(for f in fields.iter() join($['\r']) =>
 					$(assert_tag_call(f))
+					$(check_count_call(f))
 					$(names.serialize(f.ty.target))($(value_of(f)), output);
 				)
 			}

@@ -23,6 +23,7 @@ pub struct Definition {
 	pub params: Vec<(Ident, TypeId)>,
 	pub param_types: Vec<(Ident, TypeId)>,
 	pub kind: TypeKind,
+	pub derives: Vec<Ident>,
 }
 
 #[derive(Debug)]

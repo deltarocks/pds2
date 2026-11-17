@@ -555,6 +555,7 @@ pub struct Type {
 	/// `export;` in the def block: keep this def in the output even when it is a
 	/// trivial alias that `replace_aliases` would otherwise dissolve
 	pub export: bool,
+	pub derives: Vec<Ident>,
 }
 impl Traverse for Type {
 	fn traverse(
@@ -618,6 +619,7 @@ impl Type {
 			types,
 			kind,
 			export: false,
+			derives: Vec::new(),
 		}
 	}
 	pub fn id(&self) -> TypeId {

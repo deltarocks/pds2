@@ -1,5 +1,5 @@
-import { assertEquals, assertThrows } from "@std/assert";
-import { Input, Output } from "./pds.ts";
+import { assert, assertEquals, assertThrows } from "@std/assert";
+import { equal, Input, Output } from "./pds.ts";
 import * as pds_Arguments from "./gen/Arguments.ts";
 import * as pds_BoundWords from "./gen/BoundWords.ts";
 import * as pds_Choices from "./gen/Choices.ts";
@@ -45,6 +45,12 @@ import * as decoded_top_bits from "./gen/decoded_top_bits.ts";
 import * as sample_arguments from "./gen/sample_arguments.ts";
 import * as encoded_arguments from "./gen/encoded_arguments.ts";
 import * as decoded_arguments from "./gen/decoded_arguments.ts";
+import * as pds_Mapped from "./gen/Mapped.ts";
+import * as pds_Blob from "./gen/Blob.ts";
+import * as pds_FixedArm from "./gen/FixedArm.ts";
+import * as sample_mapped from "./gen/sample_mapped.ts";
+import * as encoded_mapped from "./gen/encoded_mapped.ts";
+import * as decoded_mapped from "./gen/decoded_mapped.ts";
 
 type Codec<T> = {
 	deserialize(input: Input): T;
@@ -132,6 +138,7 @@ Deno.test("compile-time serialization matches generated serializers", () => {
 		[sample_loop, encoded_loop],
 		[sample_top_bits, encoded_top_bits],
 		[sample_arguments, encoded_arguments],
+		[sample_mapped, encoded_mapped],
 	];
 	for (const [codec, encoded] of cases) {
 		const out = new Output();
@@ -140,6 +147,27 @@ Deno.test("compile-time serialization matches generated serializers", () => {
 		assertEquals(roundtrip(codec, [...encoded.value()]), codec.value());
 	}
 	assertEquals([...roundtrip(pds_Widened, [...encoded_widened.value()]).items], [1, 2, 3, 0xffff]);
+});
+
+Deno.test("sized lengths are checked on serialize", () => {
+	const blob = sample_blob.value();
+	assertThrows(() => pds_Blob.serialize({ ...blob, fixed: blob.fixed.slice(1) }, new Output()));
+	assertThrows(() =>
+		pds_FixedArm.serialize({ kind: "four", value: new Uint8Array(3) }, new Output())
+	);
+	pds_FixedArm.serialize({ kind: "four", value: new Uint8Array(4) }, new Output());
+});
+
+Deno.test("map rejects duplicate keys", () => {
+	const input = new Input(new Uint8Array([2, 1, 97, 0, 1, 1, 97, 0, 2]));
+	assertThrows(() => pds_Mapped.deserialize(input));
+});
+
+Deno.test("equal compares map entries", () => {
+	assert(equal(new Map([["a", 1]]), new Map([["a", 1]])));
+	assert(!equal(new Map([["a", 1]]), new Map([["a", 2]])));
+	assert(!equal(new Map([["a", 1]]), new Map()));
+	assert(!equal(new Map(), {}));
 });
 
 Deno.test("compile-time deserialization matches values", () => {
@@ -156,6 +184,7 @@ Deno.test("compile-time deserialization matches values", () => {
 		[decoded_loop, sample_loop],
 		[decoded_top_bits, sample_top_bits],
 		[decoded_arguments, sample_arguments],
+		[decoded_mapped, sample_mapped],
 	];
 	for (const [decoded, sample] of cases) {
 		assertEquals(decoded.value(), sample.value());
