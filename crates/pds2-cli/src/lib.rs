@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{anyhow, bail, Result};
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 use pds2_core::generator::rust;
 use pds2_core::generator::split::Split;
 use pds2_core::generator::GeneratorTypes;
@@ -14,51 +14,48 @@ use pds2_core::{ast, hir, mir};
 
 pub use clap;
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum Target {
-	Rust,
-	Typescript,
-}
-
-impl From<Target> for GeneratorTypes {
-	fn from(t: Target) -> Self {
-		match t {
-			Target::Rust => GeneratorTypes::Rust,
-			Target::Typescript => GeneratorTypes::Typescript,
-		}
-	}
-}
-
 #[derive(Debug, Args)]
 pub struct CompileArgs {
 	/// .pds source code
 	pub from: PathBuf,
-	/// Generation target
-	pub generator: Target,
 	/// Print AST
-	#[arg(long)]
+	#[arg(long, global = true)]
 	pub print_ast: bool,
 	/// Print generated HIR
-	#[arg(long)]
+	#[arg(long, global = true)]
 	pub print_hir: bool,
 	/// Print generated MIR
-	#[arg(long)]
+	#[arg(long, global = true)]
 	pub print_mir: bool,
 
 	/// Add `def(NAME) => const(value: <FILE contents>);`, FILE being a single expression
-	#[arg(long = "const", value_name = "NAME=FILE")]
+	#[arg(long = "const", value_name = "NAME=FILE", global = true)]
 	pub consts: Vec<String>,
 
 	/// Where to write generated files to
-	#[arg(long)]
+	#[arg(long, global = true)]
 	pub to: Option<PathBuf>,
 
-	/// Also generate borrowing views (`view/`) of the types under NAMESPACE (rust only)
+	#[command(subcommand)]
+	pub codegen: Codegen,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Codegen {
+	/// Rust modules, formatted by rustfmt for the edition of the cargo package they are written to
+	Rust(RustArgs),
+	/// TypeScript modules
+	Typescript,
+}
+
+#[derive(Debug, Args)]
+pub struct RustArgs {
+	/// Also generate borrowing views (`view/`) of the types under NAMESPACE
 	#[arg(long, value_name = "NAMESPACE")]
 	pub view: Option<String>,
 
 	/// Write a crate per top-level namespace (NAME-<namespace>), NAME-root for the rest and an
-	/// umbrella crate NAME re-exporting them all (rust only). They link each other as workspace
+	/// umbrella crate NAME re-exporting them all. They link each other as workspace
 	/// dependencies and take edition and license from [workspace.package], so the workspace has to
 	/// declare every one of them and those keys. Crates already in the output directory keep their
 	/// version, new ones start at 0.1.0; descriptions come from the `@!doc` of each namespace and
@@ -73,38 +70,6 @@ pub struct CompileArgs {
 	/// Workspace dependency of every generated crate
 	#[arg(long = "crate-dependency", value_name = "NAME", requires = "crates")]
 	pub crate_dependencies: Vec<String>,
-
-	#[command(flatten)]
-	pub rustfmt: Rustfmt,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct Rustfmt {
-	/// rustfmt config for generated rust code, by default rustfmt looks it up from the output
-	/// directory upwards
-	#[arg(long, value_name = "FILE")]
-	pub rustfmt_config: Option<PathBuf>,
-	/// Edition generated rust code is formatted for
-	#[arg(long, default_value = "2021")]
-	pub edition: String,
-}
-impl Default for Rustfmt {
-	fn default() -> Self {
-		Self {
-			rustfmt_config: None,
-			edition: "2021".to_owned(),
-		}
-	}
-}
-impl Rustfmt {
-	fn command(&self) -> Command {
-		let mut cmd = Command::new("rustfmt");
-		cmd.args(["--edition", &self.edition]);
-		if let Some(config) = &self.rustfmt_config {
-			cmd.arg("--config-path").arg(config);
-		}
-		cmd
-	}
 }
 
 #[derive(Debug, Args)]
@@ -132,34 +97,34 @@ impl CoreCommand {
 pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 	let CompileArgs {
 		from,
-		generator,
 		print_ast,
 		print_hir,
 		print_mir,
 		consts,
 		to,
-		view,
-		crates,
-		crate_prelude,
-		crate_dependencies,
-		rustfmt: fmt,
+		codegen,
 	} = args;
 	let data = std::fs::read_to_string(from)?;
 	let mut parsed = ast::parse(&data)?;
-	let split = match crates {
-		Some(name) => Some(Split {
-			name,
+	let split = match &codegen {
+		Codegen::Rust(RustArgs {
+			crates: Some(name),
+			crate_prelude,
+			crate_dependencies,
+			..
+		}) => Some(Split {
+			name: name.clone(),
 			root_doc: doc(&parsed.attributes),
 			namespace_docs: namespace_docs(&parsed),
 			versions: to.as_deref().map(existing_versions).unwrap_or_default(),
-			prelude: match &crate_prelude {
+			prelude: match crate_prelude {
 				Some(file) => std::fs::read_to_string(file)
 					.map_err(|e| anyhow!("{}: {e}", file.display()))?,
 				None => String::new(),
 			},
-			dependencies: crate_dependencies,
+			dependencies: crate_dependencies.clone(),
 		}),
-		None => None,
+		_ => None,
 	};
 	for c in consts {
 		let (name, file) = c
@@ -189,11 +154,9 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 	}
 
 	let mut out = Default::default();
-	match generator {
-		Target::Rust => rust::generate(&mir, &mut out, reg, view.as_deref(), split.as_ref())?,
-		_ if view.is_some() => bail!("--view is only supported for rust"),
-		_ if split.is_some() => bail!("--crates is only supported for rust"),
-		_ => GeneratorTypes::from(generator).generator()(&mir, &mut out, reg)?,
+	match &codegen {
+		Codegen::Rust(r) => rust::generate(&mir, &mut out, reg, r.view.as_deref(), split.as_ref())?,
+		Codegen::Typescript => GeneratorTypes::Typescript.generator()(&mir, &mut out, reg)?,
 	}
 
 	if let Some(to) = &to {
@@ -230,7 +193,7 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 			println!("{out}");
 		}
 	}
-	rustfmt(&written, &fmt);
+	rustfmt(&written);
 	Ok(())
 }
 
@@ -290,7 +253,7 @@ fn namespace_docs(block: &ast::Block) -> BTreeMap<String, String> {
 		.collect()
 }
 
-pub fn rustfmt(written: &[PathBuf], fmt: &Rustfmt) {
+pub fn rustfmt(written: &[PathBuf]) {
 	let rust: HashSet<&Path> = written
 		.iter()
 		.map(PathBuf::as_path)
@@ -308,22 +271,82 @@ pub fn rustfmt(written: &[PathBuf], fmt: &Rustfmt) {
 		dir.is_some_and(|d| ["mod.rs", "lib.rs"].iter().any(|m| rust.contains(d.join(m).as_path())))
 	};
 	let mut roots: Vec<&Path> = rust.iter().copied().filter(|f| !declared(f)).collect();
-	if roots.is_empty() {
-		return;
-	}
 	roots.sort();
-	match fmt.command().args(&roots).status() {
-		Ok(status) if status.success() => {}
-		Ok(status) => tracing::warn!("rustfmt exited with {status}, generated code may be left unformatted"),
-		Err(e) => tracing::warn!("can't run rustfmt ({e}), generated code is left unformatted"),
+	let Some(first) = roots.first() else {
+		return;
+	};
+	let packages = cargo_editions(first);
+	let mut by_edition: BTreeMap<Option<&str>, Vec<&Path>> = BTreeMap::new();
+	for root in roots {
+		by_edition
+			.entry(edition_of(&packages, root))
+			.or_default()
+			.push(root);
+	}
+	for (edition, roots) in by_edition {
+		match rustfmt_command(edition).args(&roots).status() {
+			Ok(status) if status.success() => {}
+			Ok(status) => tracing::warn!("rustfmt exited with {status}, generated code may be left unformatted"),
+			Err(e) => tracing::warn!("can't run rustfmt ({e}), generated code is left unformatted"),
+		}
 	}
 }
 
-pub fn rustfmt_alone(file: &Path, fmt: &Rustfmt) {
+fn cargo_editions(near: &Path) -> Vec<(PathBuf, String)> {
+	let dir = near
+		.parent()
+		.filter(|d| !d.as_os_str().is_empty())
+		.unwrap_or(Path::new("."));
+	let out = match Command::new("cargo")
+		.args(["metadata", "--no-deps", "--format-version", "1"])
+		.current_dir(dir)
+		.stderr(Stdio::null())
+		.output()
+	{
+		Ok(out) if out.status.success() => out.stdout,
+		_ => return vec![],
+	};
+	let Ok(meta) = serde_json::from_slice::<serde_json::Value>(&out) else {
+		return vec![];
+	};
+	meta["packages"]
+		.as_array()
+		.into_iter()
+		.flatten()
+		.filter_map(|p| {
+			let dir = Path::new(p["manifest_path"].as_str()?).parent()?;
+			let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_owned());
+			Some((dir, p["edition"].as_str()?.to_owned()))
+		})
+		.collect()
+}
+
+fn edition_of<'p>(packages: &'p [(PathBuf, String)], file: &Path) -> Option<&'p str> {
+	let file = std::fs::canonicalize(file).ok()?;
+	let edition = packages
+		.iter()
+		.filter(|(dir, _)| file.starts_with(dir))
+		.max_by_key(|(dir, _)| dir.components().count())
+		.map(|(_, edition)| edition.as_str());
+	if edition.is_none() {
+		tracing::debug!("{} is outside a cargo package, rustfmt picks the edition", file.display());
+	}
+	edition
+}
+
+fn rustfmt_command(edition: Option<&str>) -> Command {
+	let mut cmd = Command::new("rustfmt");
+	if let Some(edition) = edition {
+		cmd.args(["--edition", edition]);
+	}
+	cmd
+}
+
+pub fn rustfmt_alone(file: &Path) {
+	let packages = cargo_editions(file);
 	let run = || -> io::Result<Option<Vec<u8>>> {
 		let source = std::fs::read(file)?;
-		let mut child = fmt
-			.command()
+		let mut child = rustfmt_command(edition_of(&packages, file))
 			.args(["--emit", "stdout"])
 			.current_dir(file.parent().unwrap_or(Path::new(".")))
 			.stdin(Stdio::piped())
@@ -408,5 +431,19 @@ pub fn main(run: impl FnOnce() -> Result<()>) {
 			eprintln!("   at {ele}");
 		}
 		std::process::exit(1);
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn rustfmt_edition_comes_from_the_enclosing_package() {
+		let lib = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+		let packages = cargo_editions(&lib);
+		assert_eq!(edition_of(&packages, &lib), Some("2021"));
+		let outside = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.toml");
+		assert_eq!(edition_of(&packages, &outside), None);
 	}
 }
