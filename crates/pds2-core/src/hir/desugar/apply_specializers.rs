@@ -34,6 +34,8 @@ struct Template {
 	variant: Ident,
 	decl: BodyDecl,
 	param_types: BTreeMap<Ident, TypeKind>,
+	scalar: Option<Ident>,
+	attrs: BTreeMap<Ident, Vec<Ident>>,
 }
 
 fn collect(
@@ -62,6 +64,8 @@ fn collect(
 					specializer: Some(s),
 					variant,
 					accepts_body: Some(decl),
+					scalar,
+					attrs,
 					..
 				}) = &t.kind
 				{
@@ -72,6 +76,8 @@ fn collect(
 							variant: variant.clone(),
 							decl: decl.clone(),
 							param_types: t.param_types.clone(),
+							scalar: scalar.clone(),
+							attrs: attrs.clone(),
 						},
 					);
 				}
@@ -98,6 +104,8 @@ impl Visitor for Apply<'_> {
 			variant,
 			decl,
 			param_types,
+			scalar,
+			attrs,
 		}) = self.spec.get(&id)
 		else {
 			return Ok(());
@@ -181,8 +189,8 @@ impl Visitor for Apply<'_> {
 			arg_types,
 			arg_virtuals,
 			is_void: false,
-			scalar: None,
-			attrs: BTreeMap::new(),
+			scalar: scalar.clone(),
+			attrs: attrs.clone(),
 		});
 		Ok(())
 	}

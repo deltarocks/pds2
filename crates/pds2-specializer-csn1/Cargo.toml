@@ -1,0 +1,11 @@
+[package]
+name = "pds2-specializer-csn1"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+genco = "0.20"
+pds-bits-runtime = { path = "../pds-bits-runtime" }
+pds2-core = { path = "../pds2-core" }
+pds2-specializer-protodef = { path = "../pds2-specializer-protodef" }

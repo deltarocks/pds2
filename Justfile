@@ -8,6 +8,10 @@ lang:
 	cargo run compile crates/lang-tests/lang.pds rust --to crates/lang-tests/src/gen --view ''
 	cargo run compile crates/lang-tests/lang.pds typescript --to ts/lang-tests/gen
 
+csn1:
+	rm -rf crates/csn1-tests/src/gen
+	cargo run compile crates/csn1-tests/csn1.pds rust --to crates/csn1-tests/src/gen
+
 descriptor-set:
 	mkdir -p target
 	{{protoc}} -I crates/protobuf-descriptor --include_imports --descriptor_set_out=target/descriptor.pb google/protobuf/descriptor.proto
@@ -46,6 +50,6 @@ envoy: envoy-protos
 	cargo run protobuf decode crates/envoy-api/envoy.pds --type root::envoy::config::cluster::v3::Cluster target/cluster.bin > target/cluster.decoded.txtpds2
 	cargo run protobuf encode crates/envoy-api/envoy.pds target/cluster.decoded.txtpds2 | cmp - target/cluster.bin
 
-test: lang descriptor-check envoy
+test: lang csn1 descriptor-check envoy
 	cargo test --workspace
 	cd ts && deno test --allow-net --allow-read

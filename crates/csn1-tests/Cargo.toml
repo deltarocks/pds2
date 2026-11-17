@@ -1,0 +1,7 @@
+[package]
+name = "csn1-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pds-bits-runtime = { path = "../pds-bits-runtime" }

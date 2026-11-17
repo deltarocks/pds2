@@ -1,0 +1,184 @@
+def_native(void) {
+	is_void;
+};
+
+@specializer const
+def_native(const) {
+	type(Value);
+	argument(value) => Value;
+	body;
+};
+
+@specializer container
+@encoding bits_container
+def_native(container) {
+	body {
+		item(field) {
+			type(Value);
+		};
+		item(virtual_field) {
+			argument(value);
+			type(Value);
+		};
+	};
+};
+
+@specializer array
+@encoding bits_array
+def_native(array) {
+	type(Value);
+	variant(sized) {
+		argument(count);
+	};
+};
+
+@scalar bool
+@specializer uint
+def_native(flag) {
+	argument(size);
+	body;
+};
+
+@scalar u8
+@specializer uint
+def_native(uint8) {
+	argument(size);
+	body;
+};
+
+@scalar u16
+@specializer uint
+def_native(uint16) {
+	argument(size);
+	body;
+};
+
+@scalar i8
+@specializer uint
+def_native(int8) {
+	argument(size);
+	body;
+};
+
+@specializer optional
+def_native(optional) {
+	type(Value);
+	argument(present);
+	argument(absent);
+	body;
+};
+
+@specializer repeated
+def_native(repeated) {
+	type(Value);
+	argument(more);
+	argument(end);
+	body;
+};
+
+@specializer choice
+def_native(choice) {
+	body {
+		item(variant) {
+			argument(bits);
+			type(Value) => void;
+		};
+	};
+};
+
+@specializer fixed
+def_native(fixed) {
+	argument(bits);
+	body;
+};
+
+@specializer spare
+def_native(spare) {
+	argument(size);
+	body;
+};
+
+@specializer padded
+def_native(padded) {
+	type(Value);
+	body;
+};
+
+@specializer padded
+def_native(padded_to) {
+	type(Value);
+	argument(octets);
+	body;
+};
+
+def(bit) => flag(size: 1);
+
+def(lh) {
+	type(Value);
+} => optional(present: "H", absent: "L") => Value;
+
+def(lhFlag) => choice {
+	variant(L, bits: "L");
+	variant(H, bits: "H");
+};
+
+namespace(rr) {
+	def(SelectionParameter) => container {
+		field(cbq) => bit;
+		field(cell_reselect_offset) => uint8(size: 6);
+		field(temporary_offset) => uint8(size: 3);
+		field(penalty_time) => uint8(size: 5);
+	};
+
+	def(GprsIndicator) => container {
+		field(ra_colour) => uint8(size: 3);
+		field(si13_position) => bit;
+	};
+
+	def(Si3RestOctets) => padded_to(octets: 4) => container {
+		field(selection_parameter) => lh => SelectionParameter;
+		field(power_offset) => lh => uint8(size: 2);
+		field(si2ter_indicator) => lhFlag;
+		field(early_classmark_sending_control) => lhFlag;
+		field(scheduling_where) => lh => uint8(size: 3);
+		field(gprs_indicator) => lh => GprsIndicator;
+		field(early_classmark_sending_restriction_3g) => lhFlag;
+		field(si2quater_position) => lh => bit;
+	};
+};
+
+def(Synthetic) => padded => container {
+	field(kind) => choice {
+		variant(small, bits: "0") => uint8(size: 3);
+		variant(large, bits: "10") => uint16(size: 12);
+		variant(none, bits: "11");
+	};
+	field(header) => fixed(bits: "101");
+	field(n) => uint8(size: 2);
+	field(items) => array(count: ../n) => uint8(size: 4);
+	field(reserved) => spare(size: 2);
+	field(deltas) => repeated(more: "1", end: "0") => int8(size: 5);
+	field(flag) => bit;
+};
+
+def(si3_fixture) => const(value: rr::Si3RestOctets(deserialized_bits(b"\x8a\x5f\x63\xab")));
+
+def(synthetic_fixture) => const(value: Synthetic((
+	kind: (large: 0xabc),
+	header: (),
+	n: 2,
+	items: [3, 15],
+	reserved: (),
+	deltas: [-16, 15, -1],
+	flag: true,
+)));
+
+def(synthetic_roundtrip) => const(value: Synthetic(deserialized_bits(serialized_bits(Synthetic((
+	kind: (large: 0xabc),
+	header: (),
+	n: 2,
+	items: [3, 15],
+	reserved: (),
+	deltas: [-16, 15, -1],
+	flag: true,
+))))));
