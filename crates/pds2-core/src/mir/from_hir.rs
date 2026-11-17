@@ -172,8 +172,7 @@ impl Expr {
 					.collect(),
 			),
 			hir::Expr::List(items) => Expr::List(items.iter().map(Expr::from_hir).collect()),
-			hir::Expr::Serialized(e) => Expr::Serialized(Box::new(Expr::from_hir(e))),
-			hir::Expr::Deserialized(e) => Expr::Deserialized(Box::new(Expr::from_hir(e))),
+			hir::Expr::Call(f, args) => Expr::Call(f.clone(), args.iter().map(Expr::from_hir).collect()),
 			hir::Expr::Cast(e, t) => {
 				Expr::Cast(Box::new(Expr::from_hir(e)), Type::from_hir(t).target)
 			}

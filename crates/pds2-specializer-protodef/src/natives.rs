@@ -7,13 +7,15 @@ use genco::prelude::*;
 use pds2_core::ast::{self, Ident, Statement};
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, Value};
-use pds2_core::specializer::decode::Input;
-use pds2_core::specializer::encode::{int_of, Args, Encoder, Encoding, Target, Val};
+use pds2_core::specializer::eval::{int_of, Args, Target, Val};
 use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
 use pds2_core::specializer::reflect::{
-	self, bytes_of, count_arg, decode_bytes, decode_count, decode_items, encode_bytes,
-	encode_items, list_of, record_fields, record_of, use_of, variant_name,
+	self, bytes_of, count_arg, list_of, record_fields, record_of, use_of, variant_name,
 };
+use pds2_specializer_bytes::reflect::{
+	decode_bytes, decode_count, decode_items, encode_bytes, encode_items,
+};
+use pds2_specializer_bytes::{Encoder, Encoding, Input};
 use pds2_core::specializer::{
 	construct_vec, list_value, param_ty, pds_io, specialization_use, vec_of_value, visit_fields,
 	visit_specialization, AstHir, BoxCost, Embed, LowerCx, Members, Names, NativeCodegen,
@@ -399,6 +401,16 @@ impl ValueModel for Array {
 		value: &mir::Expr,
 	) -> Result<mir::Construction> {
 		list_value(cx, id, native, value)
+	}
+	fn virtual_field(&self, cx: &Elaborator, v: &Val, name: &Ident) -> Result<Expr> {
+		let (_, ty) = v
+			.native
+			.virtual_fields
+			.iter()
+			.find(|(n, _)| n == name)
+			.ok_or_else(|| anyhow!("{} has no virtual field {name:?}", cx.name(v.id)))?;
+		ensure!(name.as_str() == "size", "unknown array virtual field {name:?}");
+		cx.number(ty.target, list_of(v.c)?.len() as i128)
 	}
 }
 
@@ -1312,16 +1324,6 @@ impl Encoder for Array {
 		let n = decode_count(cx, t, input)?;
 		Ok(Construction::List(decode_items(cx, t, n, input)?))
 	}
-	fn virtual_field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
-		let (_, ty) = v
-			.native
-			.virtual_fields
-			.iter()
-			.find(|(n, _)| n == name)
-			.ok_or_else(|| anyhow!("{} has no virtual field {name:?}", cx.name(v.id)))?;
-		ensure!(name.as_str() == "size", "unknown array virtual field {name:?}");
-		cx.number(ty.target, list_of(v.c)?.len() as i128)
-	}
 }
 
 impl ValueModel for Bitfield {
@@ -1497,6 +1499,16 @@ impl ValueModel for Buffer {
 			v => bail!("{} is written as bytes `b\"...\"`, got {}", cx.name(id), describe(v)),
 		}
 	}
+	fn virtual_field(&self, cx: &Elaborator, v: &Val, name: &Ident) -> Result<Expr> {
+		let (_, ty) = v
+			.native
+			.virtual_fields
+			.iter()
+			.find(|(n, _)| n == name)
+			.ok_or_else(|| anyhow!("{} has no virtual field {name:?}", cx.name(v.id)))?;
+		ensure!(name.as_str() == "size", "unknown buffer virtual field {name:?}");
+		cx.number(ty.target, bytes_of(v.c)?.len() as i128)
+	}
 }
 
 impl Encoder for Buffer {
@@ -1517,16 +1529,6 @@ impl Encoder for Buffer {
 	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
 		let n = decode_count(cx, t, input)?;
 		Ok(Construction::Literal(Value::Bytes(decode_bytes(cx, n, input)?)))
-	}
-	fn virtual_field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
-		let (_, ty) = v
-			.native
-			.virtual_fields
-			.iter()
-			.find(|(n, _)| n == name)
-			.ok_or_else(|| anyhow!("{} has no virtual field {name:?}", cx.name(v.id)))?;
-		ensure!(name.as_str() == "size", "unknown buffer virtual field {name:?}");
-		cx.number(ty.target, bytes_of(v.c)?.len() as i128)
 	}
 }
 

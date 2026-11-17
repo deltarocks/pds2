@@ -289,16 +289,16 @@ pub enum Expr {
 	Cast(Box<Expr>, Box<TypeKind>),
 	Record(Vec<(Ident, Expr)>),
 	List(Vec<Expr>),
-	Serialized(Box<Expr>),
-	Deserialized(Box<Expr>),
+	Call(Ident, Vec<Expr>),
 }
 impl Expr {
 	pub fn types_mut(&mut self) -> Vec<&mut TypeKind> {
 		match self {
 			Expr::Field(_) | Expr::Const(_) => vec![],
 			Expr::Record(fields) => fields.iter_mut().flat_map(|(_, e)| e.types_mut()).collect(),
-			Expr::List(items) => items.iter_mut().flat_map(Expr::types_mut).collect(),
-			Expr::Serialized(e) | Expr::Deserialized(e) => e.types_mut(),
+			Expr::List(items) | Expr::Call(_, items) => {
+				items.iter_mut().flat_map(Expr::types_mut).collect()
+			}
 			Expr::Binary(_, a, b) => {
 				let mut out = a.types_mut();
 				out.extend(b.types_mut());
@@ -319,6 +319,7 @@ impl Traverse for Expr {
 		skip: TraverseSkip,
 		reg: &Registry,
 	) -> Result<()> {
+		visitor.visit_expr(self, reg)?;
 		match self {
 			Expr::Field(field_ref) => visitor.visit_field_ref(field_ref),
 			Expr::Const(value) => value.traverse(visitor, skip, reg),
@@ -337,13 +338,12 @@ impl Traverse for Expr {
 				}
 				Ok(())
 			}
-			Expr::List(items) => {
+			Expr::List(items) | Expr::Call(_, items) => {
 				for e in items {
 					e.traverse(visitor, skip, reg)?;
 				}
 				Ok(())
 			}
-			Expr::Serialized(e) | Expr::Deserialized(e) => e.traverse(visitor, skip, reg),
 		}
 	}
 }
@@ -669,6 +669,9 @@ trait Visitor {
 	fn leave_ns(&mut self) {}
 
 	fn visit_field_ref(&mut self, _field: &mut FieldRef) -> Result<()> {
+		Ok(())
+	}
+	fn visit_expr(&mut self, _value: &mut Expr, _reg: &Registry) -> Result<()> {
 		Ok(())
 	}
 	fn visit_type_kind(&mut self, _value: &mut TypeKind, _reg: &Registry) -> Result<()> {

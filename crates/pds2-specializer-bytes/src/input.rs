@@ -1,9 +1,4 @@
-use anyhow::{anyhow, bail, ensure, Result};
-
-use super::encode::{int_of, Args, Encoding, Scope, Target};
-use super::expr::describe;
-use crate::hir::TypeId;
-use crate::mir::{self, Construction, Expr};
+use anyhow::{bail, ensure, Result};
 
 pub struct Input<'b> {
 	bytes: &'b [u8],
@@ -84,43 +79,5 @@ impl<'b> Input<'b> {
 			}
 		}
 		bail!("byte {start}: varint is longer than 10 bytes")
-	}
-}
-
-impl Encoding<'_> {
-	pub fn decode(&self, id: TypeId, args: &Args, input: &mut Input) -> Result<Expr> {
-		let id = self.elab.resolve(id);
-		if self.types().is_void(id) {
-			return Ok(Expr::Construct(id, Construction::Record(vec![])));
-		}
-		let (native, encoder) = self.encoder(id)?;
-		let c = encoder.decode(self, &Target { id, native, args }, input)?;
-		Ok(Expr::Construct(id, c))
-	}
-
-	pub fn decode_use(&self, u: &mir::Type, scope: &Scope, input: &mut Input) -> Result<Expr> {
-		let args = self.use_args(u, scope)?;
-		self.decode(u.target, &args, input)
-	}
-
-	pub fn decode_root(&self, id: TypeId, bytes: &[u8]) -> Result<Expr> {
-		let mut input = Input::new(bytes);
-		let root = mir::Type {
-			target: id,
-			args: vec![],
-		};
-		let value = self.decode_use(&root, &Scope::of(&Args::new()), &mut input)?;
-		ensure!(
-			input.remaining() == 0,
-			"{} bytes are left after {}",
-			input.remaining(),
-			self.name(id)
-		);
-		Ok(value)
-	}
-
-	pub fn count(&self, e: &Expr) -> Result<usize> {
-		let n = int_of(e).ok_or_else(|| anyhow!("{} is not a number", describe(e)))?;
-		usize::try_from(n).map_err(|_| anyhow!("count {n} is negative"))
 	}
 }

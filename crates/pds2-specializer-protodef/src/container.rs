@@ -2,8 +2,8 @@ use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::decode::Input;
-use pds2_core::specializer::encode::{const_eq, Encoder, Encoding, Scope, Target, Val};
+use pds2_core::specializer::eval::{const_eq, Scope, Target, Val};
+use pds2_specializer_bytes::{Encoder, Encoding, Input};
 use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
 use crate::natives::sized_count;
 use crate::union::{self, TagView, UnionView};
@@ -106,6 +106,21 @@ impl ValueModel for Container {
 		}
 		Ok(Construction::Record(out))
 	}
+	fn field(&self, cx: &Elaborator, v: &Val, name: &Ident) -> Result<Expr> {
+		let fields = view(v.native).ok_or_else(|| anyhow!("malformed container"))?;
+		let f = fields
+			.iter()
+			.find(|f| f.name == name)
+			.ok_or_else(|| anyhow!("{} has no field {name:?}", cx.name(v.id)))?;
+		match f.load_from {
+			Some(from) => cx.typed(cx.eval(from, &v.scope())?, f.ty.target),
+			None => record_of(v.c)?
+				.iter()
+				.find(|(n, _)| n == name)
+				.map(|(_, e)| e.clone())
+				.ok_or_else(|| anyhow!("{} value lacks field {name:?}", cx.name(v.id))),
+		}
+	}
 }
 
 impl Encoder for Container {
@@ -120,7 +135,7 @@ impl Encoder for Container {
 		let fields = view(v.native).ok_or_else(|| anyhow!("malformed container"))?;
 		let scope = v.scope();
 		for f in &fields {
-			self.field(cx, v, f.name)
+			ValueModel::field(self, cx.elab, v, f.name)
 				.and_then(|value| cx.encode_use(f.ty, &value, &scope, out))
 				.with_context(|| format!("field {:?}", f.name))?;
 		}
@@ -168,21 +183,6 @@ impl Encoder for Container {
 			.cloned()
 			.collect();
 		Ok(Construction::Record(stored))
-	}
-	fn field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
-		let fields = view(v.native).ok_or_else(|| anyhow!("malformed container"))?;
-		let f = fields
-			.iter()
-			.find(|f| f.name == name)
-			.ok_or_else(|| anyhow!("{} has no field {name:?}", cx.name(v.id)))?;
-		match f.load_from {
-			Some(from) => cx.typed(cx.eval(from, &v.scope())?, f.ty.target),
-			None => record_of(v.c)?
-				.iter()
-				.find(|(n, _)| n == name)
-				.map(|(_, e)| e.clone())
-				.ok_or_else(|| anyhow!("{} value lacks field {name:?}", cx.name(v.id))),
-		}
 	}
 }
 

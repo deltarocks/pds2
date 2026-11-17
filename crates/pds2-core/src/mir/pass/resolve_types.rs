@@ -124,14 +124,10 @@ impl Definition {
 				}
 				None
 			}
-			Expr::List(items) => {
+			Expr::List(items) | Expr::Call(_, items) => {
 				for e in items {
 					Self::resolve_expr(scope, types, e)?;
 				}
-				None
-			}
-			Expr::Serialized(e) | Expr::Deserialized(e) => {
-				Self::resolve_expr(scope, types, e)?;
 				None
 			}
 		})

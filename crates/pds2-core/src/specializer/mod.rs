@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
 
@@ -6,13 +7,11 @@ use genco::lang::{rust, JavaScript, Lang, Rust};
 use genco::prelude::*;
 use genco::Tokens;
 
-pub mod decode;
-pub mod encode;
+pub mod eval;
 pub mod expr;
 pub mod reflect;
 pub mod ts;
 
-use encode::Encoder;
 use expr::{Elaborator, ValueModel};
 
 use crate::ast::Ident;
@@ -458,6 +457,10 @@ pub fn into_view_vec(ctx: &NativeCodegenCtx<Rust>, value: TypeId) -> rust::Token
 	ctx.into_view_fn(quote!(_0.iter_mut().map(|e| $(ctx.names.into_view_fn(value))(e)).collect()))
 }
 
+pub trait Function {
+	fn call(&self, cx: &Elaborator, ty: Option<TypeId>, args: &[mir::Expr]) -> Result<Option<mir::Expr>>;
+}
+
 #[derive(Default)]
 pub struct Registry {
 	asthir: HashMap<String, Box<dyn AstHir>>,
@@ -465,7 +468,8 @@ pub struct Registry {
 	codegen_rust: HashMap<String, Box<dyn NativeCodegen<Rust>>>,
 	codegen_ts: HashMap<String, Box<dyn NativeCodegen<JavaScript>>>,
 	value: HashMap<String, Box<dyn ValueModel>>,
-	encoders: HashMap<String, Box<dyn Encoder>>,
+	encoders: HashMap<String, Box<dyn Any>>,
+	functions: HashMap<String, Box<dyn Function>>,
 }
 
 fn insert<T: ?Sized>(map: &mut HashMap<String, Box<T>>, facet: &str, name: &str, item: Box<T>) {
@@ -476,11 +480,20 @@ fn insert<T: ?Sized>(map: &mut HashMap<String, Box<T>>, facet: &str, name: &str,
 }
 
 impl Registry {
-	pub fn register_encoder(&mut self, name: &str, encoder: impl Encoder + 'static) {
-		insert(&mut self.encoders, "encoder", name, Box::new(encoder));
+	pub fn register_encoder<E: ?Sized + 'static>(&mut self, name: &str, encoder: Box<E>) {
+		insert::<dyn Any>(&mut self.encoders, "encoder", name, Box::new(encoder));
 	}
-	pub fn encoder(&self, name: &str) -> Option<&dyn Encoder> {
-		self.encoders.get(name).map(|b| b.as_ref())
+	pub fn encoder<E: ?Sized + 'static>(&self, name: &str) -> Option<&E> {
+		self.encoders.get(name)?.downcast_ref::<Box<E>>().map(|b| b.as_ref())
+	}
+	pub fn has_encoder(&self, name: &str) -> bool {
+		self.encoders.contains_key(name)
+	}
+	pub fn register_function(&mut self, name: &str, function: impl Function + 'static) {
+		insert(&mut self.functions, "function", name, Box::new(function));
+	}
+	pub fn function(&self, name: &str) -> Option<&dyn Function> {
+		self.functions.get(name).map(|b| b.as_ref())
 	}
 	pub fn register_value(&mut self, name: &str, model: impl ValueModel + 'static) {
 		insert(&mut self.value, "value model", name, Box::new(model));

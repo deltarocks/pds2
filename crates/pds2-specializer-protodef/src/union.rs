@@ -4,8 +4,8 @@ use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::decode::Input;
-use pds2_core::specializer::encode::{Encoder, Encoding, Scope, Target, Val};
+use pds2_core::specializer::eval::{Scope, Target, Val};
+use pds2_specializer_bytes::{Encoder, Encoding, Input};
 use pds2_core::specializer::expr::{value_eq, Elaborator, ValueModel};
 use pds2_core::specializer::{
 	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
@@ -295,9 +295,23 @@ impl ValueModel for Union {
 			})
 			.collect()
 	}
+	fn virtual_field(&self, cx: &Elaborator, v: &Val, name: &Ident) -> Result<Expr> {
+		ensure!(name.as_str() == "tag", "{} has no virtual field {name:?}", cx.name(v.id));
+		tag_of(cx, v)
+	}
+	fn cast_value(&self, cx: &Elaborator, v: &Val, to: TypeId) -> Result<Expr> {
+		let tag = tag_of(cx, v)?;
+		ensure!(
+			tag.ty().map(|t| cx.resolve(t)) == Some(cx.resolve(to)),
+			"{} can't be cast to {}",
+			cx.name(v.id),
+			cx.name(to)
+		);
+		Ok(tag)
+	}
 }
 
-fn tag_of(cx: &Encoding, v: &Val) -> Result<Expr> {
+fn tag_of(cx: &Elaborator, v: &Val) -> Result<Expr> {
 	let u = view(v.native).ok_or_else(|| anyhow!("malformed union"))?;
 	let (name, payload) = variant_of(v.c)?;
 	if u.default.is_some_and(|(d, _)| d == name) {
@@ -311,8 +325,7 @@ fn tag_of(cx: &Encoding, v: &Val) -> Result<Expr> {
 		.iter()
 		.find(|(_, n, _)| *n == name)
 		.ok_or_else(|| anyhow!("{} has no variant {name:?}", cx.name(v.id)))?;
-	cx.elab
-		.build(u.tag_type, &Expr::Const(value.clone()))
+	cx.build(u.tag_type, &Expr::Const(value.clone()))
 		.with_context(|| format!("tag of variant {name:?}"))
 }
 
@@ -342,7 +355,7 @@ impl Encoder for Union {
 		let default = u.default.filter(|(d, _)| *d == name);
 		let tag = match u.tag {
 			TagView::Inline(t) => {
-				let tag = tag_of(cx, v)?;
+				let tag = tag_of(cx.elab, v)?;
 				cx.encode_use(t, &tag, &scope, out).context("tag")?;
 				tag
 			}
@@ -425,20 +438,6 @@ impl Encoder for Union {
 			payload.push(value);
 		}
 		Ok(Construction::Variant(name.clone(), payload))
-	}
-	fn virtual_field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
-		ensure!(name.as_str() == "tag", "{} has no virtual field {name:?}", cx.name(v.id));
-		tag_of(cx, v)
-	}
-	fn cast(&self, cx: &Encoding, v: &Val, to: TypeId) -> Result<Expr> {
-		let tag = tag_of(cx, v)?;
-		ensure!(
-			tag.ty().map(|t| cx.elab.resolve(t)) == Some(cx.elab.resolve(to)),
-			"{} can't be cast to {}",
-			cx.name(v.id),
-			cx.name(to)
-		);
-		Ok(tag)
 	}
 }
 

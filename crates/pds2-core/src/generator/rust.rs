@@ -579,8 +579,7 @@ fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 		}
 		Expr::Const(v) => bail!("untyped constant {v:?}"),
 		Expr::Record(_) => bail!("untyped record"),
-		Expr::Serialized(_) => bail!("serialized(...) was not evaluated"),
-		Expr::Deserialized(_) => bail!("deserialized(...) was not evaluated"),
+		Expr::Call(f, _) => bail!("{f:?}(...) was not evaluated"),
 		Expr::List(items) => {
 			let items = items.iter().map(rec).collect::<Result<Vec<_>>>()?;
 			quote!(vec![$(for i in items join(, ) => $i)])

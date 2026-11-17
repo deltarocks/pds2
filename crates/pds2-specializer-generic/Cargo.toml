@@ -7,3 +7,4 @@ edition = "2021"
 anyhow = "1.0"
 genco = "0.20"
 pds2-core = { path = "../pds2-core" }
+pds2-specializer-bytes = { path = "../pds2-specializer-bytes" }

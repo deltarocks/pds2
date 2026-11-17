@@ -305,8 +305,7 @@ fn lower(meta: &TsMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 		Expr::Field(f) => read_reference(meta, from_locals, f),
 		Expr::Const(v) => bail!("untyped constant {v:?}"),
 		Expr::Record(_) => bail!("untyped record"),
-		Expr::Serialized(_) => bail!("serialized(...) was not evaluated"),
-		Expr::Deserialized(_) => bail!("deserialized(...) was not evaluated"),
+		Expr::Call(f, _) => bail!("{f:?}(...) was not evaluated"),
 		Expr::List(items) => {
 			let items = items.iter().map(rec).collect::<Result<Vec<_>>>()?;
 			quote!([$(for i in items join(, ) => $i)])

@@ -88,7 +88,7 @@ fn minimum_wire_sizes_are_known_at_compile_time() {
 	let reg = pds2::registry();
 	let types = constant("").unwrap();
 	let elab = pds2_core::specializer::expr::Elaborator { types: &types, reg: &reg };
-	let enc = pds2_core::specializer::encode::Encoding::new(&elab);
+	let enc = pds2_specializer_bytes::Encoding::new(&elab);
 	let min = |name: &str| enc.min_size(elab.resolve_name(name).unwrap());
 	assert_eq!(min("u16"), 2);
 	assert_eq!(min("sint"), 1);

@@ -2,8 +2,8 @@ use anyhow::{anyhow, bail, ensure, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::decode::Input;
-use pds2_core::specializer::encode::{Encoder, Encoding, Target, Val};
+use pds2_core::specializer::eval::{Target, Val};
+use pds2_specializer_bytes::{Encoder, Encoding, Input};
 use pds2_core::specializer::expr::{Elaborator, ValueModel};
 use pds2_core::specializer::{
 	AstHir, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor, VALUE,

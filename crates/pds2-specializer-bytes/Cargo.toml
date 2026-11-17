@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 pds2-core = { path = "../pds2-core" }
+tracing = "0.1.44"

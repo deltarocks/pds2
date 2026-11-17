@@ -2,8 +2,8 @@ use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::decode::Input;
-use pds2_core::specializer::encode::{write_varint, Encoder, Encoding, Target, Val};
+use pds2_core::specializer::eval::{Target, Val};
+use pds2_specializer_bytes::{write_varint, Encoder, Encoding, Input};
 use pds2_core::specializer::expr::{Elaborator, ValueModel};
 use pds2_core::specializer::{
 	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,

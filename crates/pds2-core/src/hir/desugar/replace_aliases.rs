@@ -66,8 +66,9 @@ fn substitute(template: &Expr, supplied: &[(Ident, Expr)]) -> Expr {
 				.collect(),
 		),
 		Expr::List(items) => Expr::List(items.iter().map(|e| substitute(e, supplied)).collect()),
-		Expr::Serialized(e) => Expr::Serialized(Box::new(substitute(e, supplied))),
-		Expr::Deserialized(e) => Expr::Deserialized(Box::new(substitute(e, supplied))),
+		Expr::Call(f, args) => {
+			Expr::Call(f.clone(), args.iter().map(|e| substitute(e, supplied)).collect())
+		}
 	}
 }
 

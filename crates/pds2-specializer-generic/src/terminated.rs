@@ -6,8 +6,8 @@ use genco::Tokens;
 use pds2_core::ast::Ident;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir;
-use pds2_core::specializer::decode::Input;
-use pds2_core::specializer::encode::{const_eq, Args, Encoder, Encoding, Target, Val};
+use pds2_core::specializer::eval::{const_eq, Args, Target, Val};
+use pds2_specializer_bytes::{Encoder, Encoding, Input};
 use pds2_core::specializer::expr::{Elaborator, ValueModel};
 use pds2_core::specializer::reflect::{list_of, use_of};
 use pds2_core::specializer::{

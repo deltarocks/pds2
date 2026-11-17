@@ -1,19 +1,12 @@
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Context as _, Result};
 
-use super::decode::Input;
-use super::expr::{describe, value_eq, Elaborator};
-
+use super::expr::{describe, value_eq, Elaborator, ValueModel};
 use super::Scalar;
-
 use crate::ast::{FieldRefSegment, Ident};
-
 use crate::generator::common::scalar_of;
-
 use crate::hir::TypeId;
-
 use crate::mir::{self, Construction, Expr, Field, TypeKind, TypeMap, Value};
 
 pub type Args = BTreeMap<Ident, Expr>;
@@ -63,44 +56,6 @@ impl<'a> Scope<'a> {
 			fields: &[],
 		}
 	}
-}
-
-pub trait Encoder {
-	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()>;
-	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction>;
-	fn field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
-		match v.c {
-			Construction::Record(fields) => fields
-				.iter()
-				.find(|(n, _)| n == name)
-				.map(|(_, e)| e.clone())
-				.ok_or_else(|| anyhow!("{} has no field {name:?}", cx.name(v.id))),
-			_ => bail!("{} has no field {name:?}", cx.name(v.id)),
-		}
-	}
-	fn virtual_field(&self, cx: &Encoding, v: &Val, name: &Ident) -> Result<Expr> {
-		bail!("{} has no virtual field {name:?}", cx.name(v.id))
-	}
-	fn cast(&self, cx: &Encoding, v: &Val, to: TypeId) -> Result<Expr> {
-		bail!("{} can't be cast to {}", cx.name(v.id), cx.name(to))
-	}
-	fn min_size(&self, _cx: &Encoding, _id: TypeId, _native: &mir::NativeType) -> usize {
-		0
-	}
-}
-
-pub struct Encoding<'a> {
-	pub elab: &'a Elaborator<'a>,
-	skipped: RefCell<BTreeMap<String, usize>>,
-	sizes: RefCell<BTreeMap<TypeId, Option<usize>>>,
-}
-
-pub fn write_varint(out: &mut Vec<u8>, mut v: u64) {
-	while v >= 0x80 {
-		out.push((v as u8) | 0x80);
-		v >>= 7;
-	}
-	out.push(v as u8);
 }
 
 pub fn int_of(e: &Expr) -> Option<i128> {
@@ -180,74 +135,24 @@ pub fn const_eq(a: &Expr, b: &Expr) -> bool {
 	}
 }
 
-impl<'a> Encoding<'a> {
-	pub fn new(elab: &'a Elaborator<'a>) -> Self {
-		Encoding {
-			elab,
-			skipped: RefCell::default(),
-			sizes: RefCell::default(),
-		}
+pub fn record_field(cx: &Elaborator, v: &Val, name: &Ident) -> Result<Expr> {
+	match v.c {
+		Construction::Record(fields) => fields
+			.iter()
+			.find(|(n, _)| n == name)
+			.map(|(_, e)| e.clone())
+			.ok_or_else(|| anyhow!("{} has no field {name:?}", cx.name(v.id))),
+		_ => bail!("{} has no field {name:?}", cx.name(v.id)),
 	}
+}
 
-	pub fn min_size(&self, id: TypeId) -> usize {
-		let id = self.elab.resolve(id);
-		if self.types().is_void(id) {
-			return 0;
-		}
-		if let Some(known) = self.sizes.borrow().get(&id) {
-			return known.unwrap_or(0);
-		}
-		let Ok((native, encoder)) = self.encoder(id) else {
-			return 0;
-		};
-		self.sizes.borrow_mut().insert(id, None);
-		let n = encoder.min_size(self, id, native);
-		self.sizes.borrow_mut().insert(id, Some(n));
-		n
-	}
-
-	pub fn min_size_of(&self, name: &str) -> usize {
-		self.resolve_name(name).map_or(0, |id| self.min_size(id))
-	}
-
-	pub fn skip(&self, what: String) {
-		*self.skipped.borrow_mut().entry(what).or_default() += 1;
-	}
-
-	pub fn skipped(&self) -> BTreeMap<String, usize> {
-		self.skipped.take()
-	}
-
+impl<'a> Elaborator<'a> {
 	pub fn types(&self) -> &'a TypeMap {
-		self.elab.types
+		self.types
 	}
 
-	pub fn name(&self, id: TypeId) -> String {
-		self.elab.name(id)
-	}
-
-	pub fn resolve_name(&self, name: &str) -> Result<TypeId> {
-		self.elab.resolve_name(name)
-	}
-
-	pub fn encode_number(&self, ty: TypeId, n: i128, out: &mut Vec<u8>) -> Result<()> {
-		self.encode(&self.number(ty, n)?, &Args::new(), out)
-	}
-
-	pub fn number(&self, ty: TypeId, n: i128) -> Result<Expr> {
-		self.elab.build(ty, &Expr::Const(Value::Signed(n)))
-	}
-
-	pub fn typed(&self, e: Expr, ty: TypeId) -> Result<Expr> {
-		if e.is_untyped_literal() {
-			self.elab.build(ty, &e)
-		} else {
-			Ok(e)
-		}
-	}
-
-	pub(super) fn encoder(&self, id: TypeId) -> Result<(&'a mir::NativeType, &'a dyn Encoder)> {
-		let TypeKind::Native(n) = &self.types()[id].kind else {
+	pub fn encoder_name(&self, id: TypeId) -> Result<(&'a mir::NativeType, &'a Ident)> {
+		let TypeKind::Native(n) = &self.types[id].kind else {
 			bail!("{} is not a native", self.name(id));
 		};
 		let name = n
@@ -260,70 +165,60 @@ impl<'a> Encoding<'a> {
 					self.name(id)
 				)
 			})?;
-		let encoder = self
-			.elab
-			.reg
-			.encoder(name.as_str())
-			.ok_or_else(|| anyhow!("no encoder {name:?} is registered, {} uses it", self.name(id)))?;
-		Ok((n, encoder))
+		Ok((n, name))
 	}
 
-	fn with_val<T>(
-		&self,
-		e: &Expr,
-		args: &Args,
-		f: impl FnOnce(&'a dyn Encoder, &Val) -> Result<T>,
-	) -> Result<T> {
-		let Expr::Construct(id, c) = e else {
-			bail!("{} is not a constant value", describe(e));
-		};
-		let (native, encoder) = self.encoder(*id)?;
-		f(
-			encoder,
-			&Val {
-				id: *id,
+	pub fn number(&self, ty: TypeId, n: i128) -> Result<Expr> {
+		self.build(ty, &Expr::Const(Value::Signed(n)))
+	}
+
+	pub fn count(&self, e: &Expr) -> Result<usize> {
+		let n = int_of(e).ok_or_else(|| anyhow!("{} is not a number", describe(e)))?;
+		usize::try_from(n).map_err(|_| anyhow!("count {n} is negative"))
+	}
+
+	fn value_of<'v>(
+		&'v self,
+		id: TypeId,
+		c: &'v Construction,
+		args: &'v Args,
+	) -> Result<(Val<'v>, Option<&'v dyn ValueModel>)> {
+		let (native, model) = self
+			.native(id)
+			.ok_or_else(|| anyhow!("{} is not a native", self.name(id)))?;
+		Ok((
+			Val {
+				id,
 				native,
 				c,
 				args,
 			},
-		)
+			model,
+		))
 	}
 
-	pub fn encode(&self, e: &Expr, args: &Args, out: &mut Vec<u8>) -> Result<()> {
-		if let Expr::Construct(id, _) = e {
-			if self.types().is_void(*id) {
-				return Ok(());
-			}
+	pub fn field(&self, id: TypeId, c: &Construction, args: &Args, name: &Ident) -> Result<Expr> {
+		match self.value_of(id, c, args)? {
+			(v, Some(model)) => model.field(self, &v, name),
+			(v, None) => record_field(self, &v, name),
 		}
-		self.with_val(e, args, |enc, v| enc.encode(self, v, out))
 	}
 
-	pub fn encode_root(&self, e: &Expr) -> Result<Vec<u8>> {
-		let mut out = Vec::new();
-		self.encode(e, &Args::new(), &mut out)?;
-		Ok(out)
+	fn virtual_field(&self, id: TypeId, c: &Construction, args: &Args, name: &Ident) -> Result<Expr> {
+		match self.value_of(id, c, args)? {
+			(v, Some(model)) => model.virtual_field(self, &v, name),
+			_ => bail!("{} has no virtual field {name:?}", self.name(id)),
+		}
 	}
 
 	pub fn use_args(&self, u: &mir::Type, scope: &Scope) -> Result<Args> {
 		let mut args = self.eval_args(&u.args, scope)?;
 		let mut target = u.target;
-		while let TypeKind::Alias(t) = &self.types()[target].kind {
+		while let TypeKind::Alias(t) = &self.types[target].kind {
 			args = self.eval_args(&t.args, &Scope::of(&args))?;
 			target = t.target;
 		}
 		Ok(args)
-	}
-
-	pub fn encode_use(
-		&self,
-		u: &mir::Type,
-		value: &Expr,
-		scope: &Scope,
-		out: &mut Vec<u8>,
-	) -> Result<()> {
-		let value = self.typed(value.clone(), u.target)?;
-		let args = self.use_args(u, scope)?;
-		self.encode(&value, &args, out)
 	}
 
 	fn eval_args(&self, args: &[(Ident, Expr)], scope: &Scope) -> Result<Args> {
@@ -335,20 +230,6 @@ impl<'a> Encoding<'a> {
 				Ok((n.clone(), v))
 			})
 			.collect()
-	}
-
-	pub fn field(&self, id: TypeId, c: &Construction, args: &Args, name: &Ident) -> Result<Expr> {
-		let (native, encoder) = self.encoder(id)?;
-		encoder.field(
-			self,
-			&Val {
-				id,
-				native,
-				c,
-				args,
-			},
-			name,
-		)
 	}
 
 	fn path(&self, f: &Field, scope: &Scope) -> Result<Expr> {
@@ -384,17 +265,7 @@ impl<'a> Encoding<'a> {
 				FieldRefSegment::Virtual(name) => {
 					let (id, c, root) = base(&cur)?;
 					let args = if root { scope.args } else { &empty };
-					let (native, encoder) = self.encoder(id)?;
-					encoder.virtual_field(
-						self,
-						&Val {
-							id,
-							native,
-							c: &c,
-							args,
-						},
-						name,
-					)?
+					self.virtual_field(id, &c, args, name)?
 				}
 			};
 			cur = Some(next);
@@ -404,7 +275,7 @@ impl<'a> Encoding<'a> {
 
 	fn arith(&self, op: crate::ast::BinOp, a: Expr, b: Expr) -> Result<Expr> {
 		let ty = a.ty().or_else(|| b.ty());
-		let scalar = ty.and_then(|t| scalar_of(self.types(), self.elab.resolve(t)));
+		let scalar = ty.and_then(|t| scalar_of(self.types, self.resolve(t)));
 		if matches!(scalar, Some(Scalar::F32 | Scalar::F64)) {
 			let (x, y) = (
 				float_of(&a).ok_or_else(|| anyhow!("{} is not a number", describe(&a)))?,
@@ -416,7 +287,7 @@ impl<'a> Encoding<'a> {
 				crate::ast::BinOp::Mul => x * y,
 				crate::ast::BinOp::Div => x / y,
 			};
-			return self.elab.build(ty.expect("float scalar"), &Expr::Const(Value::Float(r)));
+			return self.build(ty.expect("float scalar"), &Expr::Const(Value::Float(r)));
 		}
 		let (x, y) = (
 			int_of(&a).ok_or_else(|| anyhow!("{} is not a number", describe(&a)))?,
@@ -431,19 +302,19 @@ impl<'a> Encoding<'a> {
 		}
 	}
 
-	fn cast(&self, v: Expr, to: TypeId) -> Result<Expr> {
+	fn cast_value(&self, v: Expr, to: TypeId) -> Result<Expr> {
 		let Expr::Construct(from, c) = &v else {
-			return self.elab.build(to, &v);
+			return self.build(to, &v);
 		};
-		let (from, to_r) = (self.elab.resolve(*from), self.elab.resolve(to));
+		let (from, to_r) = (self.resolve(*from), self.resolve(to));
 		if from == to_r {
 			return Ok(v);
 		}
-		let number = |id| scalar_of(self.types(), id).filter(|s| s.is_number());
+		let number = |id| scalar_of(self.types, id).filter(|s| s.is_number());
 		if let (Some(_), Some(t)) = (number(from), number(to_r)) {
 			if matches!(t, Scalar::F32 | Scalar::F64) {
 				let f = float_of(&v).ok_or_else(|| anyhow!("{} is not a number", describe(&v)))?;
-				return self.elab.build(to, &Expr::Const(Value::Float(f)));
+				return self.build(to, &Expr::Const(Value::Float(f)));
 			}
 			let n = match float_of(&v) {
 				Some(f) if int_of(&v).is_none() => f.trunc() as i128,
@@ -452,17 +323,10 @@ impl<'a> Encoding<'a> {
 			return self.number(to, wrap(n, t));
 		}
 		let args = Args::new();
-		let (native, encoder) = self.encoder(from)?;
-		encoder.cast(
-			self,
-			&Val {
-				id: from,
-				native,
-				c,
-				args: &args,
-			},
-			to,
-		)
+		match self.value_of(from, c, &args)? {
+			(v, Some(model)) => model.cast_value(self, &v, to),
+			_ => bail!("{} can't be cast to {}", self.name(from), self.name(to)),
+		}
 	}
 
 	pub fn eval(&self, e: &Expr, scope: &Scope) -> Result<Expr> {
@@ -476,12 +340,12 @@ impl<'a> Encoding<'a> {
 				.ok_or_else(|| anyhow!("{n:?} is not bound"))?,
 			Expr::Field(f) => self.path(f, scope)?,
 			Expr::Binary(op, a, b) => self.arith(*op, self.eval(a, scope)?, self.eval(b, scope)?)?,
-			Expr::Cast(e, to) => self.cast(self.eval(e, scope)?, *to)?,
+			Expr::Cast(e, to) => self.cast_value(self.eval(e, scope)?, *to)?,
 			Expr::Eq(a, b) => {
 				let (a, b) = (self.eval(a, scope)?, self.eval(b, scope)?);
 				Expr::Const(Value::Bool(const_eq(&a, &b)))
 			}
-			Expr::Record(_) | Expr::List(_) | Expr::Serialized(_) | Expr::Deserialized(_) => {
+			Expr::Record(_) | Expr::List(_) | Expr::Call(..) => {
 				bail!("{} can't be evaluated here", describe(e))
 			}
 		})

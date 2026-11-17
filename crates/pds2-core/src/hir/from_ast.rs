@@ -89,25 +89,6 @@ pub fn arg_value(value: Value) -> Result<Expr> {
 		}
 		Value::List(items) => Expr::List(items.into_iter().map(arg_value).collect::<Result<_>>()?),
 		Value::Record(fields) => record(fields)?,
-		Value::Item(item)
-			if item.block.is_empty()
-				&& !item.name.absolute
-				&& item.name.path.is_empty()
-				&& matches!(item.name.item.as_str(), "serialized" | "deserialized") =>
-		{
-			let op = item.name.item.as_str();
-			ensure!(
-				item.args.positional_count() == 1 && item.args.named_names().next().is_none(),
-				"`{op}(value)` takes one value"
-			);
-			let value: Value = item.args.arg(0, op)?;
-			let value = Box::new(arg_value(value)?);
-			if op == "serialized" {
-				Expr::Serialized(value)
-			} else {
-				Expr::Deserialized(value)
-			}
-		}
 		Value::Item(item) if item.block.is_empty() && !item.args.is_empty() => {
 			let operand = match item.args.positional_count() {
 				0 => {
@@ -240,6 +221,7 @@ impl BodyItemDecl {
 
 pub fn parse_ast(ast: Block, reg: &Registry) -> Result<Namespace> {
 	let mut ns = Namespace::from_ast(ast).context("parsing AST to IR")?;
+	super::desugar::resolve_calls(&mut ns, reg).context("resolving calls")?;
 	let id = IdGenerator::new();
 	super::desugar::give_all_types_ids(id.clone(), &mut ns, reg)?;
 

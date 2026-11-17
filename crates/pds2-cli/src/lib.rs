@@ -8,7 +8,6 @@ use clap::{Args, Subcommand, ValueEnum};
 use pds2_core::generator::rust;
 use pds2_core::generator::split::Split;
 use pds2_core::generator::GeneratorTypes;
-use pds2_core::specializer::encode::Encoding;
 use pds2_core::specializer::expr::{source, Elaborator};
 use pds2_core::specializer::Registry;
 use pds2_core::{ast, hir, mir};
@@ -377,7 +376,10 @@ pub fn encode(schema: &str, ty: Option<&str>, value: &str, reg: &Registry) -> Re
 	};
 	let (types, value) = compile_value(schema, &value, reg)?;
 	let elab = Elaborator { types: &types, reg };
-	Encoding::new(&elab).encode_root(&value)
+	match elab.elaborate(mir::Expr::Call(ast::Ident::new("serialized"), vec![value]))? {
+		mir::Expr::Const(mir::Value::Bytes(bytes)) => Ok(bytes),
+		e => bail!("serialized(...) gave {e:?}, not bytes"),
+	}
 }
 
 pub fn decode(schema: &str, ty: &str, bytes: &[u8], reg: &Registry) -> Result<String> {

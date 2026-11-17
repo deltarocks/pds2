@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, ensure, Context as _, Result};
 
-use super::encode::Encoding;
-use super::{Registry, Scalar};
+use super::eval::{record_field, Val};
+use super::{Function, Registry, Scalar};
 use crate::ast::{self, BinOp, Ident};
 use crate::generator::common::{sanitize, scalar_of};
 use crate::hir::TypeId;
@@ -31,6 +31,15 @@ pub trait ValueModel {
 		c: &Construction,
 	) -> Result<Expr> {
 		cx.construction_literal(c)
+	}
+	fn field(&self, cx: &Elaborator, v: &Val, name: &Ident) -> Result<Expr> {
+		record_field(cx, v, name)
+	}
+	fn virtual_field(&self, cx: &Elaborator, v: &Val, name: &Ident) -> Result<Expr> {
+		bail!("{} has no virtual field {name:?}", cx.name(v.id))
+	}
+	fn cast_value(&self, cx: &Elaborator, v: &Val, to: TypeId) -> Result<Expr> {
+		bail!("{} can't be cast to {}", cx.name(v.id), cx.name(to))
 	}
 }
 
@@ -131,7 +140,7 @@ impl Elaborator<'_> {
 		id
 	}
 
-	fn native(&self, id: TypeId) -> Option<(&mir::NativeType, Option<&dyn ValueModel>)> {
+	pub(super) fn native(&self, id: TypeId) -> Option<(&mir::NativeType, Option<&dyn ValueModel>)> {
 		let TypeKind::Native(n) = &self.types[id].kind else {
 			return None;
 		};
@@ -142,9 +151,19 @@ impl Elaborator<'_> {
 		Some((n, model))
 	}
 
+	pub fn function(&self, name: &Ident) -> Result<&dyn Function> {
+		self.reg
+			.function(name.as_str())
+			.ok_or_else(|| anyhow!("no function {name:?} is registered"))
+	}
+
 	pub fn build(&self, ty: TypeId, value: &Expr) -> Result<Expr> {
-		if let Expr::Deserialized(bytes) = value {
-			return self.deserialize(ty, bytes);
+		if let Expr::Call(f, args) = value {
+			let e = self
+				.function(f)?
+				.call(self, Some(ty), args)?
+				.ok_or_else(|| anyhow!("{f:?}(...) can't be built as {}", self.name(ty)))?;
+			return self.typed(e, ty);
 		}
 		let id = self.resolve(ty);
 		let construction = if self.types.is_void(id) {
@@ -169,29 +188,6 @@ impl Elaborator<'_> {
 			model.construct(self, id, native, value)?
 		};
 		Ok(Expr::Construct(id, construction))
-	}
-
-	fn deserialize(&self, ty: TypeId, bytes: &Expr) -> Result<Expr> {
-		let bytes = match self.operand(bytes.clone())? {
-			Expr::Const(Value::Bytes(b)) | Expr::Construct(_, Construction::Literal(Value::Bytes(b))) => b,
-			Expr::Const(Value::String(s))
-			| Expr::Construct(_, Construction::Literal(Value::String(s))) => s.into_bytes(),
-			e => bail!("deserialized(...) takes bytes, got {}", describe(&e)),
-		};
-		let cx = Encoding::new(self);
-		let value = cx
-			.decode_root(ty, &bytes)
-			.with_context(|| format!("deserialized(...) as {}", self.name(ty)))?;
-		let skipped = cx.skipped();
-		if !skipped.is_empty() {
-			let list: Vec<String> = skipped.iter().map(|(what, n)| format!("{what} ({n}x)")).collect();
-			tracing::warn!(
-				"deserialized(...) as {} skipped {}",
-				self.name(ty),
-				list.join(", ")
-			);
-		}
-		Ok(value)
 	}
 
 	pub fn literal(&self, e: &Expr) -> Result<Expr> {
@@ -307,7 +303,7 @@ impl Elaborator<'_> {
 		scalar_of(self.types, ty).filter(|s| s.is_number())
 	}
 
-	fn operand(&self, e: Expr) -> Result<Expr> {
+	pub fn operand(&self, e: Expr) -> Result<Expr> {
 		if e.is_untyped_literal() {
 			Ok(e)
 		} else {
@@ -315,7 +311,7 @@ impl Elaborator<'_> {
 		}
 	}
 
-	fn typed(&self, e: Expr, ty: TypeId) -> Result<Expr> {
+	pub fn typed(&self, e: Expr, ty: TypeId) -> Result<Expr> {
 		if e.is_untyped_literal() {
 			self.build(ty, &e)
 		} else {
@@ -415,13 +411,10 @@ impl Elaborator<'_> {
 				}
 			},
 			Expr::Cast(e, to) => self.cast(*e, to)?,
-			Expr::Serialized(e) => {
-				let e = self.elaborate(*e)?;
-				let bytes = Encoding::new(self)
-					.encode_root(&e)
-					.context("serialized(...)")?;
-				Expr::Const(Value::Bytes(bytes))
-			}
+			Expr::Call(f, args) => match self.function(&f)?.call(self, None, &args)? {
+				Some(e) => e,
+				None => bail!("{f:?}(...) needs a type, write it as `Type(...)`"),
+			},
 			e if e.is_untyped_literal() => {
 				bail!("{} needs a type, write it as `Type(...)`", describe(&e))
 			}

@@ -2,11 +2,17 @@ use anyhow::{anyhow, bail, ensure, Result};
 use pds2_core::generator::common::scalar_of;
 use pds2_core::hir::TypeId;
 use pds2_core::mir::{self, Construction, Expr, Value};
-use pds2_core::specializer::decode::Input;
-use pds2_core::specializer::encode::{
-	bits_of, float_of, int_of, width, wrap, write_varint, Encoder, Encoding, Target, Val,
-};
+use pds2_core::specializer::eval::{bits_of, float_of, int_of, width, wrap, Target, Val};
 use pds2_core::specializer::{Registry, Scalar};
+
+mod encoding;
+mod functions;
+mod input;
+pub mod reflect;
+
+pub use encoding::{register_encoder, write_varint, Encoder, Encoding};
+pub use functions::{Deserialized, Serialized};
+pub use input::Input;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScalarEncoding {
@@ -175,6 +181,8 @@ impl Encoder for ScalarEncoding {
 
 pub fn register(reg: &mut Registry) {
 	for e in ScalarEncoding::ALL {
-		reg.register_encoder(e.name(), e);
+		register_encoder(reg, e.name(), e);
 	}
+	reg.register_function("serialized", Serialized);
+	reg.register_function("deserialized", Deserialized);
 }

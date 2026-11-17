@@ -2,8 +2,8 @@ use anyhow::{anyhow, bail, ensure, Context as _, Result};
 use genco::lang::{js, rust, JavaScript, Rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::decode::Input;
-use pds2_core::specializer::encode::{int_of, Encoder, Encoding, Target, Val};
+use pds2_core::specializer::eval::{int_of, Target, Val};
+use pds2_specializer_bytes::{Encoder, Encoding, Input};
 use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
 use pds2_core::specializer::{
 	specialization_use, AstHir, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx,
@@ -160,6 +160,16 @@ impl ValueModel for Enum {
 			c => cx.construction_literal(c),
 		}
 	}
+	fn cast_value(&self, cx: &Elaborator, v: &Val, to: TypeId) -> Result<Expr> {
+		let e = view_of(v.native)?;
+		ensure!(
+			cx.resolve(to) == cx.resolve(e.tag.target),
+			"{} can't be cast to {}",
+			cx.name(v.id),
+			cx.name(to)
+		);
+		number_of(cx, &e, v.c)
+	}
 }
 
 impl Encoder for Enum {
@@ -179,16 +189,6 @@ impl Encoder for Enum {
 			Some((v, _)) => Construction::Variant((*v).clone(), vec![]),
 			None => Construction::Variant(e.unknown.clone(), vec![tag]),
 		})
-	}
-	fn cast(&self, cx: &Encoding, v: &Val, to: TypeId) -> Result<Expr> {
-		let e = view_of(v.native)?;
-		ensure!(
-			cx.elab.resolve(to) == cx.elab.resolve(e.tag.target),
-			"{} can't be cast to {}",
-			cx.name(v.id),
-			cx.name(to)
-		);
-		number_of(cx.elab, &e, v.c)
 	}
 }
 

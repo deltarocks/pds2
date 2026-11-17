@@ -1,5 +1,6 @@
 use genco::lang::{JavaScript, Rust};
 use pds2_core::specializer::Registry;
+use pds2_specializer_bytes::register_encoder;
 use pds2_specializer_protodef::UpgradeRegistry;
 
 mod natives;
@@ -14,21 +15,21 @@ pub fn register(reg: &mut Registry) {
 	reg.register_codegen::<Rust>("topBitSetTerminatedArray", TopBitSetTerminatedArray);
 	reg.register_codegen::<JavaScript>("topBitSetTerminatedArray", TopBitSetTerminatedArray);
 	reg.register_value("topBitSetTerminatedArray", TopBitSetTerminatedArray);
-	reg.register_encoder("topBitSetTerminatedArray", TopBitSetTerminatedArray);
+	register_encoder(reg, "topBitSetTerminatedArray", TopBitSetTerminatedArray);
 
 	reg.register_asthir("registryEntryHolder", RegistryEntryHolder);
 	reg.register_layout("registryEntryHolder", RegistryEntryHolder);
 	reg.register_codegen::<Rust>("registryEntryHolder", RegistryEntryHolder);
 	reg.register_codegen::<JavaScript>("registryEntryHolder", RegistryEntryHolder);
 	reg.register_value("registryEntryHolder", RegistryEntryHolder);
-	reg.register_encoder("registryEntryHolder", RegistryEntryHolder);
+	register_encoder(reg, "registryEntryHolder", RegistryEntryHolder);
 
 	reg.register_asthir("registryEntryHolderSet", RegistryEntryHolderSet);
 	reg.register_layout("registryEntryHolderSet", RegistryEntryHolderSet);
 	reg.register_codegen::<Rust>("registryEntryHolderSet", RegistryEntryHolderSet);
 	reg.register_codegen::<JavaScript>("registryEntryHolderSet", RegistryEntryHolderSet);
 	reg.register_value("registryEntryHolderSet", RegistryEntryHolderSet);
-	reg.register_encoder("registryEntryHolderSet", RegistryEntryHolderSet);
+	register_encoder(reg, "registryEntryHolderSet", RegistryEntryHolderSet);
 }
 
 pub fn register_upgraders(reg: &mut UpgradeRegistry) {
