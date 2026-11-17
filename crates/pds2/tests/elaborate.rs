@@ -118,6 +118,105 @@ fn generic_argument_types_are_inferred_from_typed_values() {
 	assert!(err.contains("expected u8, got u16"), "{err}");
 }
 
+fn exprs(types: &TypeMap) -> Vec<Expr> {
+	let mut out = counts(types);
+	out.extend(types.0.values().flat_map(|d| d.exprs().into_iter().cloned()));
+	out
+}
+
+fn with_fns(fns: &str, body: &str) -> Result<TypeMap> {
+	constant(&format!("{fns} def(T) {{ export; }} => container {{ {body} }};"))
+}
+
+fn fn_error(fns: &str, body: &str) -> String {
+	format!("{:#}", with_fns(fns, body).expect_err("should be rejected"))
+}
+
+#[test]
+fn functions_inline_at_call_sites() {
+	let types = with_fns(
+		"fn(name, arg1, arg2: u8) => arg2 * 2;",
+		"field(n) => u8; field(c) => array(count: name(../n, ../n)) => u8;",
+	)
+	.unwrap();
+	assert!(exprs(&types)
+		.iter()
+		.any(|e| matches!(e, Expr::Binary(pds2_core::ast::BinOp::Mul, a, _) if a.as_field().is_some())));
+	let types = with_fns(
+		"fn(add, a, b) => a + b; fn(twice, n) => add(n, n);",
+		"field(c) => array(count: twice(add(2, 3))) => u8;",
+	)
+	.unwrap();
+	assert!(exprs(&types)
+		.iter()
+		.any(|e| matches!(e, Expr::Const(Value::Signed(10)))));
+}
+
+#[test]
+fn typed_parameters_check_their_values() {
+	let fns = "fn(wide, n: u16) => n * 2;";
+	let err = fn_error(fns, "field(n) => u8; field(c) => array(count: wide(../n)) => u8;");
+	assert!(err.contains("expected u16, got u8"), "{err}");
+	with_fns(fns, "field(n) => u8; field(c) => array(count: wide(u16(../n))) => u8;").unwrap();
+	with_fns(fns, "field(c) => array(count: wide(3)) => u8;").unwrap();
+	with_fns("fn(zero, n: u8) => n;", "field(w) => terminated(end: zero(0)) => u8;").unwrap();
+}
+
+#[test]
+fn typed_parameters_carry_arguments_and_outer_refs() {
+	constant(
+		"fn(wide, n: u16) => n * 2;
+		def(W) { type(V); argument(n) => u16; } => container { field(xs) => array(count: wide(../$n)) => V; };
+		def(T) { export; } => container {
+			field(m) => u16;
+			field(w) => W(V: u8, n: ../m);
+			field(k) => u8;
+			field(u) => union(tag: ../k) { variant(a, match: 1) => array(count: wide(u16(../../k))) => u8; };
+		};",
+	)
+	.unwrap();
+}
+
+#[test]
+fn function_bodies_resolve_in_their_namespace() {
+	let types = with_fns(
+		"@scalar u8 def_native(w); namespace(a) { @scalar u16 def_native(w); fn(widen, n) => w(n); };",
+		"field(n) => u8; field(c) => array(count: a::widen(../n)) => u8;",
+	)
+	.unwrap();
+	let target = exprs(&types).into_iter().find_map(|e| match e {
+		Expr::Cast(_, to) => Some(types[to].name.readable_name()),
+		_ => None,
+	});
+	assert_eq!(target.as_deref(), Some("a_w"));
+	constant(
+		"fn(g, x) => [x, on]; fn(f, on) => g((level: 2));
+		def(c) => const(value: f(5)) => array(count: 2) => Mode;",
+	)
+	.unwrap();
+}
+
+#[test]
+fn bad_functions_are_rejected() {
+	let body = "field(c) => array(count: f(1)) => u8;";
+	let err = fn_error("fn(f, n) => n + ../x;", body);
+	assert!(err.contains("sees only its parameters"), "{err}");
+	let err = fn_error("fn(f, n) => g(n); fn(g, n) => f(n) + 1;", body);
+	assert!(err.contains("calls itself"), "{err}");
+	let err = fn_error("fn(f, n) => nope(n);", body);
+	assert!(err.contains("not a type or function"), "{err}");
+	let err = fn_error("fn(f, a, b) => a + b;", body);
+	assert!(err.contains("takes 2 values, got 1"), "{err}");
+	let err = fn_error("fn(f, n, n) => n;", body);
+	assert!(err.contains("declared twice"), "{err}");
+	let err = fn_error("fn(f, n) => n; fn(f, m) => m;", body);
+	assert!(err.contains("already defined"), "{err}");
+	let err = fn_error("fn(u8, n) => n;", body);
+	assert!(err.contains("both as a function and an item"), "{err}");
+	let err = fn_error("", "field(c) => array(count: nope(1, 2)) => u8;");
+	assert!(err.contains("not a declared or registered function"), "{err}");
+}
+
 #[test]
 fn constants_fold() {
 	let types = compile("field(c) => array(count: 2 * 3 + 1) => u8;").unwrap();

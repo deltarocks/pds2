@@ -33,7 +33,7 @@ fn check_expr(e: &Expr, depth: usize, use_site: bool) -> Result<()> {
 			check_expr(a, depth, use_site)?;
 			check_expr(b, depth, use_site)
 		}
-		Expr::Cast(e, _) => check_expr(e, depth, use_site),
+		Expr::Cast(e, _) | Expr::Typed(e, _) => check_expr(e, depth, use_site),
 		Expr::Record(fields) => fields
 			.iter()
 			.try_for_each(|(_, e)| check_expr(e, depth, use_site)),

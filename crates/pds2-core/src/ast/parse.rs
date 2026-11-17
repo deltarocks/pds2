@@ -39,7 +39,7 @@ rule insideBlockAttr() -> (Ident, Vec<Value>)
 	= "@!" name:baseIdent() val:valueChain() { (name, val) }
 
 rule valueChain() -> Vec<Value>
-	= value() ++ (_ "=>" _)
+	= expr() ++ (_ "=>" _)
 
 rule value() -> Value
 	= s:string_block() { Value::String { is_block: true, string: s } }
@@ -88,12 +88,8 @@ rule itemArgs() -> ItemArgs
 	= "(" _ args:(itemArg() ** (_ "," _)) ("," _)? ")" _ {?
 		let mut out = ItemArgs::default();
 		for (k, v) in args {
-			if let Some(k) = k {
-				if out.named.insert(k, v).is_some() {
-					return Err("named arguments to be unique");
-				}
-			} else {
-				out.unnamed.push(v)
+			if !out.push(k, v) {
+				return Err("named arguments to be unique");
 			}
 		}
 		Ok(out)

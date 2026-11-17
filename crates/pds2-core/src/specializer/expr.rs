@@ -411,6 +411,7 @@ impl Elaborator<'_> {
 				}
 			},
 			Expr::Cast(e, to) => self.cast(*e, to)?,
+			Expr::Typed(e, ty) => self.coerce(*e, ty)?,
 			Expr::Call(f, args) => match self.function(&f)?.call(self, None, &args)? {
 				Some(e) => e,
 				None => bail!("{f:?}(...) needs a type, write it as `Type(...)`"),

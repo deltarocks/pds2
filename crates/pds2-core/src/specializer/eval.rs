@@ -341,6 +341,7 @@ impl<'a> Elaborator<'a> {
 			Expr::Field(f) => self.path(f, scope)?,
 			Expr::Binary(op, a, b) => self.arith(*op, self.eval(a, scope)?, self.eval(b, scope)?)?,
 			Expr::Cast(e, to) => self.cast_value(self.eval(e, scope)?, *to)?,
+			Expr::Typed(e, ty) => self.coerce(self.eval(e, scope)?, *ty)?,
 			Expr::Eq(a, b) => {
 				let (a, b) = (self.eval(a, scope)?, self.eval(b, scope)?);
 				Expr::Const(Value::Bool(const_eq(&a, &b)))

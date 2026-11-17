@@ -195,6 +195,16 @@ def(Widened) {
 	field(items) => array(count: u16(../n) * 2) => u16;
 };
 
+fn(scaled, n: u16, by) => n * by;
+
+def(Scaled) {
+	export;
+} => container {
+	field(n) => u8;
+
+	field(items) => array(count: scaled(u16(../n), 2)) => u16;
+};
+
 def(Words) {
 	export;
 } => terminated(end: u16(0xff00 + 0xff)) => u16;
@@ -462,6 +472,8 @@ def(encoded_tagged) => const(value: serialized(Tagged(k: (b: 9), v: (y: 5), o: 3
 def(encoded_default) => const(value: serialized(Tagged(k: 7, v: z, o: none, w: (default: none)))) => bytes;
 
 def(encoded_widened) => const(value: serialized(Widened(n: 2, items: [1, 2, 3, 0xffff]))) => bytes;
+
+def(encoded_scaled) => const(value: serialized(Scaled(n: 4, items: [1, 2, 3, 0xffff, 5, 6, 7, 8]))) => bytes;
 
 def(decoded_counted) => const(value: Counted(deserialized(b"\x03\x07\x08")));
 

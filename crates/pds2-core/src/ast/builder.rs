@@ -5,11 +5,11 @@ pub struct ItemArgsBuilder {
 }
 impl ItemArgsBuilder {
 	pub fn arg(mut self, value: Value) -> Self {
-		self.args.unnamed.push(value);
+		self.args.push(None, value);
 		self
 	}
 	pub fn named(mut self, name: impl Into<Ident>, value: Value) -> Self {
-		if self.args.named.insert(name.into(), value).is_some() {
+		if !self.args.push(Some(name.into()), value) {
 			panic!("named set twice");
 		}
 		self

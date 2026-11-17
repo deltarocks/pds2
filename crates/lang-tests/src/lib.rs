@@ -59,6 +59,18 @@ mod tests {
 	}
 
 	#[test]
+	fn functions_inline_like_written_expressions() {
+		use gen::scaled as t;
+		let mut bytes = vec![200];
+		bytes.extend((0..800).map(|i| i as u8));
+		let v = roundtrip(t::deserialize, t::serialize, &bytes).unwrap();
+		assert_eq!(v.items.len(), 400);
+		let encoded = gen::encoded_scaled::value();
+		let v = roundtrip(t::deserialize, t::serialize, &encoded).unwrap();
+		assert_eq!((v.n, v.items), (4, vec![1, 2, 3, 0xffff, 5, 6, 7, 8]));
+	}
+
+	#[test]
 	fn typed_terminator_reads_whole_values() {
 		let bytes = [0, 1, 0xff, 0, 0xff, 0xff];
 		let inferred = roundtrip(gen::words::deserialize, gen::words::serialize, &bytes).unwrap();

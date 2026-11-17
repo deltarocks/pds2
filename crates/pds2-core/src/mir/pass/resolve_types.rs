@@ -104,7 +104,7 @@ impl Definition {
 			Expr::Field(f) => Some(Self::resolve_ref(scope, types, f)?),
 			Expr::Const(_) => None,
 			Expr::Var(_, t) | Expr::Construct(t, _) => Some(*t),
-			Expr::Cast(e, t) => {
+			Expr::Cast(e, t) | Expr::Typed(e, t) => {
 				Self::resolve_expr(scope, types, e)?;
 				Some(*t)
 			}

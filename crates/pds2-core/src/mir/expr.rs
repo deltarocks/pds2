@@ -15,6 +15,7 @@ pub enum Expr {
 	Call(Ident, Vec<Expr>),
 	Construct(TypeId, Construction),
 	Cast(Box<Expr>, TypeId),
+	Typed(Box<Expr>, TypeId),
 	Binary(BinOp, Box<Expr>, Box<Expr>),
 	Eq(Box<Expr>, Box<Expr>),
 }
@@ -31,7 +32,7 @@ pub enum Construction {
 impl Expr {
 	pub fn ty(&self) -> Option<TypeId> {
 		match self {
-			Expr::Var(_, t) | Expr::Construct(t, _) | Expr::Cast(_, t) => Some(*t),
+			Expr::Var(_, t) | Expr::Construct(t, _) | Expr::Cast(_, t) | Expr::Typed(_, t) => Some(*t),
 			Expr::Field(f) => f.0.last().map(|i| i.to.get()),
 			Expr::Binary(_, a, b) => a.ty().or_else(|| b.ty()),
 			Expr::Const(_) | Expr::Record(_) | Expr::List(_) | Expr::Call(..) | Expr::Eq(..) => None,
@@ -69,7 +70,7 @@ impl Expr {
 				}
 			}
 			Expr::Construct(_, Construction::Literal(_)) => {}
-			Expr::Construct(_, Construction::Wrap(e)) | Expr::Cast(e, _) => e.walk(f),
+			Expr::Construct(_, Construction::Wrap(e)) | Expr::Cast(e, _) | Expr::Typed(e, _) => e.walk(f),
 			Expr::Binary(_, a, b) | Expr::Eq(a, b) => {
 				a.walk(f);
 				b.walk(f);

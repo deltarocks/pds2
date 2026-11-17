@@ -386,27 +386,14 @@ fn args_width(args: &ItemArgs, budget: usize) -> Option<usize> {
 	if args.is_empty() {
 		return Some(0);
 	}
-	let entries: Vec<_> = args
-		.unnamed
-		.iter()
-		.map(|v| (None, v))
-		.chain(args.named.iter().map(|(k, v)| (Some(k), v)))
-		.collect();
+	let entries: Vec<_> = args.ordered().collect();
 	list_width(2, &entries, budget)
 }
 
 impl ItemArgs {
 	fn print(&self, out: &mut PrintItems) {
 		if !self.is_empty() {
-			print_list(
-				out,
-				"(",
-				")",
-				self.unnamed
-					.iter()
-					.map(|v| (None, v))
-					.chain(self.named.iter().map(|(k, v)| (Some(k), v))),
-			);
+			print_list(out, "(", ")", self.ordered());
 		}
 	}
 }
@@ -475,6 +462,7 @@ mod tests {
 			"def(a) => x(n: (../a + 1) * 2);",
 			"def(a) => x(n: ../a - (../b - 1));",
 			"def(a) => x(n: u16(../a) * 2 + -1);",
+			"fn(f, b: u8, a, c: u16) => (a + 1) * b;",
 		] {
 			let out = super::format(&crate::ast::parse(src).unwrap());
 			assert_eq!(squash(&out), squash(src));

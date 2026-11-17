@@ -580,6 +580,7 @@ fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 		Expr::Const(v) => bail!("untyped constant {v:?}"),
 		Expr::Record(_) => bail!("untyped record"),
 		Expr::Call(f, _) => bail!("{f:?}(...) was not evaluated"),
+		Expr::Typed(..) => bail!("typed expression was not elaborated"),
 		Expr::List(items) => {
 			let items = items.iter().map(rec).collect::<Result<Vec<_>>>()?;
 			quote!(vec![$(for i in items join(, ) => $i)])

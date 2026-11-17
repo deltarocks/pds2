@@ -172,9 +172,14 @@ impl Expr {
 					.collect(),
 			),
 			hir::Expr::List(items) => Expr::List(items.iter().map(Expr::from_hir).collect()),
-			hir::Expr::Call(f, args) => Expr::Call(f.clone(), args.iter().map(Expr::from_hir).collect()),
+			hir::Expr::Call(f, args) => {
+				Expr::Call(f.item.clone(), args.iter().map(Expr::from_hir).collect())
+			}
 			hir::Expr::Cast(e, t) => {
 				Expr::Cast(Box::new(Expr::from_hir(e)), Type::from_hir(t).target)
+			}
+			hir::Expr::Typed(e, t) => {
+				Expr::Typed(Box::new(Expr::from_hir(e)), Type::from_hir(t).target)
 			}
 		}
 	}

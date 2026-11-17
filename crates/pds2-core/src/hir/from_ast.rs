@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use crate::{
-	ast::{Block, Ident, Item, ItemArgs, ParseValue, Statement, Value},
+	ast::{BaseFieldRef, Block, FieldRef, FieldRefSegment, Ident, Item, ItemArgs, ParseValue, Statement, Value},
 	hir::{
-		BodyDecl, BodyField, BodyItemDecl, Expr, NamespaceItem,
+		BodyDecl, BodyField, BodyItemDecl, Expr, Function, NamespaceItem,
 		NativeType, Reference, ReferenceKind, Value as HirValue,
 	},
 	specializer::Registry,
@@ -103,7 +103,15 @@ pub fn arg_value(value: Value) -> Result<Expr> {
 					let operand: Value = item.args.arg(0, "cast operand")?;
 					arg_value(operand)?
 				}
-				_ => bail!("`{:?}(...)` takes one value or named fields", item.name),
+				n => {
+					let mut args = Vec::new();
+					for i in 0..n {
+						let v: Value = item.args.arg(i, "call argument")?;
+						args.push(arg_value(v)?);
+					}
+					item.args.verify_unused()?;
+					return Ok(Expr::Call(item.name, args));
+				}
 			};
 			item.args.verify_unused()?;
 			let ty = TypeKind::from_ast(
@@ -221,6 +229,7 @@ impl BodyItemDecl {
 
 pub fn parse_ast(ast: Block, reg: &Registry) -> Result<Namespace> {
 	let mut ns = Namespace::from_ast(ast).context("parsing AST to IR")?;
+	super::desugar::inline_functions(&mut ns, reg).context("inlining functions")?;
 	super::desugar::resolve_calls(&mut ns, reg).context("resolving calls")?;
 	let id = IdGenerator::new();
 	super::desugar::give_all_types_ids(id.clone(), &mut ns, reg)?;
@@ -239,6 +248,83 @@ pub fn parse_ast(ast: Block, reg: &Registry) -> Result<Namespace> {
 	super::desugar::extract_nested_types(id, &mut ns, reg)?;
 	super::desugar::replace_aliases(&mut ns, reg)?;
 	Ok(ns)
+}
+
+fn mark_params(e: &mut Expr, params: &[(Ident, Option<TypeKind>)]) -> Result<()> {
+	match e {
+		Expr::Field(r) => bail!("a function sees only its parameters, got {r:?}"),
+		Expr::Const(HirValue::UnionDescriminator(n)) if params.iter().any(|(p, _)| p == n) => {
+			*e = Expr::Field(FieldRef {
+				up: 0,
+				path: BaseFieldRef(vec![FieldRefSegment::Arg(n.clone())]),
+			});
+		}
+		Expr::Const(_) => {}
+		Expr::Binary(_, a, b) => {
+			mark_params(a, params)?;
+			mark_params(b, params)?;
+		}
+		Expr::Cast(e, _) | Expr::Typed(e, _) => mark_params(e, params)?,
+		Expr::Record(fields) => {
+			for (_, e) in fields {
+				mark_params(e, params)?;
+			}
+		}
+		Expr::List(items) | Expr::Call(_, items) => {
+			for e in items {
+				mark_params(e, params)?;
+			}
+		}
+	}
+	Ok(())
+}
+
+impl Function {
+	fn from_ast(value: Item, mut items: Vec<Value>) -> Result<(Ident, Function)> {
+		let mut args = value.args.ordered();
+		let name = match args.next() {
+			Some((None, v)) => Ident::parse(v.clone()).context("function name")?,
+			_ => bail!("expected `fn(name, params...) => expression`"),
+		};
+		let function = (|| -> Result<Function> {
+			ensure!(value.block.is_empty(), "fn takes no block");
+			ensure!(
+				items.len() == 1,
+				"fn takes one body expression: `fn(name, params...) => expression`"
+			);
+			let mut params: Vec<(Ident, Option<TypeKind>)> = Vec::new();
+			for (k, v) in args {
+				let (param, ty) = match k {
+					None => (Ident::parse(v.clone()).context("parameter name")?, None),
+					Some(k) => {
+						let ty = v
+							.clone()
+							.into_item()
+							.ok_or_else(|| anyhow!("parameter {k:?} type should be a type"))?;
+						(k.clone(), Some(TypeKind::from_ast(ty, vec![])?))
+					}
+				};
+				ensure!(
+					!matches!(param.as_str(), "true" | "false"),
+					"{param:?} can't name a parameter"
+				);
+				ensure!(
+					params.iter().all(|(p, _)| p != &param),
+					"parameter {param:?} declared twice"
+				);
+				params.push((param, ty));
+			}
+			ensure!(
+				!params.is_empty(),
+				"fn takes at least one parameter, write a constant as `def(name) => const(value: ...)`"
+			);
+			let mut body = arg_value(items.remove(0)).context("body")?;
+			mark_params(&mut body, &params).context("body")?;
+			Ok(Function { params, body })
+		})()
+		.with_context(|| format!("fn <{name:?}>"))?;
+		Ok((name, function))
+	}
 }
 
 impl Type {
@@ -357,8 +443,18 @@ impl TypeKind {
 impl Namespace {
 	fn from_ast(value: Block) -> Result<Self> {
 		let mut out = BTreeMap::new();
+		let mut functions = BTreeMap::new();
 		for statement in value.statements {
 			let (attrs, item, mut items) = statement.pop_item()?;
+
+			if item.name.simple_name().is_some_and(|n| n.as_str() == "fn") {
+				let (name, function) = Function::from_ast(item, items)?;
+				ensure!(
+					functions.insert(name.clone(), function).is_none(),
+					"function is already defined: {name:?}"
+				);
+				continue;
+			}
 
 			let (name, item) = match item.name.expect_simple_name()?.as_str() {
 				"namespace" => {
@@ -672,7 +768,14 @@ impl Namespace {
 								)),
 							);
 						}
-						(name, NamespaceItem::Inner(Namespace { items, overloads: true }))
+						(
+							name,
+							NamespaceItem::Inner(Namespace {
+								items,
+								functions: BTreeMap::new(),
+								overloads: true,
+							}),
+						)
 					}
 				}
 				"def" => {
@@ -699,8 +802,15 @@ impl Namespace {
 				name
 			);
 		}
+		for name in functions.keys() {
+			ensure!(
+				!out.contains_key(name),
+				"{name:?} is defined both as a function and an item"
+			);
+		}
 		Ok(Self {
 			items: out,
+			functions,
 			overloads: false,
 		})
 	}

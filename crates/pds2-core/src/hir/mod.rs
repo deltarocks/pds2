@@ -33,9 +33,16 @@ impl Traverse for NamespaceItem {
 	}
 }
 
+#[derive(Debug, Clone)]
+pub struct Function {
+	pub params: Vec<(Ident, Option<TypeKind>)>,
+	pub body: Expr,
+}
+
 #[derive(Debug)]
 pub struct Namespace {
 	pub items: BTreeMap<Ident, NamespaceItem>,
+	pub functions: BTreeMap<Ident, Function>,
 	pub overloads: bool,
 }
 impl Namespace {
@@ -287,9 +294,10 @@ pub enum Expr {
 	Const(Value),
 	Binary(BinOp, Box<Expr>, Box<Expr>),
 	Cast(Box<Expr>, Box<TypeKind>),
+	Typed(Box<Expr>, Box<TypeKind>),
 	Record(Vec<(Ident, Expr)>),
 	List(Vec<Expr>),
-	Call(Ident, Vec<Expr>),
+	Call(Path, Vec<Expr>),
 }
 impl Expr {
 	pub fn types_mut(&mut self) -> Vec<&mut TypeKind> {
@@ -304,7 +312,7 @@ impl Expr {
 				out.extend(b.types_mut());
 				out
 			}
-			Expr::Cast(e, t) => {
+			Expr::Cast(e, t) | Expr::Typed(e, t) => {
 				let mut out = e.types_mut();
 				out.push(t);
 				out
@@ -327,7 +335,7 @@ impl Traverse for Expr {
 				a.traverse(visitor, skip, reg)?;
 				b.traverse(visitor, skip, reg)
 			}
-			Expr::Cast(e, t) => {
+			Expr::Cast(e, t) | Expr::Typed(e, t) => {
 				e.traverse(visitor, skip, reg)?;
 				t.traverse(visitor, skip, reg)
 			}

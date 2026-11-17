@@ -1086,7 +1086,7 @@ mod tests {
 			&out,
 			"@specializer bitfield def_native(bitfield) { body { item(field) { argument(size); argument(signed) => false; }; }; };",
 		);
-		assert_has(&out, "def(p) => bitfield { field(x, signed: true, size: 8); };");
+		assert_has(&out, "def(p) => bitfield { field(x, size: 8, signed: true); };");
 	}
 
 	#[test]

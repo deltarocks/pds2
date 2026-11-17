@@ -108,8 +108,8 @@ impl Type {
 }
 
 impl Namespace {
-	fn discover_paths(&mut self, current_ns: &mut Vec<Ident>, paths: &mut HashSet<Vec<Ident>>) {
-		for (name, item) in self.items.iter_mut() {
+	pub(super) fn discover_paths(&self, current_ns: &mut Vec<Ident>, paths: &mut HashSet<Vec<Ident>>) {
+		for (name, item) in self.items.iter() {
 			match item {
 				NamespaceItem::Inner(ns) => {
 					// A native overload set is referenced by its bare name (the variant

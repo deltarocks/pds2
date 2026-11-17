@@ -390,12 +390,32 @@ impl From<FieldRef> for Value {
 pub struct ItemArgs {
 	unnamed: Vec<Value>,
 	named: BTreeMap<Ident, Value>,
+	order: Vec<Option<Ident>>,
 	used_unnamed: RefCell<BTreeSet<usize>>,
 	used_named: RefCell<BTreeSet<Ident>>,
 }
 impl ItemArgs {
 	fn empty() -> Self {
 		Self::default()
+	}
+	fn push(&mut self, name: Option<Ident>, value: Value) -> bool {
+		match &name {
+			Some(k) => {
+				if self.named.insert(k.clone(), value).is_some() {
+					return false;
+				}
+			}
+			None => self.unnamed.push(value),
+		}
+		self.order.push(name);
+		true
+	}
+	pub fn ordered(&self) -> impl Iterator<Item = (Option<&Ident>, &Value)> {
+		let mut unnamed = self.unnamed.iter();
+		self.order.iter().map(move |k| match k {
+			Some(k) => (Some(k), &self.named[k]),
+			None => (None, unnamed.next().expect("order tracks every argument")),
+		})
 	}
 	pub fn is_empty(&self) -> bool {
 		self.unnamed.is_empty() && self.named.is_empty()
