@@ -8,7 +8,7 @@
 		"./protobuf": "./protobuf.ts"
 	},
 	"scripts": {
-		"prepack": "pnpm-prepare"
+		"prepack": "raphus"
 	},
 	"publishConfig": {
 		"directory": "dist",

@@ -9,6 +9,6 @@
 		"build": "pnpm -r run prepack"
 	},
 	"devDependencies": {
-		"pnpm-prepare": "link:../../../Projects/contrib/pnpm-prepare"
+		"@deltarocks/raphus": "^0.1.1"
 	}
 }
