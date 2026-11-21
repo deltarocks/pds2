@@ -379,7 +379,6 @@ impl<'a> RustNames<'a> {
 	}
 }
 
-/// What a custom definition's Rust generator sees: the final types and their Rust names
 pub struct DefinitionRustCtx<'a> {
 	meta: RustMeta<'a>,
 	by_path: BTreeMap<crate::ast::Path, TypeId>,
@@ -407,7 +406,6 @@ impl<'a> DefinitionRustCtx<'a> {
 			.copied()
 			.ok_or_else(|| anyhow!("no generated type {path:?}"))
 	}
-	/// Names as seen from the module of a pds namespace
 	pub fn names_in(&self, namespace: &[Ident]) -> Result<RustNames<'a>> {
 		let (krate, path) = self.namespace_dir(namespace)?;
 		Ok(RustNames(self.meta.at(Loc {

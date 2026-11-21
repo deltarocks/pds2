@@ -383,8 +383,6 @@ pub trait NativeCodegen<L: Lang> {
 	fn nullable(&self, _native: &mir::NativeType) -> bool {
 		false
 	}
-	/// Whether the Rust type is `Clone + PartialEq`; types reaching one that is not
-	/// derive only `Debug` and are kept out of views
 	fn value_traits(&self, _native: &mir::NativeType) -> bool {
 		true
 	}

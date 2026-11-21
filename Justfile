@@ -12,6 +12,13 @@ csn1:
 	rm -rf crates/csn1-tests/src/gen
 	cargo run compile crates/csn1-tests/csn1.pds rust --to crates/csn1-tests/src/gen
 
+bifrostlink-gen:
+	rm -rf target/bifrostlink-gen
+	mkdir -p target/bifrostlink-gen
+	echo 'edition = "2021"' > target/bifrostlink-gen/rustfmt.toml
+	cargo run compile crates/pds2-specializer-bifrostlink/tests/remowt.pds rust --to target/bifrostlink-gen
+	rustfmt --check target/bifrostlink-gen/mod.rs
+
 descriptor-set:
 	mkdir -p target
 	{{protoc}} -I crates/protobuf-descriptor --include_imports --descriptor_set_out=target/descriptor.pb google/protobuf/descriptor.proto
@@ -50,6 +57,6 @@ envoy: envoy-protos
 	cargo run protobuf decode crates/envoy-api/envoy.pds --type root::envoy::config::cluster::v3::Cluster target/cluster.bin > target/cluster.decoded.txtpds2
 	cargo run protobuf encode crates/envoy-api/envoy.pds target/cluster.decoded.txtpds2 | cmp - target/cluster.bin
 
-test: lang csn1 descriptor-check envoy
+test: lang csn1 bifrostlink-gen descriptor-check envoy
 	cargo test --workspace
 	cd ts && deno test --allow-net --allow-read

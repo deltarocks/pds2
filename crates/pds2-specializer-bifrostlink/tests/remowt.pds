@@ -1,0 +1,73 @@
+@scalar u8 @encoding be
+def_native(u8);
+
+@scalar u16 @encoding be
+def_native(u16);
+
+@scalar i32 @encoding be
+def_native(i32);
+
+@scalar bool @encoding be
+def_native(bool);
+
+@scalar u64 @encoding varint64
+def_native(varint);
+
+@specializer pstring
+def_native(pstring) {
+	type(Count);
+};
+
+@specializer option
+def_native(option) {
+	type(Value);
+};
+
+@specializer container
+def_native(container) {
+	body {
+		item(field) {
+			type(Value);
+		};
+
+		item(virtual_field) {
+			argument(value);
+
+			type(Value);
+		};
+	};
+};
+
+@specializer resource
+def_native(resource) {
+	type(Value);
+};
+
+namespace(remowt) {
+	def(ShellId) { export; } => varint;
+
+	def(TunnelAddr) => container {
+		field(host) => pstring(Count: varint);
+		field(port) => u16;
+	};
+
+	service(Pty) {
+		request(open_shell, id: 1, cancel: true) {
+			field(tunnel) => TunnelAddr;
+			field(term) => pstring(Count: varint);
+			field(cols) => u16;
+			field(rows) => u16;
+		} => ShellId;
+
+		request(resize, id: 2) {
+			field(id) => ShellId;
+			field(cols) => u16;
+			field(rows) => u16;
+		};
+
+		notification(exited, id: 3, blocking: true) {
+			field(id) => ShellId;
+			field(code) => i32;
+		};
+	};
+};

@@ -13,6 +13,7 @@ pub fn registry() -> Registry {
 	pds2_specializer_minecraft_data::register(&mut reg);
 	pds2_specializer_protobuf::register(&mut reg);
 	pds2_specializer_csn1::register(&mut reg);
+	pds2_specializer_bifrostlink::register(&mut reg);
 	reg
 }
 

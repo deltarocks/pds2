@@ -10,6 +10,7 @@ members = [
 	"crates/pds2-specializer-minecraft-data",
 	"crates/pds2-specializer-protobuf",
 	"crates/pds2-specializer-csn1",
+	"crates/pds2-specializer-bifrostlink",
 	"crates/lang-tests",
 	"crates/csn1-tests",
 	"crates/pds-bytes-runtime",

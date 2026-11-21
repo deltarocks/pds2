@@ -8,6 +8,7 @@ anyhow = "1.0"
 genco = "0.20"
 pds2-cli = { path = "../pds2-cli" }
 pds2-core = { path = "../pds2-core" }
+pds2-specializer-bifrostlink = { path = "../pds2-specializer-bifrostlink" }
 pds2-specializer-bytes = { path = "../pds2-specializer-bytes" }
 pds2-specializer-csn1 = { path = "../pds2-specializer-csn1" }
 pds2-specializer-generic = { path = "../pds2-specializer-generic" }
