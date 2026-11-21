@@ -197,6 +197,9 @@ impl Statement {
 			items,
 		}
 	}
+	pub fn head(&self) -> Option<&Item> {
+		self.items.first().and_then(Value::item)
+	}
 	pub fn pop_item(self) -> Result<(Attributes, Item, Vec<Value>)> {
 		let (attrs, value, values) = self.pop_value();
 		let item = value.into_item().ok_or_else(|| anyhow!("expected item"))?;
@@ -593,6 +596,9 @@ impl Item {
 		(self.args.is_empty() && self.block.is_empty())
 			.then(|| self.name.simple_name())
 			.flatten()
+	}
+	pub fn head_name(&self) -> Option<&str> {
+		(!self.name.absolute && self.name.path.is_empty()).then(|| self.name.item.as_str())
 	}
 }
 

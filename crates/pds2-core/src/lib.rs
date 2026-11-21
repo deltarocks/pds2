@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod definition;
 pub mod format;
 pub mod generator;
 pub mod hir;

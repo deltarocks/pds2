@@ -82,7 +82,7 @@ fn expr_types(e: &Expr, out: &mut BTreeSet<TypeId>) {
 	});
 }
 
-fn children(types: &TypeMap, reg: &Registry, id: TypeId) -> Result<BTreeSet<TypeId>> {
+pub(super) fn children(types: &TypeMap, reg: &Registry, id: TypeId) -> Result<BTreeSet<TypeId>> {
 	let mut out = BTreeSet::new();
 	match &types[id].kind {
 		TypeKind::Alias(t) => {

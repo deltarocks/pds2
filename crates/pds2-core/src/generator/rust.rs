@@ -97,9 +97,46 @@ struct RustMeta<'a> {
 	reg: &'a Registry,
 	boxed: Rc<Boxed>,
 	guarded: Rc<BTreeSet<TypeId>>,
+	move_only: Rc<BTreeSet<TypeId>>,
 	inlining: Rc<RefCell<BTreeSet<TypeId>>>,
 	mode: Mode,
 }
+
+fn move_only(types: &TypeMap, reg: &Registry) -> Result<BTreeSet<TypeId>> {
+	let mut set: BTreeSet<TypeId> = types
+		.0
+		.iter()
+		.filter(|(_, def)| match &def.kind {
+			TypeKind::Native(n) => n
+				.specializer
+				.as_ref()
+				.and_then(|(s, _)| reg.codegen::<Rust>(s.as_str()))
+				.is_some_and(|c| !c.value_traits(n)),
+			TypeKind::Alias(_) => false,
+		})
+		.map(|(id, _)| *id)
+		.collect();
+	if set.is_empty() {
+		return Ok(set);
+	}
+	let children = types
+		.0
+		.keys()
+		.map(|id| Ok((*id, views::children(types, reg, *id)?)))
+		.collect::<Result<BTreeMap<_, _>>>()?;
+	loop {
+		let before = set.len();
+		for (id, kids) in &children {
+			if kids.iter().any(|k| set.contains(k)) {
+				set.insert(*id);
+			}
+		}
+		if set.len() == before {
+			return Ok(set);
+		}
+	}
+}
+
 impl<'a> RustMeta<'a> {
 	fn new(source: &'a TypeMap, reg: &'a Registry, crates: Option<&str>) -> Result<Self> {
 		let mut raw_names = BTreeMap::new();
@@ -121,6 +158,7 @@ impl<'a> RustMeta<'a> {
 			reg,
 			boxed: Rc::new(boxing::analyze(source, reg)?),
 			guarded: Rc::new(recursion::guarded(source, reg)?),
+			move_only: Rc::new(move_only(source, reg)?),
 			inlining: Rc::default(),
 			mode: Mode::Owned,
 		})
@@ -327,9 +365,97 @@ impl<'a> RustNames<'a> {
 	pub fn boxed(&self, owner: TypeId, slot: &Ident) -> bool {
 		Names::boxed(&self.0, owner, slot)
 	}
+	pub fn serialize(&self, id: TypeId) -> Tokens {
+		Names::serialize(&self.0, id)
+	}
+	pub fn deserialize(&self, id: TypeId) -> Tokens {
+		Names::deserialize(&self.0, id)
+	}
+	pub fn size_of(&self, id: TypeId) -> Tokens {
+		Names::size_of(&self.0, id)
+	}
 	pub fn lower(&self, expr: &Expr) -> Result<Tokens> {
 		lower(&self.0, expr, false)
 	}
+}
+
+/// What a custom definition's Rust generator sees: the final types and their Rust names
+pub struct DefinitionRustCtx<'a> {
+	meta: RustMeta<'a>,
+	by_path: BTreeMap<crate::ast::Path, TypeId>,
+}
+
+impl<'a> DefinitionRustCtx<'a> {
+	fn new(meta: RustMeta<'a>) -> Self {
+		let by_path = meta
+			.types
+			.0
+			.iter()
+			.map(|(id, def)| (def.name.clone(), *id))
+			.collect();
+		Self { meta, by_path }
+	}
+	pub fn types(&self) -> &'a TypeMap {
+		self.meta.types
+	}
+	pub fn reg(&self) -> &'a Registry {
+		self.meta.reg
+	}
+	pub fn type_id(&self, path: &crate::ast::Path) -> Result<TypeId> {
+		self.by_path
+			.get(path)
+			.copied()
+			.ok_or_else(|| anyhow!("no generated type {path:?}"))
+	}
+	/// Names as seen from the module of a pds namespace
+	pub fn names_in(&self, namespace: &[Ident]) -> Result<RustNames<'a>> {
+		let (krate, path) = self.namespace_dir(namespace)?;
+		Ok(RustNames(self.meta.at(Loc {
+			krate,
+			path: path.iter().map(|m| m.ident.clone()).collect(),
+		})))
+	}
+	fn namespace_dir(&self, namespace: &[Ident]) -> Result<Dir> {
+		let id = self
+			.meta
+			.types
+			.0
+			.iter()
+			.find(|(_, def)| def.name.path.starts_with(namespace))
+			.map(|(id, _)| *id)
+			.ok_or_else(|| {
+				let path: Vec<&str> = namespace.iter().map(Ident::as_str).collect();
+				anyhow!("namespace {:?} has no generated module", path.join("::"))
+			})?;
+		let (krate, located) = self.meta.located(id);
+		let dropped = self.meta.modules.path(id).len() - located.len();
+		Ok((krate, located[..namespace.len() - dropped].to_vec()))
+	}
+}
+
+fn definition_extras(
+	meta: &RustMeta,
+	reg: &Registry,
+	definitions: &[crate::definition::DefinitionUse],
+) -> Result<BTreeMap<Dir, Vec<Tokens>>> {
+	let mut out: BTreeMap<Dir, Vec<Tokens>> = BTreeMap::new();
+	if definitions.is_empty() {
+		return Ok(out);
+	}
+	let ctx = DefinitionRustCtx::new(meta.clone());
+	for (name, uses) in crate::definition::group(definitions) {
+		let definition = reg
+			.definition(name)
+			.ok_or_else(|| anyhow!("definition {name:?} is not registered"))?;
+		let extras = definition
+			.generate_rust(&uses, &ctx)
+			.with_context(|| format!("generating `{name}` definitions"))?;
+		for extra in extras {
+			let dir = ctx.namespace_dir(&extra.namespace)?;
+			out.entry(dir).or_default().push(extra.tokens);
+		}
+	}
+	Ok(out)
 }
 
 impl Names<Rust> for RustMeta<'_> {
@@ -636,7 +762,7 @@ fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 }
 
 pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Registry) -> Result<()> {
-	generate(input, output, reg, None, None)
+	generate(input, output, reg, None, None, &[])
 }
 
 pub fn generate(
@@ -645,10 +771,16 @@ pub fn generate(
 	reg: &Registry,
 	view: Option<&str>,
 	split: Option<&Split>,
+	definitions: &[crate::definition::DefinitionUse],
 ) -> Result<()> {
+	ensure!(
+		definitions.is_empty() || split.is_none(),
+		"custom definitions can't be generated with --crates yet"
+	);
 	let meta = RustMeta::new(input, reg, split.map(|s| s.name.as_str()))?;
+	let mut extras = definition_extras(&meta, reg, definitions)?;
 	let ids: Vec<TypeId> = input.0.keys().copied().collect();
-	emit(&meta, input, reg, &ids, "", output)?;
+	emit(&meta, input, reg, &ids, "", &mut extras, output)?;
 	if let Some(namespace) = view {
 		views(&meta, input, reg, namespace, output)?;
 	}
@@ -666,6 +798,7 @@ fn mod_files(
 	exports: &BTreeMap<TypeId, bool>,
 	reexports: &BTreeMap<TypeId, TypeId>,
 	dir: &str,
+	extras: &mut BTreeMap<Dir, Vec<Tokens>>,
 	output: &mut GeneratorOutput,
 ) -> Result<()> {
 	let mut dirs: BTreeMap<Dir, BTreeMap<naming::Module, bool>> = BTreeMap::new();
@@ -716,6 +849,7 @@ fn mod_files(
 		};
 		let key = (krate, path);
 		let reexports = uses.remove(&key).unwrap_or_default();
+		let extra = extras.remove(&key).unwrap_or_default();
 		let decls = children
 			.iter()
 			.map(|(m, is_dir)| {
@@ -743,8 +877,13 @@ fn mod_files(
 		let tokens: Tokens = quote! {
 			$(for d in decls join($['\r']) => $d)
 			$(for u in reexports join($['\r']) => $u)
+			$(for e in extra join($['\r']) => $e)
 		};
 		output.insert(file, tokens.to_file_string().expect("formatting should succeed"));
+	}
+	if let Some(((_, path), _)) = extras.iter().next() {
+		let path: Vec<&str> = path.iter().map(|m| m.ident.as_str()).collect();
+		bail!("definition output for module {:?} has no place to go", path.join("::"));
 	}
 	Ok(())
 }
@@ -766,6 +905,12 @@ fn views(
 	output: &mut GeneratorOutput,
 ) -> Result<()> {
 	let set = Rc::new(views::analyze(input, reg, &owned.boxed, namespace)?);
+	if let Some(id) = set.included.iter().find(|id| owned.move_only.contains(id)) {
+		bail!(
+			"views can't include {}: it holds a move-only value (such as a resource)",
+			input[*id].name.readable_name()
+		);
+	}
 	let meta = owned.with_mode(Mode::View(set.clone()));
 	for id in input.0.keys() {
 		if let Some(m) = meta.located(*id).1.first().filter(|m| m.ident == "view") {
@@ -773,7 +918,7 @@ fn views(
 		}
 	}
 	let ids: Vec<TypeId> = set.included.iter().copied().filter(|id| set.emitted(*id)).collect();
-	emit(&meta, input, reg, &ids, "view/", output)?;
+	emit(&meta, input, reg, &ids, "view/", &mut BTreeMap::new(), output)?;
 	let mut tops: BTreeMap<Option<usize>, BTreeSet<String>> = BTreeMap::new();
 	for id in &ids {
 		let (krate, path) = meta.located(*id);
@@ -822,6 +967,7 @@ fn emit(
 	reg: &Registry,
 	ids: &[TypeId],
 	dir: &str,
+	extras: &mut BTreeMap<Dir, Vec<Tokens>>,
 	output: &mut GeneratorOutput,
 ) -> Result<()> {
 	let virtuals_used = common::virtuals_used(input);
@@ -976,6 +1122,7 @@ fn emit(
 						take,
 						type_name: meta.nominal_name(*id),
 						declared: &declared,
+						move_only: meta.move_only.contains(id),
 					};
 					let into_view = || -> Result<Tokens> {
 						codegen
@@ -1036,5 +1183,5 @@ fn emit(
 			def.to_file_string().expect("formatting should succeed"),
 		);
 	}
-	mod_files(meta, ids, &exports, &reexports, dir, output)
+	mod_files(meta, ids, &exports, &reexports, dir, extras, output)
 }

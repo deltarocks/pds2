@@ -15,6 +15,7 @@ pub mod ts;
 use expr::{Elaborator, ValueModel};
 
 use crate::ast::Ident;
+use crate::definition::{Definition, BUILTIN_STATEMENTS};
 use crate::hir::{HirSpecializerCtx, TypeId};
 use crate::{hir, mir};
 
@@ -194,6 +195,7 @@ pub struct NativeCodegenCtx<'a, L: Lang> {
 	pub take: bool,
 	pub type_name: Option<&'a str>,
 	pub declared: &'a Cell<bool>,
+	pub move_only: bool,
 }
 
 pub struct LowerCx<'a, L: Lang> {
@@ -281,6 +283,9 @@ impl NativeCodegenCtx<'_, Rust> {
 			.get(&self.id)
 			.map(|d| d.derives.as_slice())
 			.unwrap_or_default();
+		if self.move_only {
+			return quote!(#[derive(Debug$(for d in extra => , $(d.as_str())))]);
+		}
 		quote!(#[derive(Debug, Clone, PartialEq$(for d in extra => , $(d.as_str())))])
 	}
 	pub fn owned_this(&self) -> rust::Tokens {
@@ -378,6 +383,11 @@ pub trait NativeCodegen<L: Lang> {
 	fn nullable(&self, _native: &mir::NativeType) -> bool {
 		false
 	}
+	/// Whether the Rust type is `Clone + PartialEq`; types reaching one that is not
+	/// derive only `Debug` and are kept out of views
+	fn value_traits(&self, _native: &mir::NativeType) -> bool {
+		true
+	}
 	fn wraps_nullable(&self, _native: &mir::NativeType, _slot: &Ident) -> bool {
 		false
 	}
@@ -470,6 +480,7 @@ pub struct Registry {
 	value: HashMap<String, Box<dyn ValueModel>>,
 	encoders: HashMap<String, Box<dyn Any>>,
 	functions: HashMap<String, Box<dyn Function>>,
+	definitions: HashMap<String, Box<dyn Definition>>,
 }
 
 fn insert<T: ?Sized>(map: &mut HashMap<String, Box<T>>, facet: &str, name: &str, item: Box<T>) {
@@ -494,6 +505,19 @@ impl Registry {
 	}
 	pub fn function(&self, name: &str) -> Option<&dyn Function> {
 		self.functions.get(name).map(|b| b.as_ref())
+	}
+	pub fn register_definition(&mut self, name: &str, definition: impl Definition + 'static) {
+		assert!(
+			!BUILTIN_STATEMENTS.contains(&name),
+			"definition {name:?} would shadow a builtin statement"
+		);
+		insert(&mut self.definitions, "definition", name, Box::new(definition));
+	}
+	pub fn definition(&self, name: &str) -> Option<&dyn Definition> {
+		self.definitions.get(name).map(|b| b.as_ref())
+	}
+	pub fn definition_names(&self) -> impl Iterator<Item = &str> {
+		self.definitions.keys().map(String::as_str)
 	}
 	pub fn register_value(&mut self, name: &str, model: impl ValueModel + 'static) {
 		insert(&mut self.value, "value model", name, Box::new(model));

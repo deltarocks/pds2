@@ -136,6 +136,7 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 			.map_err(|e| anyhow!("--const {name:?}: {e}"))?;
 		parsed.statements.extend(def.statements);
 	}
+	let (parsed, definitions) = pds2_core::definition::lower(parsed, reg)?;
 
 	if print_ast {
 		dbg!(&parsed);
@@ -155,8 +156,18 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 
 	let mut out = Default::default();
 	match &codegen {
-		Codegen::Rust(r) => rust::generate(&mir, &mut out, reg, r.view.as_deref(), split.as_ref())?,
-		Codegen::Typescript => GeneratorTypes::Typescript.generator()(&mir, &mut out, reg)?,
+		Codegen::Rust(r) => rust::generate(
+			&mir,
+			&mut out,
+			reg,
+			r.view.as_deref(),
+			split.as_ref(),
+			&definitions,
+		)?,
+		Codegen::Typescript => {
+			GeneratorTypes::Typescript.generator()(&mir, &mut out, reg)?;
+			pds2_core::definition::generate_typescript(&mir, &definitions, reg, &mut out)?;
+		}
 	}
 
 	if let Some(to) = &to {

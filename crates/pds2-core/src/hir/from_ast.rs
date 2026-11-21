@@ -228,6 +228,7 @@ impl BodyItemDecl {
 }
 
 pub fn parse_ast(ast: Block, reg: &Registry) -> Result<Namespace> {
+	let (ast, _) = crate::definition::lower(ast, reg).context("lowering custom definitions")?;
 	let mut ns = Namespace::from_ast(ast).context("parsing AST to IR")?;
 	super::desugar::inline_functions(&mut ns, reg).context("inlining functions")?;
 	super::desugar::resolve_calls(&mut ns, reg).context("resolving calls")?;
@@ -794,7 +795,7 @@ impl Namespace {
 						),
 					)
 				}
-				n => bail!("unknownn top level block statement: {:?}", n),
+				n => bail!("unknown top level block statement: {:?}", n),
 			};
 			ensure!(
 				out.insert(name.to_owned(), item).is_none(),
