@@ -733,7 +733,7 @@ impl Namespace {
 
 					let name: Ident = item.args.arg(0, "native name")?;
 					ensure!(
-						(!has_types && !accepts_body) == specializer.is_none(),
+						specializer.is_some() || (!has_types && !accepts_body),
 						"specializer should be set when the native has generics or a body in <{name:?}>"
 					);
 
