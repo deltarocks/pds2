@@ -152,6 +152,11 @@ fn service(s: &ServiceData, namespace: &[Ident], ctx: &DefinitionRustCtx) -> Res
 				Self { remote: self.remote.clone() }
 			}
 		}
+		impl<C: ::bifrostlink::Config> ::core::convert::From<::bifrostlink::Remote<C>> for Client<C> {
+			fn from(remote: ::bifrostlink::Remote<C>) -> Self {
+				Self { remote }
+			}
+		}
 		impl<C: ::bifrostlink::Config> Client<C> {
 			pub fn new(remote: ::bifrostlink::Remote<C>) -> Self {
 				Self { remote }

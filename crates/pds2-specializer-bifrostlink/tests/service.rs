@@ -91,6 +91,7 @@ fn generates_server_and_client() {
 		"rpc.__register_request(SERVICE_ID, method::RESIZE, false,".to_owned(),
 		"rpc.__register_notification(SERVICE_ID, method::EXITED, true,".to_owned(),
 		"pub struct Client<C: ::bifrostlink::Config>".to_owned(),
+		"impl<C: ::bifrostlink::Config> ::core::convert::From<::bifrostlink::Remote<C>> for Client<C>".to_owned(),
 		"pub async fn open_shell(&self, tunnel:".to_owned(),
 		"pub fn exited(&self, id:".to_owned(),
 	] {
