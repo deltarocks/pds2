@@ -1,8 +1,9 @@
 [package]
 name = "pds-bytes-runtime"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 description = "Byte-oriented runtime for pds2 generated Rust codecs"
+license = "MIT"
 
 [dependencies]
 psm = "0.1.32"
