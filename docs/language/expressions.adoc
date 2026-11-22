@@ -1,0 +1,139 @@
+= Expressions
+:order: 4
+
+Argument values are expressions built from references and literals with `+`,
+`-`, `*` (usual precedence, parentheses for grouping) and explicit casts written
+`type(value)`:
+
+[source,pds]
+----
+def(counted) => container {
+    virtual_field(len, value: ./data/@size + 1) => u8;
+    field(data) => array(count: ../len - 1) => u8;
+};
+
+def(widened) => container {
+    field(n) => u8;
+    field(items) => array(count: u16(../n) * 2) => u16;
+};
+----
+
+Both operands of an operator have one type. A literal takes the type of the
+other operand, and an expression of literals only is folded at compile time.
+Operands of different types are an error until one side is cast.
+
+A cast converts between numeric scalars, like Rust's `as`, or uses a conversion
+the source type provides, e.g. a union cast to its tag type reads `@tag`. A cast
+of a literal constructs a value of that type: `u16(0xffff)`.
+
+Integer arithmetic wraps on overflow in every generated language. Operators and
+casts are not items, so they add no `../` level: references inside an
+expression resolve where the argument is written.
+
+== Values of schema types
+
+Records, lists and bare names build values of any type that has a value syntax.
+Like other literals they take their type from where they are used, or from an
+explicit `type(...)`; `type(a: 1, b: 2)` is short for `type((a: 1, b: 2))`.
+
+[cols="1,3"]
+|===
+| Type | Written as
+
+| integer, float, `bool` scalar | `42`, `-1.5`, `true`
+| `@scalar string` / `@scalar bytes` | `"text"` / `b"\x01"` (bytes also take a string)
+| `void` | `()`
+| `container`, `message`, `bitfield` | `(field: value, ...)`; virtual fields are left out, message fields may be
+| `array`, `terminated`, `entityMetadataLoop`, `topBitSetTerminatedArray`, `repeated` field | `[a, b, c]`
+| `option` | the value itself, or `none`
+| `union` | `variant` without a value, `(variant: value)` with one, a tag value, or `(default: tag)`
+| `bitflags` | the set flags, `[flag, ...]`
+| `buffer` / `pstring` | `b"..."` / `"..."`
+| `registryEntryHolder` | `(id: 7)` or `(<body field>: value)`
+| `registryEntryHolderSet` | `(ids: [1, 2])` or `(<body field>: value)`
+| `const` | its value
+|===
+
+[source,pds]
+----
+def(point) => container { field(x) => u8; field(y) => u8; };
+def(shape) => union(Tag: u8) {
+    variant(empty, match: 0);
+    variant(dot, match: 1) => point;
+};
+
+def(origin) => const(value: shape((dot: (x: 0, y: 0))));
+def(path) => const(value: [empty, (dot: (x: 1, y: 2))]) => array(count: 2) => shape;
+----
+
+`const` is implemented by the `const` specializer:
+
+[source,pds]
+----
+@specializer const
+def_native(const) { type(Value); argument(value) => Value; body; };
+----
+
+`body;` makes it compile-time: the value is checked against `Value` and inlined,
+and the generated module gets `value()` (Rust `fn value() -> Ty`, TypeScript
+`function value(): Ty`) next to the usual `serialize`/`deserialize`/`size_of` of
+`Value`. `Value` is inferred from a typed value, as for any typed argument.
+
+`pds2 compile --const NAME=FILE` adds `def(NAME) => const(value: <FILE>);` to the
+schema, so a data file holds just one expression. This is the pds counterpart of
+protobuf's text format:
+
+[source,pds]
+----
+root::envoy::config::cluster::v3::Cluster(
+    name: "backend",
+    type: STRICT_DNS,
+    connect_timeout: (seconds: 5, nanos: 250000000),
+    load_assignment: (endpoints: [(lb_endpoints: [(load_balancing_weight: (value: 3))])]),
+)
+----
+
+[#functions]
+== Functions
+
+A call `name(value)` whose `name` is a function a specializer library registered
+is evaluated at compile time instead of being read as a cast. Functions shadow
+types of the same name. A function either computes its value from its arguments
+alone, like `serialized`, or needs the type its position expects, like
+`deserialized`; the latter is an untyped literal until it gets one.
+
+[source,rust]
+----
+reg.register_function("serialized", pds2_specializer_bytes::Serialized);
+----
+
+== User functions
+
+`fn(name, params...) => expression;` declares a function in a file or a
+`namespace`, next to its `def`s. A parameter is a bare name, or `name: type`
+to give it a type; the body is an expression over the parameters:
+
+[source,pds]
+----
+fn(scaled, n: u16, by) => n * by;
+
+def(Scaled) => container {
+    field(n) => u8;
+    field(items) => array(count: scaled(u16(../n), 2)) => u16;
+};
+----
+
+A call takes one positional value per parameter and is replaced by the body
+with each parameter replaced by its value, so it reads, generates and evaluates
+like the expression written out: `scaled(u16(../n), 2)` is `u16(../n) * 2`.
+References in the values resolve where the call is written. A typed parameter
+takes its value like a typed `argument`: a literal is constructed as the type,
+any other value must already have it, so `scaled(../n, 2)` is an error until
+`../n` is cast.
+
+The body sees only its parameters, not fields, and the names in it resolve in
+the namespace of the function, not of the call. A function may call other
+functions, but not itself, directly or through others. Calls resolve like type
+names, from the innermost namespace out; a function and an item can't share a
+name in one namespace. A function shadows a registered function of the same
+name.

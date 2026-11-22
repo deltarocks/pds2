@@ -1,0 +1,150 @@
+= Bridge
+:order: 2
+
+`minecraft-bridge` puts these converters between players and one backend
+server (`--server-version`, 1.8 by default). Proxy logic (logins, kicks,
+commands, the server switch) is written against the packets of the newest
+version, 26.1 (`PIVOT`), and converted on the way to the client's or the
+server's version: converting down drops what old clients can't use, converting
+up invents what newer versions added (a 1.8 server's join game reads as a 26.1
+one with the vanilla dimension ids, for example). Replies are 26.1
+`system_chat` packets with NBT text, kicks `kick_disconnect` with an NBT
+reason; pre-netty kicks (`0xff`) stay raw. Relayed traffic converts directly
+between the client's and the server's versions. With a 1.20.2+ server it runs
+the configuration phase as a client, or relays it when the player's client has
+one too. `--languages <dir>` points it at the language cache (default: the
+workspace's `target/minecraft-languages`, when present).
+
+== Commands and server switches
+
+The bridge reads chat commands from every client by converting the packet to
+26.1 (`chat_command`, `chat_command_signed`, or a `chat_message` starting with
+`/`); the server never sees them.
+
+[cols="1,3"]
+|===
+| Command | Does
+
+| `/proxy-ping` | answers `Pong`
+| `/proxy-goto <host:port> [version]` | moves the player to another server. Without a version the bridge asks the server: a status ping (its protocol number names the version) or, failing that, a 1.6 server list ping (pre-netty servers answer with their protocol). If neither tells, it tries the current server's version.
+|===
+
+A switch logs in to the new server first; if that fails the player stays where
+they are and reads why in chat. 1.20.2+ clients are then sent back into
+configuration (`start_configuration`) and get the new server's configuration
+relayed, or the bridge's own for older servers, so their registries match the
+new server; a failure from there on disconnects them, as the old server is
+gone. Older clients take registries from the join game. Then the client gets
+the new join game and two respawns built at 26.1 from its `worldState`: one
+into another dimension type and world (`the_nether`, or `overworld` from the
+nether, by the vanilla `dimension_type` order), one back to the join's
+dimension id and world name. They convert down through their own session that
+has seen the join, so a 1.8 client sees dimension `-1` then `0` and a 1.16
+client `minecraft:the_nether` then `minecraft:overworld`, and both drop the
+old world.
+
+== Server list
+
+A server list ping (status) asks the default server (`--server`) at its
+version and shows its description, players (online, max and the sample) and
+favicon. The reply is kept for `--status-cache` seconds (5); when the server
+does not answer, the bridge shows `--motd` with no players. The version name is
+`pds2 bridge <oldest>-<newest>`; a client the bridge can serve sees its own
+protocol, others the newest the bridge speaks.
+
+Descriptions keep what each client reads: 1.16+ hex colors become the nearest
+named color before 1.16, `font` goes before 1.16, `shadow_color` before 1.21.4,
+`keybind` turns into the key's name before 1.12, scores, selectors and NBT
+components become their text, and click and hover events go (the list shows
+neither). Translation keys an old client lacks are rendered with the language
+cache (`localize_status`). Pre-netty pings get the same data flattened to
+section-sign text, at most 256 characters:
+
+[cols="1,3"]
+|===
+| Request | Reply
+
+| `fe` (1.3 and older) | MOTD, online and max separated by section signs (U+00A7), the MOTD without formatting codes since the sign separates the fields
+| `fe 01` (1.4, 1.5) and `fe 01 fa MC\|PingHost` (1.6) | a section sign and `1`, then protocol, `pds2 bridge <pre-netty range>`, MOTD, online and max, separated by `\0`; the protocol is the 1.6 client's own when the bridge serves it
+|===
+
+== Transfers and cookies
+
+A 1.20.5+ server's `transfer` packet (configuration or play) never reaches the
+client: modern clients would reconnect straight to the target and old ones
+don't know it. The bridge moves the player itself, like `/proxy-goto` without
+a version, and logs in to 1.20.5+ targets with the handshake's transfer intent
+(`nextState` 3) as vanilla clients do. A server with `accepts-transfers=false`
+refuses that login; the player stays and reads `<target> does not accept
+transfers`. A transfer during the first configuration is followed before the
+player reaches play, up to four in a row.
+
+Each player has a cookie jar in the bridge that lives as long as their
+connection, across switches and transfers. `store_cookie` packets from
+servers (configuration and play) go into it with vanilla's limits (the key is
+an identifier, `minecraft:` when it has no namespace; at most 5120 bytes) and
+`cookie_request` packets (login, configuration and play) are answered from it,
+with no value for unknown keys. Neither reaches the client, so cookies work
+for every client version; the converters' own answer (no cookie, for clients
+older than 1.20.5) never runs for them.
+
+== Online-mode backends
+
+Players always join the bridge in offline mode, under any name. `--accounts
+<file>` maps some of them to real Minecraft accounts: a mapped player logs in
+to the backend as that account (its name and UUID), so the backend can run
+with `online-mode=true`. Unmapped players log in offline, and are
+turned away by an online-mode backend.
+
+[source,toml]
+----
+cache = "bridge.tokens.json"
+
+[[account]]
+players = ["Steve", "069a79f4-44e9-4726-a5be-fca90e38aaf5"]
+source = "prism"
+file = "~/.local/share/PrismLauncher/accounts.json"
+profile = "Notch"
+
+[[account]]
+players = ["Alex"]
+source = "token"
+access_token = "eyJ..."
+uuid = "069a79f444e94726a5befca90e38aaf5"
+name = "Notch"
+
+[[account]]
+players = ["Herobrine"]
+source = "process"
+profile = "Notch"
+----
+
+`players` lists the incoming names (any case) and UUIDs an account serves.
+A UUID matches the offline UUID of the incoming name or, for 1.19.1+
+clients, the UUID the client sends in its login start. `cache` is where
+refreshed tokens are kept, at mode 0600 (default: next to the config,
+`<config>.tokens.json`).
+
+[cols="1,1,3"]
+|===
+| `source` | Keys | Credentials
+
+| `prism` | `file`, `profile` | a PrismLauncher or MultiMC `accounts.json` (default `$XDG_DATA_HOME/PrismLauncher/accounts.json`; the Flatpak keeps it in `~/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/`). `profile` picks a Microsoft account by name or UUID, otherwise the active one. The file is only read: an expired Minecraft token is refreshed with the account's Microsoft refresh token (and the launcher's client id) through Xbox Live, XSTS and `launcher/login` (`login_with_xbox` if that fails), and the result goes to the cache. A token the session server or the services reject is refreshed once more.
+| `token` | `access_token`, `uuid`, `name` | a fixed access token; without `uuid` and `name` the profile is looked up. Keep such a file at mode 0600.
+| `process` | `profile` | `--accessToken`, `--uuid` and `--username` from the command line of a running game (picked by `profile`, otherwise the first one found), read from `/proc` on the first login and again when the token is rejected
+|===
+
+Tokens never reach logs or `Debug` output. On a 1.19+ backend the bridge also
+fetches the account's chat key from `player/certificates` and signs all chat
+for the player, whatever their client: it sends the key in login start
+(1.19-1.19.2) or `chat_session_update` (1.19.3+), signs chat messages and the
+message arguments of commands (found by walking the backend's command tree),
+keeps the last-seen and acknowledgement state from the backend's `player_chat`
+packets, and drops chat sessions, acknowledgements and signatures the client
+sends itself. Pre-netty backends (1.6.4 and older) checked logins with
+Mojang's legacy session service, which is gone, so mapped players can't join
+them.
+
+An `[endpoints]` table points the bridge at other hosts, for tests against a
+mock (`scripts/mock-mojang.ts`): `session`, `services`, `microsoft`,
+`xbox_user` and `xbox_xsts`, each a base URL.

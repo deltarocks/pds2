@@ -1,0 +1,92 @@
+= Definitions
+:order: 5
+
+== `def(name) { ... } => <type>`
+
+Declares a named type. The pre-rocket block holds *type parameters* and
+*arguments*; the post-rocket value is the type body.
+
+[source,pds]
+----
+def(radiationGuard) {
+    type(Value);
+} => container {
+    field(a) => Value;
+};
+
+def(sized) {
+    argument(length);
+} => array(length: ./$length) => u8;
+----
+
+`argument(name) => <type>` declares the argument's type instead of inferring it
+from its uses. A literal argument is constructed as that type, any other value
+must already have it:
+
+[source,pds]
+----
+def(choice) {
+    argument(kind) => u8;
+} => union(tag: ./$kind) {
+    variant(one, match: 1) => u8;
+};
+
+def(fixed) => choice(kind: 1);
+----
+
+The declared type may be a type parameter. A use-site that doesn't bind it takes
+it from the argument's value when that value has a written type, i.e. contains
+a cast, so `terminated(end: u8(0))` is short for `terminated(End: u8, end: 0)`:
+
+[source,pds]
+----
+def_native(terminated) {
+    type(Value);
+    type(End);
+    argument(end) => End;
+    body;
+};
+----
+
+== `namespace(name) { ... }`
+
+Groups definitions under a path prefix.
+
+[source,pds]
+----
+namespace(protocol) {
+    def_native(u8);
+    def(msg) => container { field(op) => u8; };
+};
+----
+
+Outside, the contents are addressed as `root::protocol::u8`.
+
+== Generics
+
+Type parameters are introduced with `type(Name)` in a `def` block and consumed
+by name within the body. They are passed at use sites as named item arguments:
+
+[source,pds]
+----
+def(wrapper) {
+    type(Value);
+} => container {
+    field(inner) => Value;
+};
+
+def(use) => container {
+    field(w) => wrapper(Value: u8);
+};
+----
+
+Type defaults are written `type(Name) => <type>`:
+
+[source,pds]
+----
+def_native(mymap) {
+    type(Key);
+    type(Value);
+    type(Size) => vu32;
+};
+----

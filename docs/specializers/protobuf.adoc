@@ -1,0 +1,72 @@
+= Protobuf
+:order: 5
+
+The `message` specializer describes a protobuf message: a set of numbered,
+optional fields in any order on the wire. Each item names a field, its number
+and its type; `repeated` fields become lists (scalars are written packed, both
+forms are read), `oneof` fields sharing a `group` become one optional choice.
+Unknown fields are skipped when reading.
+
+[source,pds]
+----
+@scalar i32 @protobuf varint def_native(int32);
+@protobuf len def_native(string);
+
+def(Endpoint) => message {
+    field(address, number: 1) => string;
+    repeated(ports, number: 2) => int32;
+    oneof(weight, number: 3, group: "balancing") => int32;
+    oneof(priority, number: 4, group: "balancing") => int32;
+};
+----
+
+The `enum` specializer describes an open protobuf enum: named numbers of a `Tag`
+type. Unknown numbers are kept (`Unknown(n)` in Rust, the number itself in
+TypeScript), and values are written by name or by number.
+
+[source,pds]
+----
+@specializer enum
+def_native(enum) { type(Tag); body { item(value) { argument(number); }; }; };
+
+def(Label) => enum(Tag: int32) {
+    value(LABEL_OPTIONAL, number: 1);
+    value(LABEL_REPEATED, number: 3);
+};
+----
+
+A field's wire type comes from its type: the `@protobuf` attribute of a native
+(`varint`, `i64`, `len`, `i32`), `len` for messages, and the `Tag`'s wire type
+for an enum. `len` values are framed by the message: a nested message, `string`
+or `bytes` reads its whole frame.
+
+`pds2 protobuf convert <set> --root <file.proto> --to <out.pds>` converts a
+`FileDescriptorSet` (`protoc --include_imports --descriptor_set_out`) into pds:
+every type reachable from the root files becomes a `message` or an `enum`. The
+descriptors themselves are decoded by code pds generated from
+`descriptor.proto`.
+
+Extensions anywhere in the set become fields of the message they extend, named
+by their full name with `_` for `.` (`extend google.protobuf.FieldOptions` in
+package `validate` adds `validate_rules` to `FieldOptions`), followed by `_`
+while the name is taken. Extensions of messages that aren't converted are left
+out, and the types of included ones are converted too. Converting
+`descriptor.proto` from a set that holds `validate.proto` thus reads
+`[(validate.rules)]` options instead of skipping them as unknown fields.
+
+`pds2 protobuf encode` and `pds2 protobuf decode` convert between binary
+messages and values written in pds syntax, the counterpart of `protoc --encode`
+and `protoc --decode`. Both run the compile-time encoder of a schema, no code is
+generated:
+
+[source,sh]
+----
+pds2 protobuf encode envoy.pds cluster.txtpds > cluster.bin
+pds2 protobuf encode envoy.pds --type root::envoy::config::cluster::v3::Cluster fields.txtpds > cluster.bin
+pds2 protobuf decode envoy.pds --type root::envoy::config::cluster::v3::Cluster cluster.bin > cluster.txtpds
+----
+
+The value file holds one expression. Its type is taken from a value written
+`root::Type(...)`; `--type` gives it otherwise. `decode` writes the value as
+`<--type>(...)`, so its output encodes again without `--type`. Repeated scalars
+are written packed, whatever the source did.

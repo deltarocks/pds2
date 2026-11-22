@@ -1,0 +1,72 @@
+= Serialized values
+:order: 2
+
+`serialized(value)` encodes a typed value at compile time and yields its bytes,
+usable wherever a `@scalar bytes` value is expected. It is how a protobuf `Any`
+carries a message in a data file:
+
+[source,pds]
+----
+value: (
+    type_url: "type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions",
+    value: serialized(root::envoy::extensions::upstreams::http::v3::HttpProtocolOptions(
+        upstream_http_protocol_options: (auto_sni: true),
+    )),
+),
+----
+
+`serialized` and `deserialized` are functions `pds2-specializer-bytes` registers, see xref:../language/expressions.adoc#functions[Functions]. Libraries for
+other wire formats register their own, like `serialized_bits` of the
+xref:csn1.adoc[CSN.1] library.
+
+The compiler encodes each native with the encoder named by its `@encoding`
+attribute or, without one, by its `@specializer` name: `@specializer union` reads
+as `@specializer union @encoding union`. Every specializer registers an encoder.
+Natives without either, like ones implemented only by runtime code, can't be
+serialized; `serialized(...)` reports the first one it reaches.
+
+An encoder writes one wire format: `serialized` uses the byte encoders and
+rejects a native whose encoder writes bits. `@encoding` picks another encoder
+for a specialized native too, so one specializer's generated code can be shared
+by several wire formats: `@specializer container @encoding bits_container`
+generates a `container` and encodes it as bits at compile time.
+
+Scalars choose one of the encodings `pds2-specializer-bytes` registers:
+
+[cols="1,3"]
+|===
+| Encoding | Bytes
+
+| `be`, `le` | fixed width of the scalar, big or little endian; `bool` is one byte
+| `varint` | LEB128 of the value's two's complement in its own width (Minecraft `varint`)
+| `varint64` | LEB128 of the value sign-extended to 64 bits (protobuf `int32`)
+| `zigzag` | LEB128 of the zigzag-mapped value (protobuf `sint32`, `sint64`)
+| `raw` | the string's UTF-8 or the bytes themselves, framed by the enclosing type
+|===
+
+[source,pds]
+----
+@scalar i32 @encoding varint def_native(varint);
+@scalar u16 @encoding be def_native(u16);
+----
+
+Encoding evaluates virtual fields and argument expressions the same way the
+generated code does, and checks what the generated serializer would only assert:
+a union arm against its external tag, an array against its `count`, terminated
+items against the terminator, top-bit-terminated items against their flag bit,
+bitfield values against their width.
+
+`deserialized(bytes)` is the reverse: it decodes bytes at compile time into a
+value of the type its position expects, like any other untyped literal. The
+bytes are a `b"..."` literal, a string or a `serialized(...)`:
+
+[source,pds]
+----
+def(origin) => const(value: shape(deserialized(b"\x01\x00\x00")));
+def(same) => const(value: shape(deserialized(serialized(shape((dot: (x: 0, y: 0)))))));
+----
+
+Decoding reads every byte, the way generated `deserialize` does, and rejects
+bytes left over, virtual fields that disagree with their value source, and union
+tags no arm matches. Protobuf fields a message doesn't declare are skipped with
+a warning.

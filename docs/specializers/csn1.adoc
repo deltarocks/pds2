@@ -1,0 +1,52 @@
+= CSN.1
+:order: 6
+
+`pds2-specializer-csn1` describes CSN.1 (3GPP TS 24.007 Annex B), the bit-level
+notation of GSM/GPRS messages such as the rest octets of TS 44.018. Its
+generated code runs on `pds-bits-runtime`: a crate wires it as `pub mod pds {
+pub use pds_bits_runtime::*; }`. There `Input`, `Output`, `size_of` and the
+`needed` shortfall hint count bits, reads and writes are MSB first, and
+`Output::into_inner` fills the last octet with zeros. Only Rust is generated.
+
+Bit strings are written with `0`, `1`, `L` and `H`. `L` is the bit the padding
+pattern `0x2b` has at that position of the message, `H` the other one, so the
+same `L` reads `0` at bit 0 and `1` at bit 2.
+
+[cols="1,2,3"]
+|===
+| Specializer | CSN.1 | Value
+
+| `uint`, `argument(size)` | `<x : bit(n)>` | the declared `@scalar`: unsigned, two's complement for a signed one, `bool` for one bit; wider values fail to serialize
+| `optional(present: "1", absent: "0") => T` | `{ 0 \| 1 <x> }`, `{ L \| H <x> }` | `Option<T>`, written as for `option`
+| `choice { variant(name, bits: "01") => T; }` | `{ 00 <a> \| 01 <b> \| 1 }` | an enum, written as a union; arms without a type carry nothing
+| `repeated(more: "1", end: "0") => T` | `{ 1 <x> } ** 0` | a list
+| `fixed(bits: "0101")` | bits in a sequence | `()`; other bits fail to deserialize
+| `spare(size: n)` | spare bits | `()`; writes zeros, reads anything
+| `padded`, `type(Value)` | `<x> <spare padding>` | `T`, followed by `L` up to the next octet; reading skips the rest of the input
+| `padded` with `argument(octets)` | rest octets of a fixed length | `T`, followed by `L` up to `octets` octets; reading takes exactly that many
+|===
+
+The arms of a `choice`, `optional` and `repeated` must be told apart by the
+first bit where they differ, which can't be a `0`/`1` against an `L`/`H`.
+Concatenation is a `container`, `<x> * (val(n))` an `array(count: ../n)`; they
+generate as usual and encode as bits at compile time with `@encoding
+bits_container` and `@encoding bits_array`. `serialized_bits(value)` and
+`deserialized_bits(bytes)` are the bit counterparts of `serialized` and
+`deserialized`.
+
+[source,pds]
+----
+@scalar u8 @specializer uint def_native(uint8) { argument(size); body; };
+@specializer optional def_native(optional) { type(Value); argument(present); argument(absent); body; };
+@specializer padded def_native(padded_to) { type(Value); argument(octets); body; };
+
+def(lh) { type(Value); } => optional(present: "H", absent: "L") => Value;
+
+def(Si3RestOctets) => padded_to(octets: 4) => container {
+    field(power_offset) => lh => uint8(size: 2);
+    field(scheduling_where) => lh => uint8(size: 3);
+};
+----
+
+`crates/csn1-tests` holds the declarations of every CSN.1 native and the SI 3
+rest octets of TS 44.018; `just csn1` generates its code.

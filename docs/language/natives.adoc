@@ -1,0 +1,122 @@
+= Natives
+:order: 6
+
+== `def_native(name) { ... }`
+
+Declares a native type: one implemented by a specializer or by runtime code. The block may contain `type(...)`
+parameters, `argument(...)` arguments, `variant(...)` overloads, `body`
+declarations, and `virtual_field(...)` projections.
+
+[source,pds]
+----
+def_native(u8);
+
+@specializer array
+def_native(array) {
+    type(Value);
+    variant(inline) { type(Count); };
+    variant(sized)  { argument(count); };
+};
+----
+
+=== Body declarations
+
+A native that takes a `{ ... }` body at its use-sites declares the body's items
+with `body { item(kind) { ... }; ... }`:
+
+[source,pds]
+----
+@specializer bitfield
+def_native(bitfield) {
+    body {
+        item(field) {
+            argument(size);
+            argument(signed) => false;
+        };
+    };
+};
+
+def(position) => bitfield {
+    field(x, size: 26, signed: true);
+    field(y, size: 12);
+};
+----
+
+* `argument(name)` is required; `argument(name) => <constant>` is optional and
+  defaults to the constant.
+* `type(Value)` requires a chained `=> type`; `type(Value) => <type>` makes it
+  optional with that default. Without `type(Value)` the item takes no type.
+* `anonymous;` marks an item written without a name (`default => u8;`). It may
+  appear at most once.
+* Other items need a name, unique within the body.
+
+`body;` declares a body with no items. Use-sites are checked against the
+declaration, and defaults are filled in before the specializer sees the body.
+
+Item arguments take constants or references, like any item argument. As with
+the native's own arguments, `./` is the native itself and `../` leaves it:
+
+[source,pds]
+----
+def(packet) => container {
+    field(n) => u8;
+    field(p) => probe {
+        field(a, at: ../n);
+    };
+};
+----
+
+== `void`
+
+The empty type. `is_void;` marks a type that
+carries no data, so a union arm holding it has no payload.
+
+[source,pds]
+----
+def_native(void) {
+    is_void;
+};
+----
+
+== Specializers
+
+`@specializer <name>` on a `def_native` selects a backend specializer that
+knows how to lower the type. Without it the native is treated as opaque. A
+native with type parameters or a body needs one; a native without them may still
+name one to get its code generated, as `@specializer pipe def_native(pipe);` does.
+
+[source,pds]
+----
+@specializer array
+def_native(array) { type(Value); /* ... */ };
+----
+
+== Scalars
+
+`@scalar <kind>` on a `def_native` declares that its value is a plain number of
+the given kind (`i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`, `f32`,
+`f64`), a plain `bool`, `string` or `bytes`, whatever its wire encoding.
+Generators use it to pick representations, e.g. TypeScript emits `Int32Array`
+for `array(Count: varint) => varint`. Scalars are the types a literal constructs
+directly: integers construct integer and float scalars, floats construct float
+scalars, `true`/`false` construct `bool`, strings construct `string` and
+`bytes`, byte strings construct `bytes`.
+
+[source,pds]
+----
+@scalar i32
+def_native(varint);
+----
+
+A native with a `@specializer` can be a scalar too, every use-site of a
+body-accepting one included; the specializer then reads and writes the scalar's
+value:
+
+[source,pds]
+----
+@scalar u8 @specializer uint def_native(uint8) { argument(size); body; };
+----
+
+Any other attribute on a `def_native` is kept as metadata for specializers,
+e.g. `@protobuf varint` tells the `message` specializer the wire type of a
+protobuf scalar.

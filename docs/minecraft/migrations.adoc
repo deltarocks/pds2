@@ -1,0 +1,192 @@
+= Version migrations
+:order: 1
+
+`crates/minecraft-versions` keeps one schema per protocol version and the
+migrations between them:
+
+[cols="1,3"]
+|===
+| Path | Contents
+
+| `pds/<version>.pds` | the schema of a version. `just update` regenerates every release minecraft-data has, headed by `@!doc` (source commit, Minecraft versions served) and `@!protocol [...]`. Versions minecraft-data lacks are written by hand next to them, with their own `@!protocol` (`@!legacy_protocol` for pre-netty numbers, which collide with netty ones).
+| `minecraft-data.commit` | the minecraft-data commit `just update` reads; `just bump` moves it to upstream master
+| `patches/<path>` | fixes to minecraft-data files, `<path>` mirroring the file in minecraft-data: a file or a directory of files applied in name order, RFC 6902 `.json` patches for JSON (guarded by `test` operations) and unified `.patch` diffs for text. A patch can create a file minecraft-data lacks.
+| `data/` | registries extracted by `just update`: block states, items, entities, particles, sounds, vanilla registry codecs
+| `migrations/<old>-<new>.pds` | rules converting between adjacent versions
+| `migrations/every.pds` | hooks applied in every step
+| `migrations/<old>-<new>.diff.txt` | definitions that changed between them, from `just diff`
+|===
+
+`just gen` merges `pds/` in version order (`sort -V` of the file names),
+compiles the result and generates the converters. Merging folds the versions
+into one schema: definitions that differ become variants named
+`<name>_v<version>`, each version gets a namespace (`v1_8`, `v1_9`, ...)
+aliasing its packet roots and keeping its `@!protocol`, and the root lists
+the order in `@!versions`. `pds2 minecraft-data converters` generates
+`convert.rs` with one step per pair of adjacent versions, in both directions
+(`up` = older to newer, `down` = newer to older). Converting across several
+versions chains the steps.
+
+Identical types pass through untouched. Containers are matched field by field
+and unions arm by arm, by name, so renumbered packets and moved fields need no
+rules. Everything else must be written down in the step's migration file,
+otherwise generation fails listing each missing rule; rules that end up unused
+are errors too. A step without a migration file is not generated:
+`STEPS[i]` tells whether the step from version `i` to `i + 1` exists, and
+`reachable(a, b)` whether every step between two versions does.
+`version_of(protocol)` maps a protocol number to its version index and
+`legacy_version_of` a pre-netty one; `Version` names every version
+(`Version::V1_8`) and indexes tables directly. `packet_name(root, version,
+bytes)` reads only the packet id.
+
+For hand-written code `convert.rs` also has a module per version that has a
+step, re-exporting each type that version uses under its unversioned name:
+`convert::v1_8::slot`, `convert::v1_9::play_toClient_packet`. Types without a
+name of their own are reached through their owner: `__field`, `__arm` and
+`__items` for list elements, as in
+`convert::v1_8::play_toClient_packet_spawn_entity__velocity`. These names stay
+the same when other versions join the merge.
+
+[source,pds]
+----
+updated(entityMetadata, up: custom(metadata_1_10), down: custom(metadata_1_9_4));
+
+namespace(play) {
+    namespace(toClient) {
+        updated(packet) {
+            removed(map_chunk_bulk, up: custom(map_chunk_bulk_1_9));
+            renamed(scoreboard_team, to: teams);
+            added(boss_bar, down: drop);
+            converted(keep_alive);
+        };
+
+        updated(packet_entity_teleport) {
+            converted(x, up: f64(./x) / 32.0, down: i32(./x * 32.0));
+        };
+
+        updated(packet_map) {
+            added(trackingPosition, up: true);
+        };
+    };
+};
+----
+
+`updated(name)` names a definition without its `_v` suffix, or a field or arm
+when nested. Inside it:
+
+[cols="1,3"]
+|===
+| Rule | Meaning
+
+| `added(x, up: ...)` | `x` exists only in the newer version; `up` computes it. Arms take `down` instead, to handle the arm when going down.
+| `removed(x, down: ...)` | `x` exists only in the older version; `down` computes it (arms: `up`)
+| `renamed(old, to: new)` | the same field or arm under another name
+| `converted(x, up: ..., down: ...)` | the type of `x` changed; without `up`/`down`, a numeric cast
+| `hooked(x, down: custom(f))` | `f` rewrites `x` in place before the step converts it (`up:` for the other direction); see below
+| `updated(x) { ... }` | rules for a nested field or arm
+|===
+
+An action is one of:
+
+* an expression over the source value: `./field`, `self` for the whole
+  value, casts (`f64(./x)`), arithmetic, records (`(a: 1, b: ./c)`), lists and
+  union symbols. On a union arm, `self` and `./field` read the arm's payload;
+* `custom(fn)`, calling `crate::custom::fn`;
+* `drop`: inside a list the element is left out, inside an option it becomes
+  empty, anywhere else the packet is not sent;
+* `default`: an arm becomes the target union's payload-less `default` arm with
+  the same tag;
+* `unsupported`: conversion fails at runtime.
+
+`converted(items)` casts list elements whose numeric type changed.
+`updated(name, up: ..., down: ...)` with actions replaces the whole conversion
+of a type, also for types that did not change shape: identical types pass
+through untouched otherwise, so a byte buffer whose format changed or ids that
+were renumbered need such a rule. A file may update the same definition in
+several blocks; they are merged. Custom functions get `&mut crate::Session`:
+`cx.state::<T>()` keeps per-module state across packets, and `cx.send(root,
+version, bytes)` queues a packet for the other direction (a serverbound
+conversion answering the client, for example), which the caller converts from
+that version and delivers. `cx.send_model(root, version, model)` queues a
+carried model the same way; once the caller has given the session its versions
+with `set_versions(server, client)`, `take_outgoing` converts such models
+straight to that version, otherwise it encodes them where they were queued.
+
+[cols="1,3"]
+|===
+| Rule position | Signature
+
+| field | `fn(source: &SourceContainer, cx) -> Result<Field>`
+| packet arm | `fn(payload, cx) -> Result<Vec<TargetPacket>>`
+| whole type | `fn(value: Source, cx) -> Result<Target>`
+| hook | `fn(value: &mut T, from: usize, to: usize, cx) -> Result<()>`
+|===
+
+A hook names a field or arm holding a leaf value: a string, a native such as
+`anonymousNbt`, or an option or list of them. Its function gets the value of
+the version the step starts from, with both version indices, and may rewrite
+it; the step then converts the rewritten value with its other rules. Where `x`
+holds a container or union, or does not exist, the hook is skipped. Hooks
+nested under `updated` blocks run together, as one prologue of the type that
+owns the outer `updated`, before any of its rules, `custom` ones included. So
+a hook placed under the packet union (`updated(packet) { updated(chat) {
+hooked(message, ...) } }`) runs even in steps that convert that packet arm by
+hand.
+
+`migrations/every.pds` holds hooks that apply to every step, written like a
+migration but with `hooked` and `updated` rules only. Each step merges them
+into its own rules wherever the named definitions, fields and arms exist in
+its source version; a step only has to convert a type because of them in the
+hook's direction. A rule of `every.pds` that no step uses is an error.
+`crates/minecraft-versions` uses it to translate text keys an older client
+does not know (`custom::localize`, see `languages`).
+
+The crate's `Justfile` drives the work:
+
+[cols="1,3"]
+|===
+| Recipe | Does
+
+| `just scaffold` | merges `pds/`, creates missing migration files and appends a rule for every structural difference: `drop` for packets one side lacks, `unsupported` where a conversion has to be written. Rules it added that turn out unused are removed again.
+| `just converters` | regenerates `convert.rs` from the migrations and runs the tests
+| `just languages` | downloads the English strings of every version (minecraft-data `language.json`, through `minecraft-data.commit` and `patches/`) into `target/minecraft-languages/<folder>.json`, with `index.tsv` mapping version names to folders; `just update` runs it too. Mojang's text stays out of git.
+| `just report [from] [to]` | replays recorded 1.8 server traffic one step at a time, decoding the result at every version, and lists what each step drops or fails
+|===
+
+`pds2 minecraft-data converters ... --check` reports missing and unused rules
+without writing anything; `--virtual` lets custom code carry packets through
+the steps as decoded models instead of bytes: `convert` asks
+`crate::custom::virtual_start` whether to take a packet over, advances such
+models with `virtual_step` and encodes them once with `virtual_finish` at the
+target version. Before a step converts bytes, `virtual_wire` may take them over
+and return models or bytes in their place. `convert::inspect(root, version,
+bytes)` decodes bytes as a version's packet and names it.
+
+`src/registry` reads minecraft-data registries kept in `data/` (written by
+`just update`): block states, items, entities, particles, sounds and the
+vanilla join game / registry codec. `remap_state` and `remap_name` move ids
+between versions by name, with renames listed in `registry/renames.rs`;
+`legacy_block` and `legacy_item` translate pre-1.13 `id:meta` pairs.
+Tables are built once per version pair and read without locks.
+
+`languages` reads the cache of `just languages` lazily, on the first text that
+needs it: `languages::load(dir)` names the directory, `languages::install`
+puts in a ready table (tests build small ones with `Languages::new`). Versions
+older than the oldest language (1.6.x) use its keys. Every step going down
+turns `translate` components whose key the older version's language lacks
+into literal text with the English pattern (or the component's `fallback`)
+applied to the arguments, keeping styles and events; keys no language has
+stay, unless a `fallback` has to stand in below 1.19.4. Text without
+`"translate"` is not parsed. Text flattened to legacy strings (chat before
+1.6, kicks before 1.7, signs for 1.7, item names and scores before 1.13)
+renders every key. Without the cache, keys pass through and flattening knows
+a dozen chat keys.
+
+Chat typed by a `chat_type` id (1.19+) becomes plain chat in the steps whose
+older side cannot show it (1.19.3 to 1.19.2, 1.19.2 to 1.19, 1.19 to 1.18.2,
+and inline chat types from 1.21.1 to 1.20.5). Those steps keep the chat type
+registry of the login that passed through them (falling back to the vanilla
+one) and render the entry's decoration as vanilla clients do: its translation
+key with the `sender`, `target` and `content` parameters and its style, so
+data pack chat types work too. The rendered text goes through the same
+translation fallback.

@@ -1,7 +1,0 @@
-def_native(parray) {argument(size);};
-def_native(u8);
-
-def(root) => container {
-field(size) => u8;
-field(v) => parray(size: ../size);
-};

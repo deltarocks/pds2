@@ -1,0 +1,91 @@
+= Statements
+:order: 2
+
+[source,pds]
+----
+<attribute>* <valueChain> ;
+----
+
+A `valueChain` is one or more values or expressions separated by `=>`. The rocket chains a
+producer to a consumer: `array(Count: varint) => u8` reads "an array of u8
+counted by a varint".
+
+[source,pds]
+----
+def_native(u8);
+def(byteArray) => array(Count: varint) => u8;
+----
+
+== Attributes
+
+Two forms, distinguished by where they attach:
+
+`@name args` attaches to the *following statement*.
+
+`@!name args` attaches to the *enclosing block* (file or item block).
+
+[source,pds]
+----
+@!doc "Top-of-file note about this module"
+
+@specializer array
+def_native(array) { /* ... */ };
+----
+
+== Values
+
+[cols="1,3"]
+|===
+| Kind | Example
+
+| Int       | `42`, `0x10`
+| Float     | `-1.5`, `2e-3`
+| String    | `"hello"`, `"""\n...\n"""`
+| Bytes     | `b"\x08\x01"`
+| Item      | `field(name) => u8`
+| Reference | `./foo`, `../../bar/@size`, `./$length`
+| Record    | `(x: 1, y: 2)`, `point(x: 1, y: 2)`
+| List      | `[1, 2, 3]`
+| Expression | `../len - 1`, `u16(../n) * 2` (argument values only, see xref:expressions.adoc[Expressions])
+|===
+
+== Items
+
+An item is a named invocation with optional arguments and an optional body
+block:
+
+[source]
+----
+<path> ( <args> )? { <block> }?
+----
+
+`<path>` is `::`-separated identifiers, optionally absolute with the `root::`
+prefix:
+
+[source,pds]
+----
+root::protocol::u8
+protocol::u8
+u8
+----
+
+Arguments are comma-separated; each is either positional (`u8`) or named
+(`Count: varint`):
+
+[source,pds]
+----
+array(Count: varint)
+union(tag: ../itemCount)
+field(x, signed: false, size: 4)
+----
+
+A trailing block is the item's body. Used by `container`, `union`,
+`def_native`, etc.:
+
+[source,pds]
+----
+def(point) => container {
+    field(x) => i32;
+    field(y) => i32;
+};
+----

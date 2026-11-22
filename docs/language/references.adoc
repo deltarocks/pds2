@@ -1,0 +1,72 @@
+= References
+:order: 3
+
+References point at fields elsewhere in the tree.
+
+[cols="1,3"]
+|===
+| Form | Meaning
+
+| `./foo`            | Sibling `foo`
+| `../foo`           | Parent's `foo`
+| `../../a/b`        | Two levels up, then down to `a/b`
+| `./@size`          | Virtual field `size`
+| `./$length`        | Argument `length` of the def
+|===
+
+A reference must start with either `./` or one or more `../`. Segments are
+joined with `/`.
+
+Every nested item is one level, whatever its kind: a field's type, an
+`array`/`option` element, a union arm. `../` leaves exactly one of them.
+
+[source,pds]
+----
+def(packet) => container {
+    field(len) => varint;
+    field(kind) => u8;
+    field(body) => union(tag: ../kind) {
+        variant(list, match: 1) => array(count: ../../len) => u8;
+    };
+};
+----
+
+Arguments belong to the def, at its top level: a nested item reaches them with
+one `../` per level, like a field, and passes them on to other defs the same
+way.
+
+[source,pds]
+----
+def(entry) {
+    argument(wide) => bool;
+} => container {
+    field(id) => union(tag: ../$wide) {
+        variant(short, match: false) => u16;
+        variant(long, match: true) => i32;
+    };
+    field(parts) => array(count: 2) => union(tag: ../../$wide) {
+        variant(short, match: false) => u16;
+        variant(long, match: true) => i32;
+    };
+    field(inner) => other(wide: ../$wide);
+};
+----
+
+A reference may not climb above its def, a `$name` must end at the def's top
+level, and an item's own arguments start at the item itself, so
+`array(count: ./n)` points at the array, not at its container; each is a
+compile error.
+
+Unions expose their discriminant as `@tag`, so a tag stored on the wire before
+the union can be derived from it:
+
+[source,pds]
+----
+def(score) => container {
+    virtual_field(format, value: ./styling/@tag) => option => varint;
+    field(styling) => union(tag: ../format) {
+        variant(fixed, match: 1) => anonymousNbt;
+        default;
+    };
+};
+----

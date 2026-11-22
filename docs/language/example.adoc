@@ -1,0 +1,30 @@
+= Full example
+:order: 7
+
+[source,pds]
+----
+namespace(protocol) {
+    def_native(varint);
+    def_native(u8);
+
+    @specializer array
+    def_native(array) {
+        type(Value);
+        variant(inline) { type(Count); };
+        variant(sized)  { argument(count); };
+    };
+
+    @specializer container
+    def_native(container) {
+        body {
+            item(field) { type(Value); };
+            item(virtual_field) { argument(value); type(Value); };
+        };
+    };
+
+    def(packet) => container {
+        field(id) => varint;
+        field(payload) => array(Count: varint) => u8;
+    };
+};
+----

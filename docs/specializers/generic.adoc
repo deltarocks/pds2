@@ -1,0 +1,13 @@
+= Generic
+:order: 4
+
+The `terminated` specializer reads elements until the next value of `end`'s
+declared type equals `end`, and writes `end` after the last element:
+
+[source,pds]
+----
+@specializer terminated
+def_native(terminated) { type(Value); type(End); argument(end) => End; body; };
+
+def(Compound) => terminated(end: u8(0)) => Entry;
+----

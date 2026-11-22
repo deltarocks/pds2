@@ -1,0 +1,109 @@
+= Protodef
+:order: 3
+
+== `container { field(...); ... }`
+
+A sequential struct. Each statement inside is a `field` or `virtual_field`.
+
+`container` is implemented by the `container` specializer:
+
+[source,pds]
+----
+@specializer container
+def_native(container) {
+    body {
+        item(field) { type(Value); };
+        item(virtual_field) { argument(value); type(Value); };
+    };
+};
+----
+
+== `field(name) => <type>` / `virtual_field(name, value: <ref>) => <type>`
+
+`field` reads/writes a value. `virtual_field` is on the wire but not stored in
+the decoded value: it is written from the reference, and read values are checked
+against it.
+
+[source,pds]
+----
+def(prefixed) => container {
+    virtual_field(len, value: ./v/@size) => varint;
+    field(v) => array(count: ../len) => varint;
+};
+----
+
+== `union(tag: <ref>) { variant(...) ... }` / `union(Tag: <type>) { ... }`
+
+Tagged union. `tag:` references an existing field carrying the discriminant;
+`Tag:` declares the tag inline as the given type.
+
+A `variant(name, match: <value>)` selects on the tag; bare `variant(name)`
+declares a payload-less case. `default => <type>` is the fallback.
+
+An arm matches when the tag equals its `match` value constructed as the tag's
+type: a scalar literal, `Some(value)` for an `option` tag, the payload-less arm of
+a union tag (by name or by its `match`), or that union's `default` holding the
+value. When the value can't construct the tag's type (a union tag whose arm for
+that value carries data), the tag is cast to its own `@tag` and compared there.
+A value that fits neither is a compile error.
+
+[source,pds]
+----
+field(scaling) => union(Tag: varint) {
+    variant(never, match: 0);
+    variant(when_caused_by_living_non_player, match: 1);
+    variant(always, match: 2);
+};
+----
+
+`union` has one overload per tag source:
+
+[source,pds]
+----
+@specializer union
+def_native(union) {
+    body {
+        item(variant) { argument(match); type(Value) => void; };
+        item(default) { anonymous; type(Value) => void; };
+    };
+    variant(external) { argument(tag); };
+    variant(inline) { type(Tag); };
+};
+----
+
+== `array`, `buffer`, `option`
+
+Generic native containers. Common forms:
+
+[source,pds]
+----
+array(Count: varint) => u8       // length-prefixed
+array(count: ../n)   => u8       // length from named field
+option => u8                     // optional value
+buffer(Count: varint)            // raw bytes, length-prefixed
+----
+
+== `bitfield { field(name, size: N, signed: <bool>); ... }`
+
+Packs sub-fields into bits.
+
+[source,pds]
+----
+def(position) => bitfield {
+    field(x, size: 26, signed: true);
+    field(z, size: 26, signed: true);
+    field(y, size: 12, signed: true);
+};
+----
+
+== `bitflags { flag(name); ... } => <int>`
+
+Set-of-flags backed by an integer.
+
+[source,pds]
+----
+def(playerActions) => bitflags {
+    flag(add_player);
+    flag(initialize_chat);
+} => u8;
+----
