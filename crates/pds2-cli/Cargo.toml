@@ -2,6 +2,8 @@
 name = "pds2-cli"
 version = "0.1.0"
 edition = "2021"
+description = "Library for building CLIs for PDS compilers"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0"

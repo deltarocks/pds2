@@ -2,6 +2,7 @@
 name = "lang-tests"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [dependencies]
 pds-bytes-runtime = { path = "../pds-bytes-runtime" }

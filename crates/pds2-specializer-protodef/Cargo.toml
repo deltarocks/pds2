@@ -2,6 +2,8 @@
 name = "pds2-specializer-protodef"
 version = "0.1.0"
 edition = "2021"
+description = "PDS2 specializer for protodef"
+license = "MIT"
 
 [dependencies]
 Inflector = "0.11.4"

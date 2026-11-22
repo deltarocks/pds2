@@ -2,6 +2,8 @@
 name = "pds2"
 version = "0.1.0"
 edition = "2021"
+description = "PDS2 CLI"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0"

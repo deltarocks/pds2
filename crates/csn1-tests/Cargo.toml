@@ -2,6 +2,7 @@
 name = "csn1-tests"
 version = "0.1.0"
 edition = "2021"
+publish = false
 
 [dependencies]
 pds-bits-runtime = { path = "../pds-bits-runtime" }

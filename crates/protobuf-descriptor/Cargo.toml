@@ -2,6 +2,8 @@
 name = "protobuf-descriptor"
 version = "0.1.0"
 edition = "2021"
+description = "Protobuf descriptor decoder"
+license = "MIT"
 
 [dependencies]
 pds-bytes-runtime = { path = "../pds-bytes-runtime" }
