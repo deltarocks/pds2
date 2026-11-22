@@ -3,40 +3,45 @@ use crate::pds::{Input, Output, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FeatureSetVisibilityFeatureDefaultSymbolVisibility {
-    DefaultSymbolVisibilityUnknown,
-    ExportAll,
-    ExportTopLevel,
-    LocalAll,
-    Strict,
-    Unknown(super::super::super::Int32),
+	DefaultSymbolVisibilityUnknown,
+	ExportAll,
+	ExportTopLevel,
+	LocalAll,
+	Strict,
+	Unknown(super::super::super::Int32),
+}
+impl Default for Ty {
+	fn default() -> Ty {
+		from_number(0_i32)
+	}
 }
 pub fn number(_0: &Ty) -> super::super::super::Int32 {
-    match _0 {
-        Ty::DefaultSymbolVisibilityUnknown => 0_i32,
-        Ty::ExportAll => 1_i32,
-        Ty::ExportTopLevel => 2_i32,
-        Ty::LocalAll => 3_i32,
-        Ty::Strict => 4_i32,
-        Ty::Unknown(n) => n.clone(),
-    }
+	match _0 {
+		Ty::DefaultSymbolVisibilityUnknown => 0_i32,
+		Ty::ExportAll => 1_i32,
+		Ty::ExportTopLevel => 2_i32,
+		Ty::LocalAll => 3_i32,
+		Ty::Strict => 4_i32,
+		Ty::Unknown(n) => n.clone(),
+	}
 }
 pub fn from_number(n: super::super::super::Int32) -> Ty {
-    match n {
-        0_i32 => Ty::DefaultSymbolVisibilityUnknown,
-        1_i32 => Ty::ExportAll,
-        2_i32 => Ty::ExportTopLevel,
-        3_i32 => Ty::LocalAll,
-        4_i32 => Ty::Strict,
-        n => Ty::Unknown(n),
-    }
+	match n {
+		0_i32 => Ty::DefaultSymbolVisibilityUnknown,
+		1_i32 => Ty::ExportAll,
+		2_i32 => Ty::ExportTopLevel,
+		3_i32 => Ty::LocalAll,
+		4_i32 => Ty::Strict,
+		n => Ty::Unknown(n),
+	}
 }
 pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    super::super::super::int32::serialize(&number(_0), output)
+	super::super::super::int32::serialize(&number(_0), output)
 }
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    Ok(from_number(super::super::super::int32::deserialize(input, )?))
+pub fn deserialize(input: &mut Input) -> Result<Ty> {
+	Ok(from_number(super::super::super::int32::deserialize(input)?))
 }
 pub fn size_of(_0: &Ty) -> usize {
-    super::super::super::int32::size_of(&number(_0))
+	super::super::super::int32::size_of(&number(_0))
 }
- pub type Ty = FeatureSetVisibilityFeatureDefaultSymbolVisibility;
+pub type Ty = FeatureSetVisibilityFeatureDefaultSymbolVisibility;

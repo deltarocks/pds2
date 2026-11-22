@@ -201,6 +201,7 @@ pub struct NativeCodegenCtx<'a, L: Lang> {
 pub struct LowerCx<'a, L: Lang> {
 	pub names: &'a dyn Names<L>,
 	pub types: &'a mir::TypeMap,
+	pub elab: &'a Elaborator<'a>,
 	pub lower: &'a dyn Fn(&mir::Expr) -> Result<Tokens<L>>,
 }
 

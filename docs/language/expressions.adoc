@@ -43,7 +43,7 @@ explicit `type(...)`; `type(a: 1, b: 2)` is short for `type((a: 1, b: 2))`.
 | integer, float, `bool` scalar | `42`, `-1.5`, `true`
 | `@scalar string` / `@scalar bytes` | `"text"` / `b"\x01"` (bytes also take a string)
 | `void` | `()`
-| `container`, `message`, `bitfield` | `(field: value, ...)`; virtual fields are left out, message fields may be
+| `container`, `message`, `bitfield` | `(field: value, ...)`; virtual fields are left out, message fields other than `field` may be left out
 | `array`, `terminated`, `entityMetadataLoop`, `topBitSetTerminatedArray`, `repeated` field | `[a, b, c]`
 | `option` | the value itself, or `none`
 | `union` | `variant` without a value, `(variant: value)` with one, a tag value, or `(default: tag)`

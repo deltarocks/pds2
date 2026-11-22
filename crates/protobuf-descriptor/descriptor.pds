@@ -50,6 +50,18 @@ def_native(message) {
 			type(Value);
 		};
 
+		item(implicit) {
+			argument(number);
+
+			type(Value);
+		};
+
+		item(optional) {
+			argument(number);
+
+			type(Value);
+		};
+
 		item(repeated) {
 			argument(number);
 
@@ -80,7 +92,7 @@ def_native(enum) {
 namespace(google) {
 	namespace(protobuf) {
 		def(DescriptorProto) => message {
-			field(name, number: 1) => root::string;
+			optional(name, number: 1) => root::string;
 
 			repeated(field, number: 2) => root::google::protobuf::FieldDescriptorProto;
 
@@ -95,28 +107,28 @@ namespace(google) {
 
 			repeated(oneof_decl, number: 8) => root::google::protobuf::OneofDescriptorProto;
 
-			field(options, number: 7) => root::google::protobuf::MessageOptions;
+			optional(options, number: 7) => root::google::protobuf::MessageOptions;
 
 			repeated(reserved_range, number: 9)
 			=> root::google::protobuf::DescriptorProto_ReservedRange;
 
 			repeated(reserved_name, number: 10) => root::string;
 
-			field(visibility, number: 11) => root::google::protobuf::SymbolVisibility;
+			optional(visibility, number: 11) => root::google::protobuf::SymbolVisibility;
 		};
 
 		def(DescriptorProto_ExtensionRange) => message {
-			field(start, number: 1) => root::int32;
+			optional(start, number: 1) => root::int32;
 
-			field(end, number: 2) => root::int32;
+			optional(end, number: 2) => root::int32;
 
-			field(options, number: 3) => root::google::protobuf::ExtensionRangeOptions;
+			optional(options, number: 3) => root::google::protobuf::ExtensionRangeOptions;
 		};
 
 		def(DescriptorProto_ReservedRange) => message {
-			field(start, number: 1) => root::int32;
+			optional(start, number: 1) => root::int32;
 
-			field(end, number: 2) => root::int32;
+			optional(end, number: 2) => root::int32;
 		};
 
 		def(Edition) => enum(Tag: root::int32) {
@@ -150,54 +162,55 @@ namespace(google) {
 		};
 
 		def(EnumDescriptorProto) => message {
-			field(name, number: 1) => root::string;
+			optional(name, number: 1) => root::string;
 
 			repeated(value, number: 2) => root::google::protobuf::EnumValueDescriptorProto;
 
-			field(options, number: 3) => root::google::protobuf::EnumOptions;
+			optional(options, number: 3) => root::google::protobuf::EnumOptions;
 
 			repeated(reserved_range, number: 4)
 			=> root::google::protobuf::EnumDescriptorProto_EnumReservedRange;
 
 			repeated(reserved_name, number: 5) => root::string;
 
-			field(visibility, number: 6) => root::google::protobuf::SymbolVisibility;
+			optional(visibility, number: 6) => root::google::protobuf::SymbolVisibility;
 		};
 
 		def(EnumDescriptorProto_EnumReservedRange) => message {
-			field(start, number: 1) => root::int32;
+			optional(start, number: 1) => root::int32;
 
-			field(end, number: 2) => root::int32;
+			optional(end, number: 2) => root::int32;
 		};
 
 		def(EnumOptions) => message {
-			field(allow_alias, number: 2) => root::bool;
+			optional(allow_alias, number: 2) => root::bool;
 
-			field(deprecated, number: 3) => root::bool;
+			optional(deprecated, number: 3) => root::bool;
 
-			field(deprecated_legacy_json_field_conflicts, number: 6) => root::bool;
+			optional(deprecated_legacy_json_field_conflicts, number: 6) => root::bool;
 
-			field(features, number: 7) => root::google::protobuf::FeatureSet;
+			optional(features, number: 7) => root::google::protobuf::FeatureSet;
 
 			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
 		};
 
 		def(EnumValueDescriptorProto) => message {
-			field(name, number: 1) => root::string;
+			optional(name, number: 1) => root::string;
 
-			field(number, number: 2) => root::int32;
+			optional(number, number: 2) => root::int32;
 
-			field(options, number: 3) => root::google::protobuf::EnumValueOptions;
+			optional(options, number: 3) => root::google::protobuf::EnumValueOptions;
 		};
 
 		def(EnumValueOptions) => message {
-			field(deprecated, number: 1) => root::bool;
+			optional(deprecated, number: 1) => root::bool;
 
-			field(features, number: 2) => root::google::protobuf::FeatureSet;
+			optional(features, number: 2) => root::google::protobuf::FeatureSet;
 
-			field(debug_redact, number: 3) => root::bool;
+			optional(debug_redact, number: 3) => root::bool;
 
-			field(feature_support, number: 4) => root::google::protobuf::FieldOptions_FeatureSupport;
+			optional(feature_support, number: 4)
+			=> root::google::protobuf::FieldOptions_FeatureSupport;
 
 			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
 		};
@@ -208,22 +221,22 @@ namespace(google) {
 			repeated(declaration, number: 2)
 			=> root::google::protobuf::ExtensionRangeOptions_Declaration;
 
-			field(features, number: 50) => root::google::protobuf::FeatureSet;
+			optional(features, number: 50) => root::google::protobuf::FeatureSet;
 
-			field(verification, number: 3)
+			optional(verification, number: 3)
 			=> root::google::protobuf::ExtensionRangeOptions_VerificationState;
 		};
 
 		def(ExtensionRangeOptions_Declaration) => message {
-			field(number, number: 1) => root::int32;
+			optional(number, number: 1) => root::int32;
 
-			field(full_name, number: 2) => root::string;
+			optional(full_name, number: 2) => root::string;
 
-			field(type, number: 3) => root::string;
+			optional(type, number: 3) => root::string;
 
-			field(reserved, number: 5) => root::bool;
+			optional(reserved, number: 5) => root::bool;
 
-			field(repeated, number: 6) => root::bool;
+			optional(repeated, number: 6) => root::bool;
 		};
 
 		def(ExtensionRangeOptions_VerificationState) => enum(Tag: root::int32) {
@@ -233,26 +246,27 @@ namespace(google) {
 		};
 
 		def(FeatureSet) => message {
-			field(field_presence, number: 1) => root::google::protobuf::FeatureSet_FieldPresence;
+			optional(field_presence, number: 1) => root::google::protobuf::FeatureSet_FieldPresence;
 
-			field(enum_type, number: 2) => root::google::protobuf::FeatureSet_EnumType;
+			optional(enum_type, number: 2) => root::google::protobuf::FeatureSet_EnumType;
 
-			field(repeated_field_encoding, number: 3)
+			optional(repeated_field_encoding, number: 3)
 			=> root::google::protobuf::FeatureSet_RepeatedFieldEncoding;
 
-			field(utf8_validation, number: 4) => root::google::protobuf::FeatureSet_Utf8Validation;
+			optional(utf8_validation, number: 4) => root::google::protobuf::FeatureSet_Utf8Validation;
 
-			field(message_encoding, number: 5) => root::google::protobuf::FeatureSet_MessageEncoding;
+			optional(message_encoding, number: 5)
+			=> root::google::protobuf::FeatureSet_MessageEncoding;
 
-			field(json_format, number: 6) => root::google::protobuf::FeatureSet_JsonFormat;
+			optional(json_format, number: 6) => root::google::protobuf::FeatureSet_JsonFormat;
 
-			field(enforce_naming_style, number: 7)
+			optional(enforce_naming_style, number: 7)
 			=> root::google::protobuf::FeatureSet_EnforceNamingStyle;
 
-			field(default_symbol_visibility, number: 8)
+			optional(default_symbol_visibility, number: 8)
 			=> root::google::protobuf::FeatureSet_VisibilityFeature_DefaultSymbolVisibility;
 
-			field(enforce_proto_limits, number: 9)
+			optional(enforce_proto_limits, number: 9)
 			=> root::google::protobuf::FeatureSet_ProtoLimitsFeature_EnforceProtoLimits;
 		};
 
@@ -344,41 +358,41 @@ namespace(google) {
 			repeated(defaults, number: 1)
 			=> root::google::protobuf::FeatureSetDefaults_FeatureSetEditionDefault;
 
-			field(minimum_edition, number: 4) => root::google::protobuf::Edition;
+			optional(minimum_edition, number: 4) => root::google::protobuf::Edition;
 
-			field(maximum_edition, number: 5) => root::google::protobuf::Edition;
+			optional(maximum_edition, number: 5) => root::google::protobuf::Edition;
 		};
 
 		def(FeatureSetDefaults_FeatureSetEditionDefault) => message {
-			field(edition, number: 3) => root::google::protobuf::Edition;
+			optional(edition, number: 3) => root::google::protobuf::Edition;
 
-			field(overridable_features, number: 4) => root::google::protobuf::FeatureSet;
+			optional(overridable_features, number: 4) => root::google::protobuf::FeatureSet;
 
-			field(fixed_features, number: 5) => root::google::protobuf::FeatureSet;
+			optional(fixed_features, number: 5) => root::google::protobuf::FeatureSet;
 		};
 
 		def(FieldDescriptorProto) => message {
-			field(name, number: 1) => root::string;
+			optional(name, number: 1) => root::string;
 
-			field(number, number: 3) => root::int32;
+			optional(number, number: 3) => root::int32;
 
-			field(label, number: 4) => root::google::protobuf::FieldDescriptorProto_Label;
+			optional(label, number: 4) => root::google::protobuf::FieldDescriptorProto_Label;
 
-			field(type, number: 5) => root::google::protobuf::FieldDescriptorProto_Type;
+			optional(type, number: 5) => root::google::protobuf::FieldDescriptorProto_Type;
 
-			field(type_name, number: 6) => root::string;
+			optional(type_name, number: 6) => root::string;
 
-			field(extendee, number: 2) => root::string;
+			optional(extendee, number: 2) => root::string;
 
-			field(default_value, number: 7) => root::string;
+			optional(default_value, number: 7) => root::string;
 
-			field(oneof_index, number: 9) => root::int32;
+			optional(oneof_index, number: 9) => root::int32;
 
-			field(json_name, number: 10) => root::string;
+			optional(json_name, number: 10) => root::string;
 
-			field(options, number: 8) => root::google::protobuf::FieldOptions;
+			optional(options, number: 8) => root::google::protobuf::FieldOptions;
 
-			field(proto3_optional, number: 17) => root::bool;
+			optional(proto3_optional, number: 17) => root::bool;
 		};
 
 		def(FieldDescriptorProto_Label) => enum(Tag: root::int32) {
@@ -428,32 +442,33 @@ namespace(google) {
 		};
 
 		def(FieldOptions) => message {
-			field(ctype, number: 1) => root::google::protobuf::FieldOptions_CType;
+			optional(ctype, number: 1) => root::google::protobuf::FieldOptions_CType;
 
-			field(packed, number: 2) => root::bool;
+			optional(packed, number: 2) => root::bool;
 
-			field(jstype, number: 6) => root::google::protobuf::FieldOptions_JSType;
+			optional(jstype, number: 6) => root::google::protobuf::FieldOptions_JSType;
 
-			field(lazy, number: 5) => root::bool;
+			optional(lazy, number: 5) => root::bool;
 
-			field(unverified_lazy, number: 15) => root::bool;
+			optional(unverified_lazy, number: 15) => root::bool;
 
-			field(deprecated, number: 3) => root::bool;
+			optional(deprecated, number: 3) => root::bool;
 
-			field(weak, number: 10) => root::bool;
+			optional(weak, number: 10) => root::bool;
 
-			field(debug_redact, number: 16) => root::bool;
+			optional(debug_redact, number: 16) => root::bool;
 
-			field(retention, number: 17) => root::google::protobuf::FieldOptions_OptionRetention;
+			optional(retention, number: 17) => root::google::protobuf::FieldOptions_OptionRetention;
 
 			repeated(targets, number: 19) => root::google::protobuf::FieldOptions_OptionTargetType;
 
 			repeated(edition_defaults, number: 20)
 			=> root::google::protobuf::FieldOptions_EditionDefault;
 
-			field(features, number: 21) => root::google::protobuf::FeatureSet;
+			optional(features, number: 21) => root::google::protobuf::FeatureSet;
 
-			field(feature_support, number: 22) => root::google::protobuf::FieldOptions_FeatureSupport;
+			optional(feature_support, number: 22)
+			=> root::google::protobuf::FieldOptions_FeatureSupport;
 
 			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
 		};
@@ -467,21 +482,21 @@ namespace(google) {
 		};
 
 		def(FieldOptions_EditionDefault) => message {
-			field(edition, number: 3) => root::google::protobuf::Edition;
+			optional(edition, number: 3) => root::google::protobuf::Edition;
 
-			field(value, number: 2) => root::string;
+			optional(value, number: 2) => root::string;
 		};
 
 		def(FieldOptions_FeatureSupport) => message {
-			field(edition_introduced, number: 1) => root::google::protobuf::Edition;
+			optional(edition_introduced, number: 1) => root::google::protobuf::Edition;
 
-			field(edition_deprecated, number: 2) => root::google::protobuf::Edition;
+			optional(edition_deprecated, number: 2) => root::google::protobuf::Edition;
 
-			field(deprecation_warning, number: 3) => root::string;
+			optional(deprecation_warning, number: 3) => root::string;
 
-			field(edition_removed, number: 4) => root::google::protobuf::Edition;
+			optional(edition_removed, number: 4) => root::google::protobuf::Edition;
 
-			field(removal_error, number: 5) => root::string;
+			optional(removal_error, number: 5) => root::string;
 		};
 
 		def(FieldOptions_JSType) => enum(Tag: root::int32) {
@@ -523,9 +538,9 @@ namespace(google) {
 		};
 
 		def(FileDescriptorProto) => message {
-			field(name, number: 1) => root::string;
+			optional(name, number: 1) => root::string;
 
-			field(package, number: 2) => root::string;
+			optional(package, number: 2) => root::string;
 
 			repeated(dependency, number: 3) => root::string;
 
@@ -543,13 +558,13 @@ namespace(google) {
 
 			repeated(extension, number: 7) => root::google::protobuf::FieldDescriptorProto;
 
-			field(options, number: 8) => root::google::protobuf::FileOptions;
+			optional(options, number: 8) => root::google::protobuf::FileOptions;
 
-			field(source_code_info, number: 9) => root::google::protobuf::SourceCodeInfo;
+			optional(source_code_info, number: 9) => root::google::protobuf::SourceCodeInfo;
 
-			field(syntax, number: 12) => root::string;
+			optional(syntax, number: 12) => root::string;
 
-			field(edition, number: 14) => root::google::protobuf::Edition;
+			optional(edition, number: 14) => root::google::protobuf::Edition;
 		};
 
 		def(FileDescriptorSet) => message {
@@ -557,45 +572,45 @@ namespace(google) {
 		};
 
 		def(FileOptions) => message {
-			field(java_package, number: 1) => root::string;
+			optional(java_package, number: 1) => root::string;
 
-			field(java_outer_classname, number: 8) => root::string;
+			optional(java_outer_classname, number: 8) => root::string;
 
-			field(java_multiple_files, number: 10) => root::bool;
+			optional(java_multiple_files, number: 10) => root::bool;
 
-			field(java_generate_equals_and_hash, number: 20) => root::bool;
+			optional(java_generate_equals_and_hash, number: 20) => root::bool;
 
-			field(java_string_check_utf8, number: 27) => root::bool;
+			optional(java_string_check_utf8, number: 27) => root::bool;
 
-			field(optimize_for, number: 9) => root::google::protobuf::FileOptions_OptimizeMode;
+			optional(optimize_for, number: 9) => root::google::protobuf::FileOptions_OptimizeMode;
 
-			field(go_package, number: 11) => root::string;
+			optional(go_package, number: 11) => root::string;
 
-			field(cc_generic_services, number: 16) => root::bool;
+			optional(cc_generic_services, number: 16) => root::bool;
 
-			field(java_generic_services, number: 17) => root::bool;
+			optional(java_generic_services, number: 17) => root::bool;
 
-			field(py_generic_services, number: 18) => root::bool;
+			optional(py_generic_services, number: 18) => root::bool;
 
-			field(deprecated, number: 23) => root::bool;
+			optional(deprecated, number: 23) => root::bool;
 
-			field(cc_enable_arenas, number: 31) => root::bool;
+			optional(cc_enable_arenas, number: 31) => root::bool;
 
-			field(objc_class_prefix, number: 36) => root::string;
+			optional(objc_class_prefix, number: 36) => root::string;
 
-			field(csharp_namespace, number: 37) => root::string;
+			optional(csharp_namespace, number: 37) => root::string;
 
-			field(swift_prefix, number: 39) => root::string;
+			optional(swift_prefix, number: 39) => root::string;
 
-			field(php_class_prefix, number: 40) => root::string;
+			optional(php_class_prefix, number: 40) => root::string;
 
-			field(php_namespace, number: 41) => root::string;
+			optional(php_namespace, number: 41) => root::string;
 
-			field(php_metadata_namespace, number: 44) => root::string;
+			optional(php_metadata_namespace, number: 44) => root::string;
 
-			field(ruby_package, number: 45) => root::string;
+			optional(ruby_package, number: 45) => root::string;
 
-			field(features, number: 50) => root::google::protobuf::FeatureSet;
+			optional(features, number: 50) => root::google::protobuf::FeatureSet;
 
 			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
 		};
@@ -615,13 +630,13 @@ namespace(google) {
 		def(GeneratedCodeInfo_Annotation) => message {
 			repeated(path, number: 1) => root::int32;
 
-			field(source_file, number: 2) => root::string;
+			optional(source_file, number: 2) => root::string;
 
-			field(begin, number: 3) => root::int32;
+			optional(begin, number: 3) => root::int32;
 
-			field(end, number: 4) => root::int32;
+			optional(end, number: 4) => root::int32;
 
-			field(semantic, number: 5)
+			optional(semantic, number: 5)
 			=> root::google::protobuf::GeneratedCodeInfo_Annotation_Semantic;
 		};
 
@@ -634,42 +649,42 @@ namespace(google) {
 		};
 
 		def(MessageOptions) => message {
-			field(message_set_wire_format, number: 1) => root::bool;
+			optional(message_set_wire_format, number: 1) => root::bool;
 
-			field(no_standard_descriptor_accessor, number: 2) => root::bool;
+			optional(no_standard_descriptor_accessor, number: 2) => root::bool;
 
-			field(deprecated, number: 3) => root::bool;
+			optional(deprecated, number: 3) => root::bool;
 
-			field(map_entry, number: 7) => root::bool;
+			optional(map_entry, number: 7) => root::bool;
 
-			field(deprecated_legacy_json_field_conflicts, number: 11) => root::bool;
+			optional(deprecated_legacy_json_field_conflicts, number: 11) => root::bool;
 
-			field(features, number: 12) => root::google::protobuf::FeatureSet;
+			optional(features, number: 12) => root::google::protobuf::FeatureSet;
 
 			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
 		};
 
 		def(MethodDescriptorProto) => message {
-			field(name, number: 1) => root::string;
+			optional(name, number: 1) => root::string;
 
-			field(input_type, number: 2) => root::string;
+			optional(input_type, number: 2) => root::string;
 
-			field(output_type, number: 3) => root::string;
+			optional(output_type, number: 3) => root::string;
 
-			field(options, number: 4) => root::google::protobuf::MethodOptions;
+			optional(options, number: 4) => root::google::protobuf::MethodOptions;
 
-			field(client_streaming, number: 5) => root::bool;
+			optional(client_streaming, number: 5) => root::bool;
 
-			field(server_streaming, number: 6) => root::bool;
+			optional(server_streaming, number: 6) => root::bool;
 		};
 
 		def(MethodOptions) => message {
-			field(deprecated, number: 33) => root::bool;
+			optional(deprecated, number: 33) => root::bool;
 
-			field(idempotency_level, number: 34)
+			optional(idempotency_level, number: 34)
 			=> root::google::protobuf::MethodOptions_IdempotencyLevel;
 
-			field(features, number: 35) => root::google::protobuf::FeatureSet;
+			optional(features, number: 35) => root::google::protobuf::FeatureSet;
 
 			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
 		};
@@ -683,29 +698,29 @@ namespace(google) {
 		};
 
 		def(OneofDescriptorProto) => message {
-			field(name, number: 1) => root::string;
+			optional(name, number: 1) => root::string;
 
-			field(options, number: 2) => root::google::protobuf::OneofOptions;
+			optional(options, number: 2) => root::google::protobuf::OneofOptions;
 		};
 
 		def(OneofOptions) => message {
-			field(features, number: 1) => root::google::protobuf::FeatureSet;
+			optional(features, number: 1) => root::google::protobuf::FeatureSet;
 
 			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
 		};
 
 		def(ServiceDescriptorProto) => message {
-			field(name, number: 1) => root::string;
+			optional(name, number: 1) => root::string;
 
 			repeated(method, number: 2) => root::google::protobuf::MethodDescriptorProto;
 
-			field(options, number: 3) => root::google::protobuf::ServiceOptions;
+			optional(options, number: 3) => root::google::protobuf::ServiceOptions;
 		};
 
 		def(ServiceOptions) => message {
-			field(features, number: 34) => root::google::protobuf::FeatureSet;
+			optional(features, number: 34) => root::google::protobuf::FeatureSet;
 
-			field(deprecated, number: 33) => root::bool;
+			optional(deprecated, number: 33) => root::bool;
 
 			repeated(uninterpreted_option, number: 999) => root::google::protobuf::UninterpretedOption;
 		};
@@ -719,9 +734,9 @@ namespace(google) {
 
 			repeated(span, number: 2) => root::int32;
 
-			field(leading_comments, number: 3) => root::string;
+			optional(leading_comments, number: 3) => root::string;
 
-			field(trailing_comments, number: 4) => root::string;
+			optional(trailing_comments, number: 4) => root::string;
 
 			repeated(leading_detached_comments, number: 6) => root::string;
 		};
@@ -737,17 +752,17 @@ namespace(google) {
 		def(UninterpretedOption) => message {
 			repeated(name, number: 2) => root::google::protobuf::UninterpretedOption_NamePart;
 
-			field(identifier_value, number: 3) => root::string;
+			optional(identifier_value, number: 3) => root::string;
 
-			field(positive_int_value, number: 4) => root::uint64;
+			optional(positive_int_value, number: 4) => root::uint64;
 
-			field(negative_int_value, number: 5) => root::int64;
+			optional(negative_int_value, number: 5) => root::int64;
 
-			field(double_value, number: 6) => root::double;
+			optional(double_value, number: 6) => root::double;
 
-			field(string_value, number: 7) => root::bytes;
+			optional(string_value, number: 7) => root::bytes;
 
-			field(aggregate_value, number: 8) => root::string;
+			optional(aggregate_value, number: 8) => root::string;
 		};
 
 		def(UninterpretedOption_NamePart) => message {

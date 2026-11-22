@@ -3,67 +3,72 @@ use crate::pds::{Input, Output, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Edition {
-    EditionUnknown,
-    EditionLegacy,
-    EditionProto2,
-    EditionProto3,
-    Edition2023,
-    Edition2024,
-    Edition2026,
-    EditionUnstable,
-    Edition1TestOnly,
-    Edition2TestOnly,
-    Edition99997TestOnly,
-    Edition99998TestOnly,
-    Edition99999TestOnly,
-    EditionMax,
-    Unknown(super::super::super::Int32),
+	EditionUnknown,
+	EditionLegacy,
+	EditionProto2,
+	EditionProto3,
+	Edition2023,
+	Edition2024,
+	Edition2026,
+	EditionUnstable,
+	Edition1TestOnly,
+	Edition2TestOnly,
+	Edition99997TestOnly,
+	Edition99998TestOnly,
+	Edition99999TestOnly,
+	EditionMax,
+	Unknown(super::super::super::Int32),
+}
+impl Default for Ty {
+	fn default() -> Ty {
+		from_number(0_i32)
+	}
 }
 pub fn number(_0: &Ty) -> super::super::super::Int32 {
-    match _0 {
-        Ty::EditionUnknown => 0_i32,
-        Ty::EditionLegacy => 900_i32,
-        Ty::EditionProto2 => 998_i32,
-        Ty::EditionProto3 => 999_i32,
-        Ty::Edition2023 => 1000_i32,
-        Ty::Edition2024 => 1001_i32,
-        Ty::Edition2026 => 1002_i32,
-        Ty::EditionUnstable => 9999_i32,
-        Ty::Edition1TestOnly => 1_i32,
-        Ty::Edition2TestOnly => 2_i32,
-        Ty::Edition99997TestOnly => 99997_i32,
-        Ty::Edition99998TestOnly => 99998_i32,
-        Ty::Edition99999TestOnly => 99999_i32,
-        Ty::EditionMax => 2147483647_i32,
-        Ty::Unknown(n) => n.clone(),
-    }
+	match _0 {
+		Ty::EditionUnknown => 0_i32,
+		Ty::EditionLegacy => 900_i32,
+		Ty::EditionProto2 => 998_i32,
+		Ty::EditionProto3 => 999_i32,
+		Ty::Edition2023 => 1000_i32,
+		Ty::Edition2024 => 1001_i32,
+		Ty::Edition2026 => 1002_i32,
+		Ty::EditionUnstable => 9999_i32,
+		Ty::Edition1TestOnly => 1_i32,
+		Ty::Edition2TestOnly => 2_i32,
+		Ty::Edition99997TestOnly => 99997_i32,
+		Ty::Edition99998TestOnly => 99998_i32,
+		Ty::Edition99999TestOnly => 99999_i32,
+		Ty::EditionMax => 2147483647_i32,
+		Ty::Unknown(n) => n.clone(),
+	}
 }
 pub fn from_number(n: super::super::super::Int32) -> Ty {
-    match n {
-        0_i32 => Ty::EditionUnknown,
-        900_i32 => Ty::EditionLegacy,
-        998_i32 => Ty::EditionProto2,
-        999_i32 => Ty::EditionProto3,
-        1000_i32 => Ty::Edition2023,
-        1001_i32 => Ty::Edition2024,
-        1002_i32 => Ty::Edition2026,
-        9999_i32 => Ty::EditionUnstable,
-        1_i32 => Ty::Edition1TestOnly,
-        2_i32 => Ty::Edition2TestOnly,
-        99997_i32 => Ty::Edition99997TestOnly,
-        99998_i32 => Ty::Edition99998TestOnly,
-        99999_i32 => Ty::Edition99999TestOnly,
-        2147483647_i32 => Ty::EditionMax,
-        n => Ty::Unknown(n),
-    }
+	match n {
+		0_i32 => Ty::EditionUnknown,
+		900_i32 => Ty::EditionLegacy,
+		998_i32 => Ty::EditionProto2,
+		999_i32 => Ty::EditionProto3,
+		1000_i32 => Ty::Edition2023,
+		1001_i32 => Ty::Edition2024,
+		1002_i32 => Ty::Edition2026,
+		9999_i32 => Ty::EditionUnstable,
+		1_i32 => Ty::Edition1TestOnly,
+		2_i32 => Ty::Edition2TestOnly,
+		99997_i32 => Ty::Edition99997TestOnly,
+		99998_i32 => Ty::Edition99998TestOnly,
+		99999_i32 => Ty::Edition99999TestOnly,
+		2147483647_i32 => Ty::EditionMax,
+		n => Ty::Unknown(n),
+	}
 }
 pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    super::super::super::int32::serialize(&number(_0), output)
+	super::super::super::int32::serialize(&number(_0), output)
 }
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    Ok(from_number(super::super::super::int32::deserialize(input, )?))
+pub fn deserialize(input: &mut Input) -> Result<Ty> {
+	Ok(from_number(super::super::super::int32::deserialize(input)?))
 }
 pub fn size_of(_0: &Ty) -> usize {
-    super::super::super::int32::size_of(&number(_0))
+	super::super::super::int32::size_of(&number(_0))
 }
- pub type Ty = Edition;
+pub type Ty = Edition;

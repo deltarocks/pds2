@@ -1,11 +1,26 @@
 = Protobuf
 :order: 5
 
-The `message` specializer describes a protobuf message: a set of numbered,
-optional fields in any order on the wire. Each item names a field, its number
-and its type; `repeated` fields become lists (scalars are written packed, both
-forms are read), `oneof` fields sharing a `group` become one optional choice.
-Unknown fields are skipped when reading.
+The `message` specializer describes a protobuf message: a set of numbered
+fields in any order on the wire. Each item names a field, its number and its
+type; the item kind says how the field is present:
+
+[cols="1,4,2"]
+|===
+| Item | Presence | Rust
+
+| `field` | required: always written, a message without it is rejected when read or constructed | `T`
+| `implicit` | none: the zero value (`0`, `false`, `""`, empty bytes, the enum value numbered 0) is not written and is what a missing field reads as | `T`
+| `optional` | explicit | `Option<T>`
+| `repeated` | a list; scalars are written packed, both forms are read | `Vec<T>`
+| `oneof` | fields sharing a `group` become one optional choice | `Option<Group>`
+|===
+
+TypeScript types match, with `?:` for `optional`, `repeated` and `oneof`.
+An `implicit` field holds a scalar or an enum; floats are compared bitwise, so
+`-0.0` is written. Unknown fields are skipped when reading. Occurrences of a
+singular message field are merged, and required fields are checked once the
+whole message is merged.
 
 [source,pds]
 ----
@@ -14,15 +29,18 @@ Unknown fields are skipped when reading.
 
 def(Endpoint) => message {
     field(address, number: 1) => string;
-    repeated(ports, number: 2) => int32;
-    oneof(weight, number: 3, group: "balancing") => int32;
-    oneof(priority, number: 4, group: "balancing") => int32;
+    implicit(port, number: 2) => int32;
+    optional(zone, number: 3) => string;
+    repeated(tags, number: 4) => string;
+    oneof(weight, number: 5, group: "balancing") => int32;
+    oneof(priority, number: 6, group: "balancing") => int32;
 };
 ----
 
 The `enum` specializer describes an open protobuf enum: named numbers of a `Tag`
 type. Unknown numbers are kept (`Unknown(n)` in Rust, the number itself in
-TypeScript), and values are written by name or by number.
+TypeScript), and values are written by name or by number. The Rust `Default`
+is the value numbered 0, `Unknown(0)` when there is none.
 
 [source,pds]
 ----
@@ -45,6 +63,14 @@ or `bytes` reads its whole frame.
 every type reachable from the root files becomes a `message` or an `enum`. The
 descriptors themselves are decoded by code pds generated from
 `descriptor.proto`.
+
+Item kinds follow the file's presence rules. In proto2, `required` fields
+become `field` and the rest `optional`. In proto3, scalar and enum fields
+become `implicit`, and fields marked `optional` become `optional`. Editions
+resolve `features.field_presence` from the file, enclosing messages and the
+field: `IMPLICIT`, `EXPLICIT` or `LEGACY_REQUIRED`, with the edition's
+default (`EXPLICIT` since 2023). Fields holding a message and extensions are
+always `optional`.
 
 Extensions anywhere in the set become fields of the message they extend, named
 by their full name with `_` for `.` (`extend google.protobuf.FieldOptions` in

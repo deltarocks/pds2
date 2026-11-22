@@ -10,11 +10,14 @@ def_native(u16);
 @scalar bool @encoding be
 def_native(bool);
 
-@scalar i32 @encoding varint64
+@scalar i32 @encoding varint64 @protobuf varint
 def_native(varint);
 
-@scalar bytes @encoding raw
+@scalar bytes @encoding raw @protobuf len
 def_native(bytes);
+
+@scalar f64 @encoding le @protobuf i64
+def_native(double);
 
 def_native(void) {
 	is_void;
@@ -150,6 +153,54 @@ def_native(container) {
 			argument(value);
 
 			type(Value);
+		};
+	};
+};
+
+@specializer message
+def_native(message) {
+	body {
+		item(field) {
+			argument(number);
+
+			type(Value);
+		};
+
+		item(implicit) {
+			argument(number);
+
+			type(Value);
+		};
+
+		item(optional) {
+			argument(number);
+
+			type(Value);
+		};
+
+		item(repeated) {
+			argument(number);
+
+			type(Value);
+		};
+
+		item(oneof) {
+			argument(number);
+
+			argument(group);
+
+			type(Value);
+		};
+	};
+};
+
+@specializer enum
+def_native(enum) {
+	type(Tag);
+
+	body {
+		item(value) {
+			argument(number);
 		};
 	};
 };
@@ -541,4 +592,78 @@ def(encoded_arguments) => const(
 
 def(decoded_arguments) => const(
 	value: Arguments(deserialized(b"\x02\x00\x05\x00\x06\x00\x07\x00\x00\x08\x00\x09\x00\x0a\x00\x0b\x00\x0c\x00\x0d\x0e")),
+);
+
+def(Leaf) {
+	export;
+} => message {
+	field(id, number: 1) => varint;
+
+	implicit(tag, number: 2) => varint;
+};
+
+def(Twig) {
+	export;
+} => message {
+	implicit(n, number: 1) => varint;
+
+	optional(m, number: 2) => varint;
+};
+
+def(Shade) => enum(Tag: varint) {
+	value(SHADE_UNSPECIFIED, number: 0);
+
+	value(SHADE_DARK, number: 1);
+};
+
+def(Branch) {
+	export;
+} => message {
+	field(root, number: 1) => Leaf;
+
+	optional(leaf, number: 2) => Leaf;
+
+	implicit(weight, number: 3) => double;
+
+	implicit(label, number: 4) => bytes;
+
+	implicit(shade, number: 5) => Shade;
+
+	oneof(left, number: 6, group: "side") => Leaf;
+
+	oneof(right, number: 7, group: "side") => varint;
+
+	oneof(middle, number: 8, group: "side") => Twig;
+};
+
+def(sample_branch) => const(value: Branch(root: (id: 0), leaf: (id: 3, tag: 4), weight: 1.5, shade: SHADE_DARK, right: 0));
+
+def(encoded_branch) => const(
+	value: serialized(Branch(root: (id: 0), leaf: (id: 3, tag: 4), weight: 1.5, shade: SHADE_DARK, right: 0)),
+) => bytes;
+
+def(decoded_branch) => const(
+	value: Branch(deserialized(serialized(Branch(root: (id: 0), leaf: (id: 3, tag: 4), weight: 1.5, shade: SHADE_DARK, right: 0)))),
+);
+
+def(sample_zeros) => const(value: Branch(root: (id: 1, tag: 0), weight: 0.0, label: b"", shade: SHADE_UNSPECIFIED));
+
+def(encoded_zeros) => const(
+	value: serialized(Branch(root: (id: 1, tag: 0), weight: 0.0, label: b"", shade: SHADE_UNSPECIFIED)),
+) => bytes;
+
+def(merged_branch) => const(value: Branch(root: (id: 3, tag: 4), leaf: (id: 9, tag: 7), left: (id: 2, tag: 1)));
+
+def(decoded_split) => const(
+	value: Branch(
+		deserialized(
+			b"\x0a\x02\x10\x04\x0a\x02\x08\x03\x12\x02\x10\x07\x12\x02\x08\x09\x38\x05\x32\x02\x10\x01\x32\x02\x08\x02",
+		),
+	),
+);
+
+def(switched_branch) => const(value: Branch(root: (id: 1), middle: (m: 5)));
+
+def(decoded_switch) => const(
+	value: Branch(deserialized(b"\x0a\x02\x08\x01\x42\x02\x08\x01\x32\x02\x08\x02\x42\x02\x10\x05")),
 );

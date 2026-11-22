@@ -20,6 +20,18 @@ def_native(message) {
 			type(Value);
 		};
 
+		item(implicit) {
+			argument(number);
+
+			type(Value);
+		};
+
+		item(optional) {
+			argument(number);
+
+			type(Value);
+		};
+
 		item(repeated) {
 			argument(number);
 
@@ -56,9 +68,9 @@ namespace(google) {
 		};
 
 		def(FileDescriptorProto) => message {
-			field(name, number: 1) => string;
+			optional(name, number: 1) => string;
 
-			field(package, number: 2) => string;
+			optional(package, number: 2) => string;
 
 			repeated(dependency, number: 3) => string;
 
@@ -66,11 +78,11 @@ namespace(google) {
 
 			repeated(enum_type, number: 5) => EnumDescriptorProto;
 
-			field(syntax, number: 12) => string;
+			optional(syntax, number: 12) => string;
 		};
 
 		def(DescriptorProto) => message {
-			field(name, number: 1) => string;
+			optional(name, number: 1) => string;
 
 			repeated(field, number: 2) => FieldDescriptorProto;
 
@@ -82,19 +94,19 @@ namespace(google) {
 		};
 
 		def(FieldDescriptorProto) => message {
-			field(name, number: 1) => string;
+			optional(name, number: 1) => string;
 
-			field(number, number: 3) => int32;
+			optional(number, number: 3) => int32;
 
-			field(label, number: 4) => FieldDescriptorProto_Label;
+			optional(label, number: 4) => FieldDescriptorProto_Label;
 
-			field(type, number: 5) => FieldDescriptorProto_Type;
+			optional(type, number: 5) => FieldDescriptorProto_Type;
 
-			field(type_name, number: 6) => string;
+			optional(type_name, number: 6) => string;
 
-			field(oneof_index, number: 9) => int32;
+			optional(oneof_index, number: 9) => int32;
 
-			field(proto3_optional, number: 17) => bool;
+			optional(proto3_optional, number: 17) => bool;
 		};
 
 		def(FieldDescriptorProto_Type) => enum(Tag: int32) {
@@ -144,19 +156,19 @@ namespace(google) {
 		};
 
 		def(OneofDescriptorProto) => message {
-			field(name, number: 1) => string;
+			optional(name, number: 1) => string;
 		};
 
 		def(EnumDescriptorProto) => message {
-			field(name, number: 1) => string;
+			optional(name, number: 1) => string;
 
 			repeated(value, number: 2) => EnumValueDescriptorProto;
 		};
 
 		def(EnumValueDescriptorProto) => message {
-			field(name, number: 1) => string;
+			optional(name, number: 1) => string;
 
-			field(number, number: 2) => int32;
+			optional(number, number: 2) => int32;
 		};
 	};
 };

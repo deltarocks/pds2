@@ -295,9 +295,14 @@ fn native_codegen<'m>(
 
 fn lower(meta: &TsMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 	let rec = |e: &Expr| lower(meta, e, from_locals);
+	let elab = Elaborator {
+		types: meta.types,
+		reg: meta.reg,
+	};
 	let cx = LowerCx {
 		names: meta,
 		types: meta.types,
+		elab: &elab,
 		lower: &rec,
 	};
 	Ok(match expr {

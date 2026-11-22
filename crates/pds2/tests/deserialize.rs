@@ -183,7 +183,7 @@ fn protobuf_extensions_become_fields_of_the_extended_message() {
 	let set = protobuf_descriptor::decode(&pds2_cli::encode(DESCRIPTOR, None, text, &reg).unwrap())
 		.unwrap();
 	let schema = pds2_specializer_protobuf::convert(&set, &["a.proto".to_owned()]).unwrap();
-	assert!(schema.contains("field(b_tag, number: 100) => root::b::Tag;"), "{schema}");
+	assert!(schema.contains("optional(b_tag, number: 100) => root::b::Tag;"), "{schema}");
 	assert!(schema.contains("repeated(b_Holder_nested, number: 101) => root::string;"), "{schema}");
 	assert!(!schema.contains("def(Holder)"), "{schema}");
 	let value = "root::a::Opts(x: 1, b_tag: (v: true), b_Holder_nested: [\"p\", \"q\"])\n";
@@ -252,4 +252,106 @@ fn protobuf_text_encodes_like_generated_code() {
 	let e = pds2_cli::encode(DESCRIPTOR, None, "(file: [])", &reg).unwrap_err();
 	assert!(format!("{e:#}").contains("--type"), "{e:#}");
 	assert_eq!(pds2_cli::encode(DESCRIPTOR, Some(FILE_SET), "(file: [])", &reg).unwrap(), b"");
+}
+
+#[test]
+fn protobuf_presence_follows_syntax_labels_and_features() {
+	let text = r#"root::google::protobuf::FileDescriptorSet(
+		file: [
+			(
+				name: "p2.proto",
+				package: "p2",
+				message_type: [(
+					name: "Old",
+					field: [
+						(name: "id", number: 1, label: LABEL_REQUIRED, type: TYPE_INT32),
+						(name: "note", number: 2, label: LABEL_OPTIONAL, type: TYPE_STRING),
+					],
+				)],
+			),
+			(
+				name: "p3.proto",
+				package: "p3",
+				syntax: "proto3",
+				message_type: [(
+					name: "New",
+					field: [
+						(name: "n", number: 1, label: LABEL_OPTIONAL, type: TYPE_INT32),
+						(
+							name: "kept",
+							number: 2,
+							label: LABEL_OPTIONAL,
+							type: TYPE_INT32,
+							oneof_index: 0,
+							proto3_optional: true,
+						),
+						(name: "old", number: 3, label: LABEL_OPTIONAL, type: TYPE_MESSAGE, type_name: ".p2.Old"),
+						(name: "a", number: 4, label: LABEL_OPTIONAL, type: TYPE_STRING, oneof_index: 1),
+						(name: "d", number: 5, label: LABEL_OPTIONAL, type: TYPE_DOUBLE),
+					],
+					oneof_decl: [(name: "_kept"), (name: "choice")],
+				)],
+			),
+			(
+				name: "ed.proto",
+				package: "ed",
+				syntax: "editions",
+				edition: EDITION_2023,
+				options: (features: (field_presence: IMPLICIT)),
+				message_type: [(
+					name: "Ed",
+					field: [
+						(name: "i", number: 1, label: LABEL_OPTIONAL, type: TYPE_INT32),
+						(
+							name: "e",
+							number: 2,
+							label: LABEL_OPTIONAL,
+							type: TYPE_INT32,
+							options: (features: (field_presence: EXPLICIT)),
+						),
+						(
+							name: "r",
+							number: 3,
+							label: LABEL_OPTIONAL,
+							type: TYPE_INT32,
+							options: (features: (field_presence: LEGACY_REQUIRED)),
+						),
+					],
+				)],
+			),
+		],
+	)"#;
+	let reg = pds2::registry();
+	let set = protobuf_descriptor::decode(&pds2_cli::encode(DESCRIPTOR, None, text, &reg).unwrap())
+		.unwrap();
+	let schema = pds2_specializer_protobuf::convert(&set, &[]).unwrap();
+	for item in [
+		"field(id, number: 1) => root::int32;",
+		"optional(note, number: 2) => root::string;",
+		"implicit(n, number: 1) => root::int32;",
+		"optional(kept, number: 2) => root::int32;",
+		"optional(old, number: 3) => root::p2::Old;",
+		"oneof(a, number: 4, group: \"choice\") => root::string;",
+		"implicit(d, number: 5) => root::double;",
+		"implicit(i, number: 1) => root::int32;",
+		"optional(e, number: 2) => root::int32;",
+		"field(r, number: 3) => root::int32;",
+	] {
+		assert!(schema.contains(item), "{item} in {schema}");
+	}
+
+	let e = pds2_cli::encode(&schema, None, "root::p2::Old(note: \"x\")\n", &reg).unwrap_err();
+	assert!(format!("{e:#}").contains("needs its required field"), "{e:#}");
+	let e = pds2_cli::decode(&schema, "root::p2::Old", b"\x12\x01x", &reg).unwrap_err();
+	assert!(format!("{e:#}").contains("is missing"), "{e:#}");
+	let old = "root::p2::Old(id: 0)\n";
+	assert_eq!(pds2_cli::encode(&schema, None, old, &reg).unwrap(), b"\x08\x00");
+	assert_eq!(roundtrip(&schema, "root::p2::Old", b"\x08\x00"), old);
+
+	let zeros = "root::p3::New(n: 0, kept: 0, a: \"\", d: 0.0)\n";
+	assert_eq!(pds2_cli::encode(&schema, None, zeros, &reg).unwrap(), b"\x10\x00\x22\x00");
+	let decoded = pds2_cli::decode(&schema, "root::p3::New", b"\x08\x00\x29\0\0\0\0\0\0\0\0", &reg).unwrap();
+	assert!(!decoded.contains("n:") && !decoded.contains("d:"), "{decoded}");
+	let negative = b"\x29\0\0\0\0\0\0\0\x80";
+	assert_eq!(roundtrip(&schema, "root::p3::New", negative), "root::p3::New(d: -0.0)\n");
 }

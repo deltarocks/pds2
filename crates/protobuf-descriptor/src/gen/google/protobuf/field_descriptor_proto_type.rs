@@ -3,79 +3,84 @@ use crate::pds::{Input, Output, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FieldDescriptorProtoType {
-    TypeDouble,
-    TypeFloat,
-    TypeInt64,
-    TypeUint64,
-    TypeInt32,
-    TypeFixed64,
-    TypeFixed32,
-    TypeBool,
-    TypeString,
-    TypeGroup,
-    TypeMessage,
-    TypeBytes,
-    TypeUint32,
-    TypeEnum,
-    TypeSfixed32,
-    TypeSfixed64,
-    TypeSint32,
-    TypeSint64,
-    Unknown(super::super::super::Int32),
+	TypeDouble,
+	TypeFloat,
+	TypeInt64,
+	TypeUint64,
+	TypeInt32,
+	TypeFixed64,
+	TypeFixed32,
+	TypeBool,
+	TypeString,
+	TypeGroup,
+	TypeMessage,
+	TypeBytes,
+	TypeUint32,
+	TypeEnum,
+	TypeSfixed32,
+	TypeSfixed64,
+	TypeSint32,
+	TypeSint64,
+	Unknown(super::super::super::Int32),
+}
+impl Default for Ty {
+	fn default() -> Ty {
+		from_number(0_i32)
+	}
 }
 pub fn number(_0: &Ty) -> super::super::super::Int32 {
-    match _0 {
-        Ty::TypeDouble => 1_i32,
-        Ty::TypeFloat => 2_i32,
-        Ty::TypeInt64 => 3_i32,
-        Ty::TypeUint64 => 4_i32,
-        Ty::TypeInt32 => 5_i32,
-        Ty::TypeFixed64 => 6_i32,
-        Ty::TypeFixed32 => 7_i32,
-        Ty::TypeBool => 8_i32,
-        Ty::TypeString => 9_i32,
-        Ty::TypeGroup => 10_i32,
-        Ty::TypeMessage => 11_i32,
-        Ty::TypeBytes => 12_i32,
-        Ty::TypeUint32 => 13_i32,
-        Ty::TypeEnum => 14_i32,
-        Ty::TypeSfixed32 => 15_i32,
-        Ty::TypeSfixed64 => 16_i32,
-        Ty::TypeSint32 => 17_i32,
-        Ty::TypeSint64 => 18_i32,
-        Ty::Unknown(n) => n.clone(),
-    }
+	match _0 {
+		Ty::TypeDouble => 1_i32,
+		Ty::TypeFloat => 2_i32,
+		Ty::TypeInt64 => 3_i32,
+		Ty::TypeUint64 => 4_i32,
+		Ty::TypeInt32 => 5_i32,
+		Ty::TypeFixed64 => 6_i32,
+		Ty::TypeFixed32 => 7_i32,
+		Ty::TypeBool => 8_i32,
+		Ty::TypeString => 9_i32,
+		Ty::TypeGroup => 10_i32,
+		Ty::TypeMessage => 11_i32,
+		Ty::TypeBytes => 12_i32,
+		Ty::TypeUint32 => 13_i32,
+		Ty::TypeEnum => 14_i32,
+		Ty::TypeSfixed32 => 15_i32,
+		Ty::TypeSfixed64 => 16_i32,
+		Ty::TypeSint32 => 17_i32,
+		Ty::TypeSint64 => 18_i32,
+		Ty::Unknown(n) => n.clone(),
+	}
 }
 pub fn from_number(n: super::super::super::Int32) -> Ty {
-    match n {
-        1_i32 => Ty::TypeDouble,
-        2_i32 => Ty::TypeFloat,
-        3_i32 => Ty::TypeInt64,
-        4_i32 => Ty::TypeUint64,
-        5_i32 => Ty::TypeInt32,
-        6_i32 => Ty::TypeFixed64,
-        7_i32 => Ty::TypeFixed32,
-        8_i32 => Ty::TypeBool,
-        9_i32 => Ty::TypeString,
-        10_i32 => Ty::TypeGroup,
-        11_i32 => Ty::TypeMessage,
-        12_i32 => Ty::TypeBytes,
-        13_i32 => Ty::TypeUint32,
-        14_i32 => Ty::TypeEnum,
-        15_i32 => Ty::TypeSfixed32,
-        16_i32 => Ty::TypeSfixed64,
-        17_i32 => Ty::TypeSint32,
-        18_i32 => Ty::TypeSint64,
-        n => Ty::Unknown(n),
-    }
+	match n {
+		1_i32 => Ty::TypeDouble,
+		2_i32 => Ty::TypeFloat,
+		3_i32 => Ty::TypeInt64,
+		4_i32 => Ty::TypeUint64,
+		5_i32 => Ty::TypeInt32,
+		6_i32 => Ty::TypeFixed64,
+		7_i32 => Ty::TypeFixed32,
+		8_i32 => Ty::TypeBool,
+		9_i32 => Ty::TypeString,
+		10_i32 => Ty::TypeGroup,
+		11_i32 => Ty::TypeMessage,
+		12_i32 => Ty::TypeBytes,
+		13_i32 => Ty::TypeUint32,
+		14_i32 => Ty::TypeEnum,
+		15_i32 => Ty::TypeSfixed32,
+		16_i32 => Ty::TypeSfixed64,
+		17_i32 => Ty::TypeSint32,
+		18_i32 => Ty::TypeSint64,
+		n => Ty::Unknown(n),
+	}
 }
 pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    super::super::super::int32::serialize(&number(_0), output)
+	super::super::super::int32::serialize(&number(_0), output)
 }
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    Ok(from_number(super::super::super::int32::deserialize(input, )?))
+pub fn deserialize(input: &mut Input) -> Result<Ty> {
+	Ok(from_number(super::super::super::int32::deserialize(input)?))
 }
 pub fn size_of(_0: &Ty) -> usize {
-    super::super::super::int32::size_of(&number(_0))
+	super::super::super::int32::size_of(&number(_0))
 }
- pub type Ty = FieldDescriptorProtoType;
+pub type Ty = FieldDescriptorProtoType;

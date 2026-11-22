@@ -217,12 +217,18 @@ impl NativeCodegen<Rust> for Enum {
 		let (pinput, poutput, presult) = pds2_core::specializer::pds_io();
 		let (pinput, poutput, presult) = (&pinput, &poutput, &presult);
 		let tag_ty = names.ty(tag);
+		let zero = (ctx.lower)(&ctx.elab.build(tag, &Expr::Const(Value::Signed(0)))?, false)?;
 		Ok(quote! {
 			$((ctx.args_struct)())
 			#[derive(Debug, Clone, PartialEq)]
 			pub enum $(ctx.nominal()) {
 				$(for (n, _) in &e.values join($['\r']) => $(v(n)),)
 				$(&unknown)($(&tag_ty)),
+			}
+			impl Default for Ty {
+				fn default() -> Ty {
+					from_number($zero)
+				}
 			}
 			pub fn number(_0: &Ty) -> $(&tag_ty) {
 				match _0 {

@@ -1,7 +1,0 @@
-[package]
-name = "envoy-api"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-pds-bytes-runtime = { path = "../pds-bytes-runtime" }

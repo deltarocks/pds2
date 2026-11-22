@@ -288,4 +288,49 @@ mod tests {
 		let (a, b) = copy_eq(gen::Kind::B(3));
 		assert_eq!(a, b);
 	}
+
+	#[test]
+	fn protobuf_fields_follow_their_presence() {
+		use gen::branch as t;
+		let encoded = gen::encoded_branch::value();
+		let v = roundtrip(t::deserialize, t::serialize, &encoded).unwrap();
+		assert_eq!(v, gen::sample_branch::value());
+		assert_eq!(v, gen::decoded_branch::value());
+
+		let zeros = gen::sample_zeros::value();
+		let mut out = Output::new();
+		t::serialize(&zeros, &mut out).unwrap();
+		assert_eq!(out.into_inner(), [0x0a, 0x02, 0x08, 0x01]);
+		assert_eq!(gen::encoded_zeros::value(), [0x0a, 0x02, 0x08, 0x01]);
+
+		let negative = gen::Branch { weight: -0.0, ..zeros };
+		let mut out = Output::new();
+		t::serialize(&negative, &mut out).unwrap();
+		let bytes = out.into_inner();
+		assert_eq!(bytes.len(), 4 + 9);
+		assert!(t::deserialize(&mut Input::new(&bytes)).unwrap().weight.is_sign_negative());
+	}
+
+	#[test]
+	fn protobuf_required_fields_are_checked_after_merging() {
+		use gen::branch as t;
+		assert!(t::deserialize(&mut Input::new(&[])).is_err());
+		assert!(t::deserialize(&mut Input::new(&[0x0a, 0x02, 0x10, 0x04])).is_err());
+		let split = [
+			0x0a, 0x02, 0x10, 0x04, 0x0a, 0x02, 0x08, 0x03, 0x12, 0x02, 0x10, 0x07, 0x12, 0x02, 0x08,
+			0x09, 0x38, 0x05, 0x32, 0x02, 0x10, 0x01, 0x32, 0x02, 0x08, 0x02,
+		];
+		let v = t::deserialize(&mut Input::new(&split)).unwrap();
+		assert_eq!(v, gen::merged_branch::value());
+		assert_eq!(v, gen::decoded_split::value());
+		let restarted = [0x0a, 0x02, 0x08, 0x01, 0x32, 0x02, 0x08, 0x02, 0x38, 0x05, 0x32, 0x02, 0x10, 0x01];
+		assert!(t::deserialize(&mut Input::new(&restarted)).is_err());
+		let mut merged = gen::merged_branch::value();
+		t::deserialize_extend(&mut Input::new(&[0x0a, 0x02, 0x10, 0x08]), &mut merged).unwrap();
+		assert_eq!((merged.root.id, merged.root.tag), (3, 8));
+		let switched = [0x0a, 0x02, 0x08, 0x01, 0x42, 0x02, 0x08, 0x01, 0x32, 0x02, 0x08, 0x02, 0x42, 0x02, 0x10, 0x05];
+		let v = t::deserialize(&mut Input::new(&switched)).unwrap();
+		assert_eq!(v, gen::switched_branch::value());
+		assert_eq!(v, gen::decoded_switch::value());
+	}
 }

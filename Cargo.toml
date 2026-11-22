@@ -16,6 +16,5 @@ members = [
 	"crates/pds-bytes-runtime",
 	"crates/pds-bits-runtime",
 	"crates/protobuf-descriptor",
-	"crates/envoy-api",
 ]
 default-members = ["crates/pds2"]

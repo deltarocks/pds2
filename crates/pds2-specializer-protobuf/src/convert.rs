@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
 
 use anyhow::{anyhow, bail, Context as _, Result};
+use protobuf_descriptor::gen::google::protobuf::{Edition, FeatureSet, FeatureSetFieldPresence};
 use protobuf_descriptor::{
-	DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet, Label, Type,
+	DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorProto,
+	FileDescriptorSet, Label, Type,
 };
 
 const PRELUDE: &str = r#"
@@ -29,6 +31,8 @@ def_native(const) { type(Value); argument(value) => Value; body; };
 def_native(message) {
 	body {
 		item(field) { argument(number); type(Value); };
+		item(implicit) { argument(number); type(Value); };
+		item(optional) { argument(number); type(Value); };
 		item(repeated) { argument(number); type(Value); };
 		item(oneof) { argument(number); argument(group); type(Value); };
 	};
@@ -46,6 +50,40 @@ struct Decl<'a> {
 	package: Vec<String>,
 	local: String,
 	kind: Kind<'a>,
+	presence: Presence,
+}
+
+#[derive(Clone, Copy)]
+enum Presence {
+	Explicit,
+	Implicit,
+	Required,
+}
+
+fn overridden(base: Presence, features: Option<&FeatureSet>) -> Result<Presence> {
+	Ok(match features.and_then(|f| f.field_presence.as_ref()) {
+		None | Some(FeatureSetFieldPresence::FieldPresenceUnknown) => base,
+		Some(FeatureSetFieldPresence::Explicit) => Presence::Explicit,
+		Some(FeatureSetFieldPresence::Implicit) => Presence::Implicit,
+		Some(FeatureSetFieldPresence::LegacyRequired) => Presence::Required,
+		Some(FeatureSetFieldPresence::Unknown(n)) => bail!("unknown field presence {n}"),
+	})
+}
+
+fn file_presence(file: &FileDescriptorProto) -> Result<Presence> {
+	let base = match file.syntax.as_deref() {
+		None | Some("" | "proto2") => Presence::Explicit,
+		Some("proto3") => Presence::Implicit,
+		Some("editions") => match &file.edition {
+			Some(Edition::EditionProto3) => Presence::Implicit,
+			Some(
+				Edition::EditionProto2 | Edition::Edition2023 | Edition::Edition2024 | Edition::Edition2026,
+			) => Presence::Explicit,
+			e => bail!("edition {e:?} is not supported"),
+		},
+		Some(s) => bail!("unknown syntax {s:?}"),
+	};
+	overridden(base, file.options.as_ref().and_then(|o| o.features.as_ref()))
 }
 
 fn name(n: &Option<String>) -> Result<&str> {
@@ -58,12 +96,14 @@ fn collect_message<'a>(
 	scope: &str,
 	prefix: &str,
 	msg: &'a DescriptorProto,
+	inherited: Presence,
 ) -> Result<()> {
 	let n = name(&msg.name)?;
 	let full = format!("{scope}.{n}");
 	let local = if prefix.is_empty() { n.to_owned() } else { format!("{prefix}_{n}") };
+	let presence = overridden(inherited, msg.options.as_ref().and_then(|o| o.features.as_ref()))?;
 	for nested in &msg.nested_type {
-		collect_message(out, package, &full, &local, nested)?;
+		collect_message(out, package, &full, &local, nested, presence)?;
 	}
 	for e in &msg.enum_type {
 		let en = name(&e.name)?;
@@ -73,6 +113,7 @@ fn collect_message<'a>(
 				package: package.to_vec(),
 				local: format!("{local}_{en}"),
 				kind: Kind::Enum(e),
+				presence,
 			},
 		);
 	}
@@ -82,6 +123,7 @@ fn collect_message<'a>(
 			package: package.to_vec(),
 			local,
 			kind: Kind::Message(msg),
+			presence,
 		},
 	);
 	Ok(())
@@ -174,6 +216,7 @@ fn message(
 	decls: &BTreeMap<String, Decl>,
 	local: &str,
 	msg: &DescriptorProto,
+	presence: Presence,
 	extensions: &[(String, &FieldDescriptorProto)],
 ) -> Result<()> {
 	write!(out, "def({local}) => message {{")?;
@@ -190,17 +233,36 @@ fn message(
 			),
 			_ => None,
 		};
-		message_field(out, decls, fname, f, oneof)?;
+		let explicit = f.proto3_optional == Some(true)
+			|| matches!(f.r#type, Some(Type::TypeMessage | Type::TypeGroup));
+		let item = match oneof {
+			Some(g) => Item::Oneof(g),
+			None if matches!(f.label, Some(Label::LabelRequired)) => Item::Required,
+			None => match overridden(presence, f.options.as_ref().and_then(|o| o.features.as_ref()))? {
+				Presence::Required => Item::Required,
+				Presence::Implicit if !explicit => Item::Implicit,
+				Presence::Implicit | Presence::Explicit => Item::Optional,
+			},
+		};
+		message_field(out, decls, fname, f, item)?;
 	}
 	for (full, f) in extensions {
 		let mut fname = full.trim_start_matches('.').replace('.', "_");
 		while !taken.insert(fname.clone()) {
 			fname.push('_');
 		}
-		message_field(out, decls, &fname, f, None).with_context(|| format!("extension {full}"))?;
+		message_field(out, decls, &fname, f, Item::Optional)
+			.with_context(|| format!("extension {full}"))?;
 	}
 	writeln!(out, "}};")?;
 	Ok(())
+}
+
+enum Item<'a> {
+	Required,
+	Implicit,
+	Optional,
+	Oneof(&'a str),
 }
 
 fn message_field(
@@ -208,15 +270,19 @@ fn message_field(
 	decls: &BTreeMap<String, Decl>,
 	fname: &str,
 	f: &FieldDescriptorProto,
-	oneof: Option<&str>,
+	item: Item,
 ) -> Result<()> {
 	let number = f.number.ok_or_else(|| anyhow!("field {fname} without a number"))?;
 	let (ty, _) = field_type(decls, f).with_context(|| format!("field {fname}"))?;
-	let repeated = matches!(f.label, Some(Label::LabelRepeated));
-	match (repeated, oneof) {
-		(true, _) => write!(out, "repeated({fname}, number: {number}) => {ty};")?,
-		(false, Some(g)) => write!(out, "oneof({fname}, number: {number}, group: \"{g}\") => {ty};")?,
-		(false, None) => write!(out, "field({fname}, number: {number}) => {ty};")?,
+	if matches!(f.label, Some(Label::LabelRepeated)) {
+		write!(out, "repeated({fname}, number: {number}) => {ty};")?;
+		return Ok(());
+	}
+	match item {
+		Item::Required => write!(out, "field({fname}, number: {number}) => {ty};")?,
+		Item::Implicit => write!(out, "implicit({fname}, number: {number}) => {ty};")?,
+		Item::Optional => write!(out, "optional({fname}, number: {number}) => {ty};")?,
+		Item::Oneof(g) => write!(out, "oneof({fname}, number: {number}, group: \"{g}\") => {ty};")?,
 	}
 	Ok(())
 }
@@ -265,9 +331,10 @@ pub fn convert(set: &FileDescriptorSet, roots: &[String]) -> Result<String> {
 		let scope = package.iter().fold(String::new(), |s, p| format!("{s}.{p}"));
 		let is_root = roots.is_empty() || roots.iter().any(|r| file.name.as_deref() == Some(r));
 		let before: BTreeSet<String> = decls.keys().cloned().collect();
+		let presence = file_presence(file).with_context(|| format!("in {:?}", file.name))?;
 		collect_extensions(&mut extensions, &scope, &file.extension)?;
 		for msg in &file.message_type {
-			collect_message(&mut decls, &package, &scope, "", msg)?;
+			collect_message(&mut decls, &package, &scope, "", msg, presence)?;
 			collect_message_extensions(&mut extensions, &scope, msg)?;
 		}
 		for e in &file.enum_type {
@@ -278,6 +345,7 @@ pub fn convert(set: &FileDescriptorSet, roots: &[String]) -> Result<String> {
 					package: package.clone(),
 					local: en.to_owned(),
 					kind: Kind::Enum(e),
+					presence,
 				},
 			);
 		}
@@ -320,6 +388,7 @@ pub fn convert(set: &FileDescriptorSet, roots: &[String]) -> Result<String> {
 				&decls,
 				&decl.local,
 				m,
+				decl.presence,
 				extensions.get(full).map_or(&[], Vec::as_slice),
 			),
 			Kind::Enum(e) => enumeration(&mut def, &decl.local, e),

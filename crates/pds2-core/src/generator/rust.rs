@@ -690,9 +690,14 @@ fn native_codegen<'m>(
 fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 	let rec = |e: &Expr| lower(meta, e, from_locals);
 	let owned = meta.owned_meta();
+	let elab = Elaborator {
+		types: meta.types,
+		reg: meta.reg,
+	};
 	let cx = LowerCx {
 		names: &owned,
 		types: meta.types,
+		elab: &elab,
 		lower: &rec,
 	};
 	let meta_for_values = &owned;

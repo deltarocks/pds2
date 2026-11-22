@@ -3,34 +3,39 @@ use crate::pds::{Input, Output, Result};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MethodOptionsIdempotencyLevel {
-    IdempotencyUnknown,
-    NoSideEffects,
-    Idempotent,
-    Unknown(super::super::super::Int32),
+	IdempotencyUnknown,
+	NoSideEffects,
+	Idempotent,
+	Unknown(super::super::super::Int32),
+}
+impl Default for Ty {
+	fn default() -> Ty {
+		from_number(0_i32)
+	}
 }
 pub fn number(_0: &Ty) -> super::super::super::Int32 {
-    match _0 {
-        Ty::IdempotencyUnknown => 0_i32,
-        Ty::NoSideEffects => 1_i32,
-        Ty::Idempotent => 2_i32,
-        Ty::Unknown(n) => n.clone(),
-    }
+	match _0 {
+		Ty::IdempotencyUnknown => 0_i32,
+		Ty::NoSideEffects => 1_i32,
+		Ty::Idempotent => 2_i32,
+		Ty::Unknown(n) => n.clone(),
+	}
 }
 pub fn from_number(n: super::super::super::Int32) -> Ty {
-    match n {
-        0_i32 => Ty::IdempotencyUnknown,
-        1_i32 => Ty::NoSideEffects,
-        2_i32 => Ty::Idempotent,
-        n => Ty::Unknown(n),
-    }
+	match n {
+		0_i32 => Ty::IdempotencyUnknown,
+		1_i32 => Ty::NoSideEffects,
+		2_i32 => Ty::Idempotent,
+		n => Ty::Unknown(n),
+	}
 }
 pub fn serialize(_0: &Ty, output: &mut Output) -> Result<()> {
-    super::super::super::int32::serialize(&number(_0), output)
+	super::super::super::int32::serialize(&number(_0), output)
 }
-pub fn deserialize(input: &mut Input, ) -> Result<Ty> {
-    Ok(from_number(super::super::super::int32::deserialize(input, )?))
+pub fn deserialize(input: &mut Input) -> Result<Ty> {
+	Ok(from_number(super::super::super::int32::deserialize(input)?))
 }
 pub fn size_of(_0: &Ty) -> usize {
-    super::super::super::int32::size_of(&number(_0))
+	super::super::super::int32::size_of(&number(_0))
 }
- pub type Ty = MethodOptionsIdempotencyLevel;
+pub type Ty = MethodOptionsIdempotencyLevel;

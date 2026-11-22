@@ -1,6 +1,16 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { equal, Input, Output } from "./pds.ts";
 import * as pds_Arguments from "./gen/Arguments.ts";
+import * as pds_Branch from "./gen/Branch.ts";
+import * as sample_branch from "./gen/sample_branch.ts";
+import * as encoded_branch from "./gen/encoded_branch.ts";
+import * as decoded_branch from "./gen/decoded_branch.ts";
+import * as sample_zeros from "./gen/sample_zeros.ts";
+import * as encoded_zeros from "./gen/encoded_zeros.ts";
+import * as merged_branch from "./gen/merged_branch.ts";
+import * as decoded_split from "./gen/decoded_split.ts";
+import * as switched_branch from "./gen/switched_branch.ts";
+import * as decoded_switch from "./gen/decoded_switch.ts";
 import * as pds_BoundWords from "./gen/BoundWords.ts";
 import * as pds_Choices from "./gen/Choices.ts";
 import * as pds_Counted from "./gen/Counted.ts";
@@ -189,4 +199,46 @@ Deno.test("compile-time deserialization matches values", () => {
 	for (const [decoded, sample] of cases) {
 		assertEquals(decoded.value(), sample.value());
 	}
+});
+
+Deno.test("protobuf fields follow their presence", () => {
+	const out = new Output();
+	pds_Branch.serialize(sample_branch.value(), out);
+	assertEquals(out.into_inner(), encoded_branch.value());
+	assertEquals(pds_Branch.deserialize(new Input(encoded_branch.value())), sample_branch.value());
+	assertEquals(decoded_branch.value(), sample_branch.value());
+
+	const zeros = new Output();
+	pds_Branch.serialize(sample_zeros.value(), zeros);
+	assertEquals([...zeros.into_inner()], [0x0a, 0x02, 0x08, 0x01]);
+	assertEquals([...encoded_zeros.value()], [0x0a, 0x02, 0x08, 0x01]);
+
+	const negative = new Output();
+	pds_Branch.serialize({ ...sample_zeros.value(), weight: -0 }, negative);
+	const bytes = negative.into_inner();
+	assertEquals(bytes.length, 4 + 9);
+	assert(Object.is(pds_Branch.deserialize(new Input(bytes)).weight, -0));
+});
+
+Deno.test("protobuf required fields are checked after merging", () => {
+	assertThrows(() => pds_Branch.deserialize(new Input(new Uint8Array([]))));
+	assertThrows(() => pds_Branch.deserialize(new Input(new Uint8Array([0x0a, 0x02, 0x10, 0x04]))));
+	const split = new Uint8Array([
+		0x0a, 0x02, 0x10, 0x04, 0x0a, 0x02, 0x08, 0x03, 0x12, 0x02, 0x10, 0x07, 0x12, 0x02, 0x08,
+		0x09, 0x38, 0x05, 0x32, 0x02, 0x10, 0x01, 0x32, 0x02, 0x08, 0x02,
+	]);
+	assertEquals(pds_Branch.deserialize(new Input(split)), merged_branch.value());
+	assertEquals(decoded_split.value(), merged_branch.value());
+	const restarted = new Uint8Array([
+		0x0a, 0x02, 0x08, 0x01, 0x32, 0x02, 0x08, 0x02, 0x38, 0x05, 0x32, 0x02, 0x10, 0x01,
+	]);
+	assertThrows(() => pds_Branch.deserialize(new Input(restarted)));
+	const merged = merged_branch.value();
+	pds_Branch.deserialize_extend(new Input(new Uint8Array([0x0a, 0x02, 0x10, 0x08])), merged);
+	assertEquals([merged.root.id, merged.root.tag], [3, 8]);
+	const switched = new Uint8Array([
+		0x0a, 0x02, 0x08, 0x01, 0x42, 0x02, 0x08, 0x01, 0x32, 0x02, 0x08, 0x02, 0x42, 0x02, 0x10, 0x05,
+	]);
+	assertEquals(pds_Branch.deserialize(new Input(switched)), switched_branch.value());
+	assertEquals(decoded_switch.value(), switched_branch.value());
 });
