@@ -1,16 +1,19 @@
 use std::collections::BTreeMap;
 
 use crate::{
-	ast::{BaseFieldRef, Block, FieldRef, FieldRefSegment, Ident, Item, ItemArgs, ParseValue, Statement, Value},
+	ast::{
+		BaseFieldRef, Block, FieldRef, FieldRefSegment, Ident, Item, ItemArgs, ParseValue,
+		Statement, Value,
+	},
 	hir::{
-		BodyDecl, BodyField, BodyItemDecl, Expr, Function, NamespaceItem,
-		NativeType, Reference, ReferenceKind, Value as HirValue,
+		BodyDecl, BodyField, BodyItemDecl, Expr, Function, NamespaceItem, NativeType, Reference,
+		ReferenceKind, Value as HirValue,
 	},
 	specializer::Registry,
 };
 
 use super::{IdGenerator, Namespace, Type, TypeKind};
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 
 fn parse_specializer_body(block: &Block) -> Result<Vec<BodyField>> {
 	let mut out = Vec::new();
@@ -354,7 +357,10 @@ impl Type {
 				}
 				"derive" => {
 					ensure!(items.is_empty(), "derive has no items");
-					ensure!(item.args.positional_count() > 0, "derive needs at least one trait");
+					ensure!(
+						item.args.positional_count() > 0,
+						"derive needs at least one trait"
+					);
 					for i in 0..item.args.positional_count() {
 						let name: Ident = item.args.arg(i, "derived trait")?;
 						ensure!(!derives.contains(&name), "derive {name:?} set twice");
@@ -472,7 +478,7 @@ impl Namespace {
 
 					let specializer = if let Some(specs) = attrs.get(&Ident::new("specializer")) {
 						ensure!(specs.len() == 1, "only one specializer is allowed");
-						let spec = specs.get(0).unwrap();
+						let spec = specs.first().unwrap();
 						let specializer = Ident::parse(spec.clone())?;
 						Some(specializer)
 					} else {
@@ -741,9 +747,12 @@ impl Namespace {
 						// No overloads: the native is a single type named directly.
 						(
 							name,
-							NamespaceItem::Type(
-								default.into_type(specializer, scalar, native_attrs, Ident::new("default")),
-							),
+							NamespaceItem::Type(default.into_type(
+								specializer,
+								scalar,
+								native_attrs,
+								Ident::new("default"),
+							)),
 						)
 					} else {
 						// Overloaded native: emit a namespace of per-variant types

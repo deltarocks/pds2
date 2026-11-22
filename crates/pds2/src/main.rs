@@ -1,9 +1,9 @@
 use std::io::Write as _;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context as _};
-use pds2_cli::clap::{self, Parser, Subcommand};
+use anyhow::{Context as _, anyhow};
 use pds2_cli::CoreCommand;
+use pds2_cli::clap::{self, Parser, Subcommand};
 use pds2_core::ast;
 use tracing::info;
 
@@ -50,7 +50,7 @@ enum MinecraftData {
 		migrations: PathBuf,
 		/// generated code directory of the merged schema
 		#[arg(long)]
-		gen: PathBuf,
+		generated: PathBuf,
 		/// only report missing rules, write nothing
 		#[arg(long)]
 		check: bool,
@@ -102,7 +102,12 @@ fn main() {
 	pds2_cli::main(|| {
 		match Opts::parse() {
 			Opts::Core(cmd) => cmd.run(&pds2::registry())?,
-			Opts::MinecraftData(MinecraftData::Upgrade { from, to, doc, protocol }) => {
+			Opts::MinecraftData(MinecraftData::Upgrade {
+				from,
+				to,
+				doc,
+				protocol,
+			}) => {
 				let data = std::fs::read_to_string(&from)?;
 				let parsed = serde_json::from_str(&data)?;
 				let mut upgraded =
@@ -110,13 +115,21 @@ fn main() {
 				if let Some(doc) = doc {
 					upgraded.attributes.insert(
 						ast::Ident::new("doc"),
-						vec![ast::Value::String { string: doc, is_block: false }],
+						vec![ast::Value::String {
+							string: doc,
+							is_block: false,
+						}],
 					);
 				}
 				if !protocol.is_empty() {
 					upgraded.attributes.insert(
 						ast::Ident::new("protocol"),
-						vec![ast::Value::List(protocol.iter().map(|p| ast::Value::Int(*p as i128)).collect())],
+						vec![ast::Value::List(
+							protocol
+								.iter()
+								.map(|p| ast::Value::Int(*p as i128))
+								.collect(),
+						)],
 					);
 				}
 				let to = to.unwrap_or_else(|| from.with_extension("pds"));
@@ -127,8 +140,12 @@ fn main() {
 				let mut loaded = Vec::new();
 				for path in &versions {
 					let data = std::fs::read_to_string(path)?;
-					let block = ast::parse(&data).map_err(|e| anyhow!("{}: {e}", path.display()))?;
-					let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+					let block =
+						ast::parse(&data).map_err(|e| anyhow!("{}: {e}", path.display()))?;
+					let name = path
+						.file_stem()
+						.map(|s| s.to_string_lossy().into_owned())
+						.unwrap_or_default();
 					loaded.push(pds2::survey::load(&name, &block));
 				}
 				print!("{}", pds2::survey::report(&loaded));
@@ -136,8 +153,12 @@ fn main() {
 			Opts::MinecraftData(MinecraftData::Diff { old, new }) => {
 				let load = |path: &PathBuf| -> anyhow::Result<pds2::survey::Version> {
 					let data = std::fs::read_to_string(path)?;
-					let block = ast::parse(&data).map_err(|e| anyhow!("{}: {e}", path.display()))?;
-					let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+					let block =
+						ast::parse(&data).map_err(|e| anyhow!("{}: {e}", path.display()))?;
+					let name = path
+						.file_stem()
+						.map(|s| s.to_string_lossy().into_owned())
+						.unwrap_or_default();
 					Ok(pds2::survey::load(&name, &block))
 				};
 				print!("{}", pds2::survey::diff(&load(&old)?, &load(&new)?));
@@ -146,8 +167,12 @@ fn main() {
 				let mut inputs = Vec::new();
 				for path in &versions {
 					let data = std::fs::read_to_string(path)?;
-					let block = ast::parse(&data).map_err(|e| anyhow!("{}: {e}", path.display()))?;
-					let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+					let block =
+						ast::parse(&data).map_err(|e| anyhow!("{}: {e}", path.display()))?;
+					let name = path
+						.file_stem()
+						.map(|s| s.to_string_lossy().into_owned())
+						.unwrap_or_default();
 					inputs.push((name, block));
 				}
 				let merged = pds2::merge::merge(&inputs)?;
@@ -160,7 +185,14 @@ fn main() {
 					merged.variants.len()
 				);
 			}
-			Opts::MinecraftData(MinecraftData::Converters { merged, migrations, gen, check, virtual_packets, crates }) => {
+			Opts::MinecraftData(MinecraftData::Converters {
+				merged,
+				migrations,
+				generated,
+				check,
+				virtual_packets,
+				crates,
+			}) => {
 				let reg = pds2::registry();
 				let data = std::fs::read_to_string(&merged)?;
 				let block = ast::parse(&data).map_err(|e| anyhow!("{}: {e}", merged.display()))?;
@@ -173,8 +205,12 @@ fn main() {
 					let path = migrations.join(format!("{}-{}.pds", pair[0], pair[1]));
 					let rules = match std::fs::read_to_string(&path) {
 						Ok(text) => {
-							let parsed = ast::parse(&text).map_err(|e| anyhow!("{}: {e}", path.display()))?;
-							Some(pds2::converters::parse_migration(&parsed).with_context(|| path.display().to_string())?)
+							let parsed = ast::parse(&text)
+								.map_err(|e| anyhow!("{}: {e}", path.display()))?;
+							Some(
+								pds2::converters::parse_migration(&parsed)
+									.with_context(|| path.display().to_string())?,
+							)
 						}
 						Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
 						Err(e) => return Err(anyhow!("{}: {e}", path.display())),
@@ -184,8 +220,12 @@ fn main() {
 				let every_path = migrations.join("every.pds");
 				let every = match std::fs::read_to_string(&every_path) {
 					Ok(text) => {
-						let parsed = ast::parse(&text).map_err(|e| anyhow!("{}: {e}", every_path.display()))?;
-						Some(pds2::converters::parse_every(&parsed).with_context(|| every_path.display().to_string())?)
+						let parsed = ast::parse(&text)
+							.map_err(|e| anyhow!("{}: {e}", every_path.display()))?;
+						Some(
+							pds2::converters::parse_every(&parsed)
+								.with_context(|| every_path.display().to_string())?,
+						)
 					}
 					Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
 					Err(e) => return Err(anyhow!("{}: {e}", every_path.display())),
@@ -203,14 +243,16 @@ fn main() {
 				if check {
 					return Ok(());
 				}
-				std::fs::create_dir_all(&gen)?;
-				let convert = gen.join("convert.rs");
+				std::fs::create_dir_all(&generated)?;
+				let convert = generated.join("convert.rs");
 				std::fs::write(
 					&convert,
-					format!("// This file is automatically generated from PDS migrations\n#![allow(unreachable_code)]\n{code}"),
+					format!(
+						"// This file is automatically generated from PDS migrations\n#![allow(unreachable_code)]\n{code}"
+					),
 				)?;
 				pds2_cli::rustfmt(&[convert]);
-				let mod_rs = gen.join("mod.rs");
+				let mod_rs = generated.join("mod.rs");
 				let mods = match std::fs::read_to_string(&mod_rs) {
 					Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
 					mods => mods?,
@@ -228,7 +270,7 @@ fn main() {
 				if !skipped.is_empty() {
 					info!("no migration, steps not generated: {}", skipped.join(" "));
 				}
-				info!("wrote {}", gen.join("convert.rs").display());
+				info!("wrote {}", generated.join("convert.rs").display());
 			}
 			Opts::Protobuf(Protobuf::Convert { from, root, to }) => {
 				let data = std::fs::read(&from)?;

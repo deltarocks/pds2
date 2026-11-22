@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 
 pub struct Input<'b> {
 	bytes: &'b [u8],

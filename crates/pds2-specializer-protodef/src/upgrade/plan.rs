@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 pub fn head(t: &Value) -> Option<&str> {
 	t.as_array()?.first()?.as_str()

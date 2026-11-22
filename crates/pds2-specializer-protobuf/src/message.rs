@@ -1,18 +1,18 @@
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use genco::lang::{js, rust, JavaScript, Rust};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
+use genco::lang::{JavaScript, Rust, js, rust};
 use genco::prelude::*;
 
+use pds2_core::ast::Ident;
+use pds2_core::generator::common::scalar_of;
+use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
+use pds2_core::mir::{self, Construction, Expr, TypeKind, TypeMap, Value};
 use pds2_core::specializer::eval::{Target, Val};
-use pds2_specializer_bytes::{write_varint, Encoder, Encoding, Input};
 use pds2_core::specializer::expr::{Elaborator, ValueModel};
 use pds2_core::specializer::{
 	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
 	Scalar, SlotVisitor,
 };
-use pds2_core::ast::Ident;
-use pds2_core::generator::common::scalar_of;
-use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
-use pds2_core::mir::{self, Construction, Expr, TypeKind, TypeMap, Value};
+use pds2_specializer_bytes::{Encoder, Encoding, Input, write_varint};
 
 pub struct Message;
 
@@ -143,8 +143,9 @@ fn reaches_required(types: &TypeMap, msg: TypeId, visited: &mut Vec<TypeId>) -> 
 	};
 	view(n).into_iter().flatten().any(|f| match f.label {
 		Label::Required => true,
-		Label::Optional | Label::Oneof(_) => embedded_message(types, f.ty)
-			.is_some_and(|(m, _)| reaches_required(types, m, visited)),
+		Label::Optional | Label::Oneof(_) => {
+			embedded_message(types, f.ty).is_some_and(|(m, _)| reaches_required(types, m, visited))
+		}
 		Label::Implicit | Label::Repeated => false,
 	})
 }
@@ -237,7 +238,10 @@ impl ValueModel for Message {
 		value: &Expr,
 	) -> Result<Construction> {
 		let Expr::Record(given) = value else {
-			bail!("{} is written as a record `(field: value, ...)`", cx.name(id));
+			bail!(
+				"{} is written as a record `(field: value, ...)`",
+				cx.name(id)
+			);
 		};
 		let fields = view(native).ok_or_else(|| anyhow!("malformed message"))?;
 		let mut groups = Vec::new();
@@ -333,7 +337,8 @@ impl Encoder for Message {
 					} else if !items.is_empty() {
 						let mut buf = Vec::new();
 						for item in items {
-							cx.encode_use(f.ty, item, &scope, &mut buf).with_context(field)?;
+							cx.encode_use(f.ty, item, &scope, &mut buf)
+								.with_context(field)?;
 						}
 						key(out, f.number, Wire::Len as u8);
 						write_varint(out, buf.len() as u64);
@@ -342,7 +347,8 @@ impl Encoder for Message {
 				}
 				Label::Implicit => {
 					let mut buf = Vec::new();
-					cx.encode_use(f.ty, value, &scope, &mut buf).with_context(field)?;
+					cx.encode_use(f.ty, value, &scope, &mut buf)
+						.with_context(field)?;
 					if is_zero(wire, &buf) {
 						continue;
 					}
@@ -357,7 +363,8 @@ impl Encoder for Message {
 					if wire == Wire::Len {
 						framed(out, f.ty, value).with_context(field)?;
 					} else {
-						cx.encode_use(f.ty, value, &scope, out).with_context(field)?;
+						cx.encode_use(f.ty, value, &scope, out)
+							.with_context(field)?;
 					}
 				}
 			}
@@ -393,10 +400,15 @@ impl Encoder for Message {
 			};
 			let f = &fields[i];
 			let field = || format!("field {:?}", f.name);
-			if matches!(f.label, Label::Repeated) && wire == Wire::Len as u8 && wires[i] != Wire::Len {
+			if matches!(f.label, Label::Repeated)
+				&& wire == Wire::Len as u8
+				&& wires[i] != Wire::Len
+			{
 				let mut packed = frame(input)?;
 				while packed.remaining() > 0 {
-					let item = cx.decode_use(f.ty, &scope, &mut packed).with_context(field)?;
+					let item = cx
+						.decode_use(f.ty, &scope, &mut packed)
+						.with_context(field)?;
 					repeated[i].push(item);
 				}
 				continue;
@@ -438,7 +450,10 @@ impl Encoder for Message {
 			} else {
 				let payload = input.peek();
 				let value = cx.decode_use(f.ty, &scope, input).with_context(field)?;
-				(value, is_zero(wires[i], &payload[..payload.len() - input.remaining()]))
+				(
+					value,
+					is_zero(wires[i], &payload[..payload.len() - input.remaining()]),
+				)
 			};
 			match f.label {
 				Label::Repeated => repeated[i].push(value),
@@ -604,7 +619,10 @@ impl NativeCodegen<Rust> for Message {
 			.filter(|i| matches!(fields[*i].label, Label::Required))
 			.collect();
 		let seen = |i: usize| -> rust::Tokens {
-			let k = required.iter().position(|r| *r == i).expect("a required field");
+			let k = required
+				.iter()
+				.position(|r| *r == i)
+				.expect("a required field");
 			quote!(seen[$(k.to_string())] = true;)
 		};
 		let pending = |i: usize| format!("pending_{i}");
@@ -926,27 +944,40 @@ impl NativeCodegen<Rust> for Message {
 			match f.label {
 				Label::Required => {
 					ser.push(quote!({ let v = &_0.$(&name); $key $(write(i, quote!(v))) }));
-					sizes.push(quote!({ let v = &_0.$(&name); n += $key_size + $(size(i, quote!(v))); }));
+					sizes.push(
+						quote!({ let v = &_0.$(&name); n += $key_size + $(size(i, quote!(v))); }),
+					);
 				}
 				Label::Implicit => {
 					let set = nonzero(i);
-					ser.push(quote!({ let v = &_0.$(&name); if $(&set) { $key $(write(i, quote!(v))) } }));
-					sizes.push(quote!({ let v = &_0.$(&name); if $(&set) { n += $key_size + $(size(i, quote!(v))); } }));
+					ser.push(
+						quote!({ let v = &_0.$(&name); if $(&set) { $key $(write(i, quote!(v))) } }),
+					);
+					sizes.push(
+						quote!({ let v = &_0.$(&name); if $(&set) { n += $key_size + $(size(i, quote!(v))); } }),
+					);
 				}
 				Label::Optional | Label::Oneof(_) => {
 					let pattern = match f.label {
-						Label::Oneof(g) => quote!(Some($(group_ty(g))::$(ctx.variant(f.name.as_str()))(v)) = &_0.$(group_field(g))),
+						Label::Oneof(g) => {
+							quote!(Some($(group_ty(g))::$(ctx.variant(f.name.as_str()))(v)) = &_0.$(group_field(g)))
+						}
 						_ => quote!(Some(v) = &_0.$(&name)),
 					};
 					ser.push(quote!(if let $(&pattern) { $key $(write(i, quote!(v))) }));
-					sizes.push(quote!(if let $(&pattern) { n += $key_size + $(size(i, quote!(v))); }));
+					sizes.push(
+						quote!(if let $(&pattern) { n += $key_size + $(size(i, quote!(v))); }),
+					);
 				}
 				Label::Repeated if wires[i] == Wire::Len => {
 					ser.push(quote!(for v in &_0.$(&name) { $key $(write(i, quote!(v))) }));
-					sizes.push(quote!(for v in &_0.$(&name) { n += $key_size + $(size(i, quote!(v))); }));
+					sizes.push(
+						quote!(for v in &_0.$(&name) { n += $key_size + $(size(i, quote!(v))); }),
+					);
 				}
 				Label::Repeated => {
-					let total = quote!(_0.$(&name).iter().map(|v| $(size(i, quote!(v)))).sum::<usize>());
+					let total =
+						quote!(_0.$(&name).iter().map(|v| $(size(i, quote!(v)))).sum::<usize>());
 					ser.push(quote! {
 						if !_0.$(&name).is_empty() {
 							$(pb("write_key"))(output, $(&n), 2);
@@ -1032,11 +1063,7 @@ impl NativeCodegen<JavaScript> for Message {
 		let has_args = !ctx.params.is_empty();
 		let args_of = |t: &mir::Type| -> js::Tokens {
 			let a = (ctx.pass_args)(t);
-			if a.is_empty() {
-				quote!()
-			} else {
-				quote!(, $a)
-			}
+			if a.is_empty() { quote!() } else { quote!(, $a) }
 		};
 		let zero_lit = |i: usize| -> Result<js::Tokens> {
 			(ctx.lower)(&zero(ctx.elab, fields[i].ty.target)?, false)
@@ -1089,23 +1116,24 @@ impl NativeCodegen<JavaScript> for Message {
 				decode(i, from)
 			}
 		};
-		let extend = |f: &MessageField, from: js::Tokens, into: js::Tokens| -> Result<Option<js::Tokens>> {
-			let Some((msg, _)) = embedded_message(ctx.types, f.ty) else {
-				return Ok(None);
+		let extend =
+			|f: &MessageField, from: js::Tokens, into: js::Tokens| -> Result<Option<js::Tokens>> {
+				let Some((msg, _)) = embedded_message(ctx.types, f.ty) else {
+					return Ok(None);
+				};
+				let pass = if msg == f.ty.target {
+					args_of(f.ty)
+				} else {
+					ensure!(
+						ctx.types[msg].params.is_empty(),
+						"{:?} reaches a message with arguments through an alias",
+						f.name
+					);
+					quote!()
+				};
+				let ext = names.item(msg, "deserialize_extend");
+				Ok(Some(quote!($ext($from$pass, $into);)))
 			};
-			let pass = if msg == f.ty.target {
-				args_of(f.ty)
-			} else {
-				ensure!(
-					ctx.types[msg].params.is_empty(),
-					"{:?} reaches a message with arguments through an alias",
-					f.name
-				);
-				quote!()
-			};
-			let ext = names.item(msg, "deserialize_extend");
-			Ok(Some(quote!($ext($from$pass, $into);)))
-		};
 		let arms: Vec<js::Tokens> = fields
 			.iter()
 			.enumerate()
@@ -1245,7 +1273,8 @@ impl NativeCodegen<JavaScript> for Message {
 						TypeKind::Alias(_) => None,
 					}
 					.ok_or_else(|| anyhow!("malformed enum"))?;
-					let lit = (ctx.lower)(&ctx.elab.build(tag, &Expr::Const(Value::Signed(0)))?, false)?;
+					let lit =
+						(ctx.lower)(&ctx.elab.build(tag, &Expr::Const(Value::Signed(0)))?, false)?;
 					quote!($(names.item(e, "number"))(v) !== $lit)
 				}
 				Some(Zero::Scalar(_)) => quote!(v !== $(zero_lit(i)?)),
@@ -1264,7 +1293,9 @@ impl NativeCodegen<JavaScript> for Message {
 			match f.label {
 				Label::Required => {
 					ser.push(quote!({ const v = _0.$name; $key $(write(i, quote!(v))) }));
-					sizes.push(quote!({ const v = _0.$name; n += $key_size + $(size(i, quote!(v))); }));
+					sizes.push(
+						quote!({ const v = _0.$name; n += $key_size + $(size(i, quote!(v))); }),
+					);
 				}
 				Label::Implicit => {
 					let set = nonzero(i)?;
@@ -1293,7 +1324,9 @@ impl NativeCodegen<JavaScript> for Message {
 					});
 				}
 				Label::Repeated if wires[i] == Wire::Len => {
-					ser.push(quote!(for (const v of _0.$name ?? []) { $key $(write(i, quote!(v))) }));
+					ser.push(
+						quote!(for (const v of _0.$name ?? []) { $key $(write(i, quote!(v))) }),
+					);
 					sizes.push(quote! {
 						for (const v of _0.$name ?? []) { n += $key_size + $(size(i, quote!(v))); }
 					});

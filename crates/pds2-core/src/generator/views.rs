@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use genco::lang::Rust;
 
 use crate::ast::Ident;
@@ -8,7 +8,7 @@ use crate::hir::TypeId;
 use crate::mir::{Expr, TypeKind, TypeMap};
 use crate::specializer::{Embed, Registry, Scalar, SlotVisitor, ViewPolicy};
 
-use super::boxing::{visit_type, Boxed};
+use super::boxing::{Boxed, visit_type};
 use super::common::scalar_of;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +47,7 @@ impl ViewSet {
 			i => i,
 		}
 	}
+	#[allow(clippy::wrong_self_convention)]
 	pub fn into_target(&self, id: TypeId) -> TypeId {
 		match self.into.get(&id) {
 			Some(Into::Alias(t)) => self.into_target(*t),

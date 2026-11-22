@@ -1,20 +1,20 @@
-use anyhow::{anyhow, ensure, Context as _, Result};
-use genco::lang::{rust, Lang, Rust};
-use genco::prelude::*;
+use anyhow::{Context as _, Result, anyhow, ensure};
 use genco::Tokens;
+use genco::lang::{Lang, Rust, rust};
+use genco::prelude::*;
 
 use pds2_core::ast::Ident;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir;
-use pds2_core::specializer::eval::{const_eq, Args, Target, Val};
-use pds2_specializer_bytes::{Encoder, Encoding, Input};
+use pds2_core::specializer::eval::{Args, Target, Val, const_eq};
 use pds2_core::specializer::expr::{Elaborator, ValueModel};
 use pds2_core::specializer::reflect::{list_of, use_of};
 use pds2_core::specializer::{
-	construct_vec, list_value, pds_io, vec_of_value, visit_specialization, AstHir, Embed, LowerCx,
-	Names, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor, ViewPolicy, into_view_vec,
-	view_vec, VALUE,
+	AstHir, Embed, LowerCx, Names, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor,
+	VALUE, ViewPolicy, construct_vec, into_view_vec, list_value, pds_io, vec_of_value, view_vec,
+	visit_specialization,
 };
+use pds2_specializer_bytes::{Encoder, Encoding, Input};
 
 impl ValueModel for Terminated {
 	fn construct(
@@ -43,10 +43,12 @@ pub fn terminator<L: Lang>(ctx: &NativeCodegenCtx<L>) -> Result<(TypeId, Tokens<
 		.iter()
 		.find(|(n, _)| n.as_str() == "end")
 		.map(|(_, e)| e)
-		.ok_or_else(|| anyhow!("terminated array needs `end`, declared as `argument(end) => <type>`"))?;
-	let ty = end
-		.ty()
-		.ok_or_else(|| anyhow!("terminator `end` has no type, declare `argument(end) => <type>`"))?;
+		.ok_or_else(|| {
+			anyhow!("terminated array needs `end`, declared as `argument(end) => <type>`")
+		})?;
+	let ty = end.ty().ok_or_else(|| {
+		anyhow!("terminator `end` has no type, declare `argument(end) => <type>`")
+	})?;
 	Ok((ty, (ctx.lower)(end, false)?))
 }
 
@@ -78,7 +80,9 @@ impl NativeCodegen<Rust> for Terminated {
 		true
 	}
 	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
-		let value = ctx.specialization("Value").context("terminated array value")?;
+		let value = ctx
+			.specialization("Value")
+			.context("terminated array value")?;
 		Ok(Some(into_view_vec(ctx, value)))
 	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
@@ -148,12 +152,14 @@ fn end_of(native: &mir::NativeType) -> Result<&mir::Expr> {
 
 impl Encoder for Terminated {
 	fn min_size(&self, cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
-		pds2_core::specializer::specialization_use(native, "End").map_or(0, |e| cx.min_size(e.target))
+		pds2_core::specializer::specialization_use(native, "End")
+			.map_or(0, |e| cx.min_size(e.target))
 	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let end = cx.eval(end_of(v.native)?, &v.scope())?;
 		let mut terminator = Vec::new();
-		cx.encode(&end, &Args::new(), &mut terminator).context("end")?;
+		cx.encode(&end, &Args::new(), &mut terminator)
+			.context("end")?;
 		let value = use_of(v.native, VALUE)?;
 		for (i, item) in list_of(v.c)?.iter().enumerate() {
 			let mut buf = Vec::new();

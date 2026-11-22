@@ -5,7 +5,7 @@ use anyhow::{Context as _, Result};
 use crate::ast::{FieldRefSegment, Ident};
 use crate::hir::TypeId;
 use crate::mir::{self, Expr, TypeKind, TypeMap};
-use crate::specializer::{expr::Elaborator, Scalar};
+use crate::specializer::{Scalar, expr::Elaborator};
 
 /// Sanitize an arbitrary string (`minecraft:foo`) into an identifier, mirroring the
 /// upgrade-side variant naming.
@@ -61,10 +61,10 @@ pub fn elaborate(elab: &Elaborator) -> Result<Elaborated> {
 			.with_context(|| format!("in {:?}", def.name))?;
 		for e in &exprs {
 			e.walk(&mut |x| {
-				if let Expr::Cast(inner, to) = x {
-					if let Some(from) = inner.ty() {
-						casts.entry(elab.resolve(from)).or_default().insert(*to);
-					}
+				if let Expr::Cast(inner, to) = x
+					&& let Some(from) = inner.ty()
+				{
+					casts.entry(elab.resolve(from)).or_default().insert(*to);
 				}
 			});
 		}

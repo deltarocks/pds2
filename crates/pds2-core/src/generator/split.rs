@@ -1,15 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::hir::TypeId;
 use crate::mir::TypeMap;
 use crate::specializer::Registry;
 
+use super::GeneratorOutput;
 use super::naming::Modules;
 use super::views;
-use super::GeneratorOutput;
 
 #[derive(Clone, Debug)]
 pub struct Split {

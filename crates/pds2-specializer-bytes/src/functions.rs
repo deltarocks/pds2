@@ -1,8 +1,8 @@
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use pds2_core::hir::TypeId;
 use pds2_core::mir::{Construction, Expr, Value};
-use pds2_core::specializer::expr::{describe, Elaborator};
 use pds2_core::specializer::Function;
+use pds2_core::specializer::expr::{Elaborator, describe};
 
 use crate::Encoding;
 
@@ -36,7 +36,8 @@ impl Function for Deserialized {
 			e => cx.operand(e.clone())?,
 		};
 		let bytes = match bytes {
-			Expr::Const(Value::Bytes(b)) | Expr::Construct(_, Construction::Literal(Value::Bytes(b))) => b,
+			Expr::Const(Value::Bytes(b))
+			| Expr::Construct(_, Construction::Literal(Value::Bytes(b))) => b,
 			Expr::Const(Value::String(s))
 			| Expr::Construct(_, Construction::Literal(Value::String(s))) => s.into_bytes(),
 			e => bail!("deserialized(...) takes bytes, got {}", describe(&e)),
@@ -47,7 +48,10 @@ impl Function for Deserialized {
 			.with_context(|| format!("deserialized(...) as {}", cx.name(ty)))?;
 		let skipped = enc.skipped();
 		if !skipped.is_empty() {
-			let list: Vec<String> = skipped.iter().map(|(what, n)| format!("{what} ({n}x)")).collect();
+			let list: Vec<String> = skipped
+				.iter()
+				.map(|(what, n)| format!("{what} ({n}x)"))
+				.collect();
 			tracing::warn!(
 				"deserialized(...) as {} skipped {}",
 				cx.name(ty),

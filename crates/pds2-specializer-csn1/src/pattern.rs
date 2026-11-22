@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{Result, anyhow, bail, ensure};
 use genco::lang::rust;
 use genco::prelude::*;
 use pds2_core::ast::Ident;

@@ -2,10 +2,10 @@ use std::any::Any;
 use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
 
-use anyhow::{anyhow, bail, Context as _, Result};
-use genco::lang::{rust, JavaScript, Lang, Rust};
-use genco::prelude::*;
+use anyhow::{Context as _, Result, anyhow, bail};
 use genco::Tokens;
+use genco::lang::{JavaScript, Lang, Rust, rust};
+use genco::prelude::*;
 
 pub mod eval;
 pub mod expr;
@@ -15,7 +15,7 @@ pub mod ts;
 use expr::{Elaborator, ValueModel};
 
 use crate::ast::Ident;
-use crate::definition::{Definition, BUILTIN_STATEMENTS};
+use crate::definition::{BUILTIN_STATEMENTS, Definition};
 use crate::hir::{HirSpecializerCtx, TypeId};
 use crate::{hir, mir};
 
@@ -256,11 +256,7 @@ impl<L: Lang> NativeCodegenCtx<'_, L> {
 
 impl NativeCodegenCtx<'_, Rust> {
 	pub fn lt(&self) -> rust::Tokens {
-		if self.view {
-			quote!(<'i>)
-		} else {
-			quote!()
-		}
+		if self.view { quote!(<'i>) } else { quote!() }
 	}
 	pub fn this(&self) -> rust::Tokens {
 		quote!(Ty$(self.lt()))
@@ -467,7 +463,12 @@ pub fn into_view_vec(ctx: &NativeCodegenCtx<Rust>, value: TypeId) -> rust::Token
 }
 
 pub trait Function {
-	fn call(&self, cx: &Elaborator, ty: Option<TypeId>, args: &[mir::Expr]) -> Result<Option<mir::Expr>>;
+	fn call(
+		&self,
+		cx: &Elaborator,
+		ty: Option<TypeId>,
+		args: &[mir::Expr],
+	) -> Result<Option<mir::Expr>>;
 }
 
 #[derive(Default)]
@@ -494,7 +495,10 @@ impl Registry {
 		insert::<dyn Any>(&mut self.encoders, "encoder", name, Box::new(encoder));
 	}
 	pub fn encoder<E: ?Sized + 'static>(&self, name: &str) -> Option<&E> {
-		self.encoders.get(name)?.downcast_ref::<Box<E>>().map(|b| b.as_ref())
+		self.encoders
+			.get(name)?
+			.downcast_ref::<Box<E>>()
+			.map(|b| b.as_ref())
 	}
 	pub fn has_encoder(&self, name: &str) -> bool {
 		self.encoders.contains_key(name)
@@ -510,7 +514,12 @@ impl Registry {
 			!BUILTIN_STATEMENTS.contains(&name),
 			"definition {name:?} would shadow a builtin statement"
 		);
-		insert(&mut self.definitions, "definition", name, Box::new(definition));
+		insert(
+			&mut self.definitions,
+			"definition",
+			name,
+			Box::new(definition),
+		);
 	}
 	pub fn definition(&self, name: &str) -> Option<&dyn Definition> {
 		self.definitions.get(name).map(|b| b.as_ref())
@@ -592,12 +601,15 @@ pub fn list_value(
 	let items = items
 		.iter()
 		.enumerate()
-		.map(|(i, e)| cx.coerce(e.clone(), elem).with_context(|| format!("item {i}")))
+		.map(|(i, e)| {
+			cx.coerce(e.clone(), elem)
+				.with_context(|| format!("item {i}"))
+		})
 		.collect::<Result<_>>()?;
 	Ok(mir::Construction::List(items))
 }
 
-pub fn list_items<'c, L: Lang>(cx: &LowerCx<L>, c: &'c mir::Construction) -> Result<Vec<Tokens<L>>> {
+pub fn list_items<L: Lang>(cx: &LowerCx<L>, c: &mir::Construction) -> Result<Vec<Tokens<L>>> {
 	let mir::Construction::List(items) = c else {
 		bail!("list is constructed from items, got {c:?}");
 	};

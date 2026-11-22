@@ -118,10 +118,16 @@ mod tests {
 		let input = Input::new(&[0b0110_0000]);
 		assert_eq!(choose(&input, &[b"1", b"00", b"01"]).unwrap(), 2);
 		assert_eq!(input.offset(), 2);
-		assert!(matches!(choose(&input, &[b"0", b"11"]), Err(Error::InvalidValue)));
+		assert!(matches!(
+			choose(&input, &[b"0", b"11"]),
+			Err(Error::InvalidValue)
+		));
 		assert_eq!(input.offset(), 2);
 		let input = Input::with_len(&[0b1100_0000], 2);
-		assert!(matches!(choose(&input, &[b"0", b"111"]), Err(Error::NotEnoughData)));
+		assert!(matches!(
+			choose(&input, &[b"0", b"111"]),
+			Err(Error::NotEnoughData)
+		));
 		assert_eq!(input.needed(), 3);
 		assert_eq!(input.offset(), 0);
 	}

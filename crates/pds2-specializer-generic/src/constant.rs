@@ -1,16 +1,16 @@
-use anyhow::{anyhow, bail, ensure, Result};
-use genco::lang::{js, rust, JavaScript, Rust};
+use anyhow::{Result, anyhow, bail, ensure};
+use genco::lang::{JavaScript, Rust, js, rust};
 use genco::prelude::*;
 
+use pds2_core::ast::Ident;
+use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
+use pds2_core::mir::{self, Construction, Expr};
 use pds2_core::specializer::eval::{Target, Val};
-use pds2_specializer_bytes::{Encoder, Encoding, Input};
 use pds2_core::specializer::expr::{Elaborator, ValueModel};
 use pds2_core::specializer::{
 	AstHir, Embed, LowerCx, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor, VALUE,
 };
-use pds2_core::ast::Ident;
-use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
-use pds2_core::mir::{self, Construction, Expr};
+use pds2_specializer_bytes::{Encoder, Encoding, Input};
 
 pub struct Const;
 
@@ -23,7 +23,9 @@ fn value_of<'c, L: Lang>(ctx: &NativeCodegenCtx<'c, L>) -> Result<(&'c mir::Type
 		.iter()
 		.find(|(n, _)| n.as_str() == "value")
 		.map(|(_, e)| e)
-		.ok_or_else(|| anyhow!("const needs `value`, declared as `argument(value) => Value; body;`"))?;
+		.ok_or_else(|| {
+			anyhow!("const needs `value`, declared as `argument(value) => Value; body;`")
+		})?;
 	Ok((value_use, (ctx.lower)(value, false)?))
 }
 
@@ -51,7 +53,8 @@ impl ValueModel for Const {
 
 impl Encoder for Const {
 	fn min_size(&self, cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
-		pds2_core::specializer::specialization_use(native, VALUE).map_or(0, |v| cx.min_size(v.target))
+		pds2_core::specializer::specialization_use(native, VALUE)
+			.map_or(0, |v| cx.min_size(v.target))
 	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let value_use = pds2_core::specializer::specialization_use(v.native, VALUE)
@@ -61,7 +64,11 @@ impl Encoder for Const {
 	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
 		let value_use = pds2_core::specializer::specialization_use(t.native, VALUE)
 			.ok_or_else(|| anyhow!("const needs its `Value` type"))?;
-		Ok(Construction::Wrap(Box::new(cx.decode_use(value_use, &t.scope(), input)?)))
+		Ok(Construction::Wrap(Box::new(cx.decode_use(
+			value_use,
+			&t.scope(),
+			input,
+		)?)))
 	}
 }
 

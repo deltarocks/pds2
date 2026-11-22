@@ -2,12 +2,12 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ops::Deref;
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use pds2_core::ast::Ident;
 use pds2_core::hir::TypeId;
 use pds2_core::mir::{self, Construction, Expr, Value};
-use pds2_core::specializer::eval::{const_eq, Args, Scope, Target, Val};
-use pds2_core::specializer::expr::{describe, Elaborator};
+use pds2_core::specializer::eval::{Args, Scope, Target, Val, const_eq};
+use pds2_core::specializer::expr::{Elaborator, describe};
 use pds2_core::specializer::reflect::{count_arg, list_of, native_variant, use_of};
 use pds2_core::specializer::{Function, Registry, VALUE};
 use pds2_specializer_protodef::container;
@@ -99,9 +99,15 @@ impl<'a> Encoding<'a> {
 		let reg = self.elab.reg;
 		let encoder = reg.encoder::<dyn Encoder>(name.as_str()).ok_or_else(|| {
 			if reg.has_encoder(name.as_str()) {
-				anyhow!("{} uses encoder {name:?}, which doesn't write bits", self.name(id))
+				anyhow!(
+					"{} uses encoder {name:?}, which doesn't write bits",
+					self.name(id)
+				)
 			} else {
-				anyhow!("no encoder {name:?} is registered, {} uses it", self.name(id))
+				anyhow!(
+					"no encoder {name:?} is registered, {} uses it",
+					self.name(id)
+				)
 			}
 		})?;
 		Ok((native, encoder))
@@ -127,7 +133,13 @@ impl<'a> Encoding<'a> {
 		)
 	}
 
-	pub fn encode_use(&self, u: &mir::Type, value: &Expr, scope: &Scope, out: &mut Output) -> Result<()> {
+	pub fn encode_use(
+		&self,
+		u: &mir::Type,
+		value: &Expr,
+		scope: &Scope,
+		out: &mut Output,
+	) -> Result<()> {
 		let value = self.typed(value.clone(), u.target)?;
 		let args = self.use_args(u, scope)?;
 		self.encode(&value, &args, out)
@@ -201,7 +213,8 @@ impl Function for DeserializedBits {
 			e => cx.operand(e.clone())?,
 		};
 		let bytes = match bytes {
-			Expr::Const(Value::Bytes(b)) | Expr::Construct(_, Construction::Literal(Value::Bytes(b))) => b,
+			Expr::Const(Value::Bytes(b))
+			| Expr::Construct(_, Construction::Literal(Value::Bytes(b))) => b,
 			e => bail!("deserialized_bits(...) takes bytes, got {}", describe(&e)),
 		};
 		let value = Encoding::new(cx)

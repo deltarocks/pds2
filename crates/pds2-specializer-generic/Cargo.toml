@@ -1,12 +1,12 @@
 [package]
 name = "pds2-specializer-generic"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
 description = "PDS2 specializer for basic types"
-license = "MIT"
 
 [dependencies]
-anyhow = "1.0"
-genco = "0.20"
-pds2-core = { path = "../pds2-core" }
-pds2-specializer-bytes = { path = "../pds2-specializer-bytes" }
+anyhow.workspace = true
+genco.workspace = true
+pds2-core.workspace = true
+pds2-specializer-bytes.workspace = true

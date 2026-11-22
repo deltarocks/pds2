@@ -16,8 +16,8 @@ use std::collections::BTreeMap;
 
 use crate::ast::{FieldRefSegment, Ident};
 use crate::hir::{
-	Expr, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip, Type, TypeId,
-	TypeKind, Visitor,
+	Expr, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip, Type, TypeId, TypeKind,
+	Visitor,
 };
 use crate::specializer::Registry;
 use anyhow::Result;
@@ -67,9 +67,10 @@ fn substitute(template: &Expr, supplied: &[(Ident, Expr)]) -> Expr {
 				.collect(),
 		),
 		Expr::List(items) => Expr::List(items.iter().map(|e| substitute(e, supplied)).collect()),
-		Expr::Call(f, args) => {
-			Expr::Call(f.clone(), args.iter().map(|e| substitute(e, supplied)).collect())
-		}
+		Expr::Call(f, args) => Expr::Call(
+			f.clone(),
+			args.iter().map(|e| substitute(e, supplied)).collect(),
+		),
 	}
 }
 

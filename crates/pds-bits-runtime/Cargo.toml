@@ -1,9 +1,9 @@
 [package]
 name = "pds-bits-runtime"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
 description = "Bit-oriented runtime for pds2 generated Rust codecs"
-license = "MIT"
 
 [dependencies]
-pds-bytes-runtime = { path = "../pds-bytes-runtime" }
+pds-bytes-runtime.workspace = true

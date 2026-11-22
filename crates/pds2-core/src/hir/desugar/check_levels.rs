@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 
 use crate::{
 	ast::{FieldRef, FieldRefSegment, Ident},
@@ -37,9 +37,9 @@ fn check_expr(e: &Expr, depth: usize, use_site: bool) -> Result<()> {
 		Expr::Record(fields) => fields
 			.iter()
 			.try_for_each(|(_, e)| check_expr(e, depth, use_site)),
-		Expr::List(items) | Expr::Call(_, items) => {
-			items.iter().try_for_each(|e| check_expr(e, depth, use_site))
-		}
+		Expr::List(items) | Expr::Call(_, items) => items
+			.iter()
+			.try_for_each(|e| check_expr(e, depth, use_site)),
 	}
 }
 

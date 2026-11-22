@@ -2,9 +2,9 @@ use crate::ast::{BinOp, FieldRef, Float, Ident, Path};
 use crate::specializer::Registry;
 use std::{cell::Cell, collections::BTreeMap};
 mod from_ast;
-use anyhow::{anyhow, bail, ensure, Context, Result};
-use std::collections::BTreeSet;
+use anyhow::{Context, Result, anyhow, bail, ensure};
 pub use from_ast::parse_ast;
+use std::collections::BTreeSet;
 mod desugar;
 pub use to_ast::to_ast;
 mod id_generator;
@@ -14,6 +14,7 @@ pub use id_generator::{IdGenerator, TypeId};
 use self::id_generator::PendingTypeId;
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum NamespaceItem {
 	Inner(Namespace),
 	Type(Type),
@@ -68,7 +69,7 @@ impl Namespace {
 	}
 
 	pub fn retain_types<F: FnMut(&mut Type) -> bool>(&mut self, mut cond: F) {
-		for (_, i) in self.items.iter_mut() {
+		for i in self.items.values_mut() {
 			let NamespaceItem::Inner(ns) = i else {
 				continue;
 			};
@@ -428,7 +429,9 @@ impl BodyDecl {
 				)
 			})?;
 			match (&f.name, decl.anonymous) {
-				(Some(n), false) => ensure!(names.insert(n.clone()), "duplicate body item name {n:?}"),
+				(Some(n), false) => {
+					ensure!(names.insert(n.clone()), "duplicate body item name {n:?}")
+				}
 				(None, true) => ensure!(anonymous.insert(kind.clone()), "{kind:?} given twice"),
 				(None, false) => bail!("{kind:?} needs a name"),
 				(Some(n), true) => bail!("{kind:?} takes no name, got {n:?}"),
@@ -584,12 +587,10 @@ impl Traverse for Type {
 				.with_context(|| format!("<BFS type> {self:?}"))?;
 		}
 
-		for (_, t) in self.types.iter_mut() {
-			if let Some(t) = t {
-				visitor.visit_type_kind(t, reg)?;
-			}
+		for t in self.types.values_mut().flatten() {
+			visitor.visit_type_kind(t, reg)?;
 		}
-		for (_, t) in self.param_types.iter_mut() {
+		for t in self.param_types.values_mut() {
 			visitor.visit_type_kind(t, reg)?;
 		}
 		self.kind.traverse(visitor, skip, reg)?;

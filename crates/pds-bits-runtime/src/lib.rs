@@ -3,7 +3,7 @@ use std::cell::Cell;
 pub mod csn1;
 pub mod natives;
 
-pub use pds_bytes_runtime::{stack, Error, Result};
+pub use pds_bytes_runtime::{Error, Result, stack};
 
 pub struct Input<'i> {
 	data: &'i [u8],
@@ -141,7 +141,7 @@ mod tests {
 	fn reads_msb_first_across_octets() {
 		let input = Input::new(&[0b1011_0011, 0b0101_1111, 0xff]);
 		assert_eq!(input.read(3).unwrap(), 0b101);
-		assert_eq!(input.read(7).unwrap(), 0b1_0011_01);
+		assert_eq!(input.read(7).unwrap(), 0b100_1101);
 		assert_eq!(input.offset(), 10);
 		assert!(!input.read_bit().unwrap());
 		assert_eq!(input.read(13).unwrap(), 0b1_1111_1111_1111);
@@ -162,7 +162,7 @@ mod tests {
 	fn writes_what_it_reads() {
 		let mut out = Output::new();
 		out.write(0b101, 3);
-		out.write(0b1_0011_01, 7);
+		out.write(0b100_1101, 7);
 		out.write_bit(false);
 		out.write(0x1fff, 13);
 		out.write(0x0123_4567_89ab_cdef, 64);

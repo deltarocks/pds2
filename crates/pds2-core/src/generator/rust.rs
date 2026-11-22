@@ -10,16 +10,16 @@ use crate::ast::{BinOp, FieldRefSegment, Ident};
 use crate::hir::TypeId;
 use crate::mir::{self, Construction, Expr, Field, Type, TypeKind, TypeMap, Value};
 
+use super::GeneratorOutput;
 use super::boxing::{self, Boxed};
 use super::common::{self, scalar_of};
 use super::naming::{self, Case, Modules, Scope};
 use super::recursion;
 use super::split::{Layout, Split};
 use super::views;
-use super::GeneratorOutput;
 use crate::specializer::expr::Elaborator;
 use crate::specializer::{LowerCx, Names, NativeCodegen, NativeCodegenCtx, Registry, Scalar};
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use genco::lang::Rust;
 
 #[derive(Clone)]
@@ -55,11 +55,16 @@ fn member_names(
 		fn strs(v: &[Ident]) -> Vec<&str> {
 			v.iter().map(Ident::as_str).collect()
 		}
-		let own = modules.path(*id).last().and_then(|m| m.ty.as_deref()).unwrap_or("Ty");
+		let own = modules
+			.path(*id)
+			.last()
+			.and_then(|m| m.ty.as_deref())
+			.unwrap_or("Ty");
 		let names = (|| -> Result<MemberNames> {
 			Ok(MemberNames {
 				fields: Scope::new(Case::Snake, strs(&members.fields), &[]).context("fields")?,
-				variants: Scope::new(Case::Pascal, strs(&members.variants), &[]).context("variants")?,
+				variants: Scope::new(Case::Pascal, strs(&members.variants), &[])
+					.context("variants")?,
 				types: Scope::new(Case::Pascal, strs(&members.types), &["Ty", "Args", own])
 					.context("inner types")?,
 				args: Scope::new(Case::Snake, def.params.iter().map(|(n, _)| n.as_str()), &[])
@@ -218,18 +223,28 @@ impl<'a> RustMeta<'a> {
 			let to: Vec<&str> = to.path.iter().map(String::as_str).collect();
 			return naming::rust_relative(&here, &to);
 		}
-		let layout = self.layout.as_ref().expect("only split output spans crates");
+		let layout = self
+			.layout
+			.as_ref()
+			.expect("only split output spans crates");
 		let target = to.krate.expect("split output places every type in a crate");
 		let head: Vec<String> = match self.here.krate {
 			Some(from) => {
-				self.deps.borrow_mut().entry(from).or_default().insert(target);
+				self.deps
+					.borrow_mut()
+					.entry(from)
+					.or_default()
+					.insert(target);
 				vec![format!("::{}", layout.crates[target].ident)]
 			}
 			None => std::iter::once(format!("::{}", layout.umbrella))
 				.chain(layout.crates[target].ns.clone())
 				.collect(),
 		};
-		head.into_iter().chain(to.path.iter().cloned()).collect::<Vec<_>>().join("::")
+		head.into_iter()
+			.chain(to.path.iter().cloned())
+			.collect::<Vec<_>>()
+			.join("::")
 	}
 	fn path_to(&self, module: &Loc, item: &str) -> Tokens {
 		quote!($(format!("{}::{item}", self.rel(module))))
@@ -337,7 +352,12 @@ impl<'a> RustMeta<'a> {
 pub struct RustNames<'a>(RustMeta<'a>);
 
 impl<'a> RustNames<'a> {
-	pub fn new(types: &'a TypeMap, reg: &'a Registry, here: &[&str], crates: Option<&str>) -> Result<Self> {
+	pub fn new(
+		types: &'a TypeMap,
+		reg: &'a Registry,
+		here: &[&str],
+		crates: Option<&str>,
+	) -> Result<Self> {
 		let meta = RustMeta::new(types, reg, crates)?;
 		Ok(Self(meta.at(Loc {
 			krate: None,
@@ -546,15 +566,13 @@ fn generate_read_or_const_reference(
 	let input = match input {
 		Expr::Field(field) => field,
 		Expr::Const(mir::Value::Signed(n)) => {
-			return quote!(&($(n.to_string())).try_into().expect("constant fits"))
+			return quote!(&($(n.to_string())).try_into().expect("constant fits"));
 		}
 		Expr::Const(mir::Value::Unsigned(n)) => {
-			return quote!(&($(n.to_string())).try_into().expect("constant fits"))
+			return quote!(&($(n.to_string())).try_into().expect("constant fits"));
 		}
 		Expr::Const(mir::Value::Bool(b)) => return quote!(&$(b.to_string())),
-		Expr::Const(mir::Value::String(s)) => {
-			return quote!(&$(quoted(s.as_str())).to_owned())
-		}
+		Expr::Const(mir::Value::String(s)) => return quote!(&$(quoted(s.as_str())).to_owned()),
 		Expr::Const(v) => unreachable!("untyped constant {v:?} as an argument"),
 		e => {
 			let value = lower(types, e, from_locals).expect("validated before codegen");
@@ -740,9 +758,7 @@ fn lower(meta: &RustMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 			}
 		}
 		Expr::Binary(op, a, b) => {
-			let ty = expr
-				.ty()
-				.ok_or_else(|| anyhow!("untyped arithmetic"))?;
+			let ty = expr.ty().ok_or_else(|| anyhow!("untyped arithmetic"))?;
 			let (a, b) = (rec(a)?, rec(b)?);
 			match scalar_of(meta.types, ty) {
 				Some(Scalar::F32 | Scalar::F64) => quote!(($a $(op.symbol()) $b)),
@@ -823,11 +839,13 @@ fn mod_files(
 		let (parent, last) = path.split_at(path.len() - 1);
 		let m = &last[0];
 		let ty = m.ty.as_ref().expect("a type module has a type name");
-		uses.entry((krate, parent.to_vec())).or_default().push(if *nominal {
-			quote!(pub use self::$(&m.ident)::$ty;)
-		} else {
-			quote!(pub use self::$(&m.ident)::Ty as $ty;)
-		});
+		uses.entry((krate, parent.to_vec()))
+			.or_default()
+			.push(if *nominal {
+				quote!(pub use self::$(&m.ident)::$ty;)
+			} else {
+				quote!(pub use self::$(&m.ident)::Ty as $ty;)
+			});
 	}
 	let mut aliased: BTreeMap<(Dir, naming::Module), TypeId> = BTreeMap::new();
 	for (alias, target) in reexports {
@@ -839,7 +857,11 @@ fn mod_files(
 		let mut idents = BTreeSet::new();
 		for m in children.keys() {
 			if !idents.insert(m.ident.as_str()) {
-				bail!("two modules are named {:?} in {}", m.ident, meta.dir_file(krate, dir).display());
+				bail!(
+					"two modules are named {:?} in {}",
+					m.ident,
+					meta.dir_file(krate, dir).display()
+				);
 			}
 		}
 		let loc = Loc {
@@ -882,11 +904,17 @@ fn mod_files(
 			$(for u in reexports join($['\r']) => $u)
 			$(for e in extra join($['\r']) => $e)
 		};
-		output.insert(file, tokens.to_file_string().expect("formatting should succeed"));
+		output.insert(
+			file,
+			tokens.to_file_string().expect("formatting should succeed"),
+		);
 	}
 	if let Some(((_, path), _)) = extras.iter().next() {
 		let path: Vec<&str> = path.iter().map(|m| m.ident.as_str()).collect();
-		bail!("definition output for module {:?} has no place to go", path.join("::"));
+		bail!(
+			"definition output for module {:?} has no place to go",
+			path.join("::")
+		);
 	}
 	Ok(())
 }
@@ -897,7 +925,13 @@ pub fn view_generator(
 	reg: &Registry,
 	namespace: &str,
 ) -> Result<()> {
-	views(&RustMeta::new(input, reg, None)?, input, reg, namespace, output)
+	views(
+		&RustMeta::new(input, reg, None)?,
+		input,
+		reg,
+		namespace,
+		output,
+	)
 }
 
 fn views(
@@ -917,11 +951,27 @@ fn views(
 	let meta = owned.with_mode(Mode::View(set.clone()));
 	for id in input.0.keys() {
 		if let Some(m) = meta.located(*id).1.first().filter(|m| m.ident == "view") {
-			bail!("a top-level {:?} module clashes with the generated views", m.ident);
+			bail!(
+				"a top-level {:?} module clashes with the generated views",
+				m.ident
+			);
 		}
 	}
-	let ids: Vec<TypeId> = set.included.iter().copied().filter(|id| set.emitted(*id)).collect();
-	emit(&meta, input, reg, &ids, "view/", &mut BTreeMap::new(), output)?;
+	let ids: Vec<TypeId> = set
+		.included
+		.iter()
+		.copied()
+		.filter(|id| set.emitted(*id))
+		.collect();
+	emit(
+		&meta,
+		input,
+		reg,
+		&ids,
+		"view/",
+		&mut BTreeMap::new(),
+		output,
+	)?;
 	let mut tops: BTreeMap<Option<usize>, BTreeSet<String>> = BTreeMap::new();
 	for id in &ids {
 		let (krate, path) = meta.located(*id);
@@ -986,18 +1036,24 @@ fn emit(
 	}
 
 	let view = meta.view();
-	let lt = &if view.is_some() { quote!(<'i>) } else { quote!() };
+	let lt = &if view.is_some() {
+		quote!(<'i>)
+	} else {
+		quote!()
+	};
 	let mut exports = BTreeMap::new();
 	let mut reexports = BTreeMap::new();
 
 	for id in ids {
 		let ty = &input[*id];
-		if let TypeKind::Alias(target) = &ty.kind {
-			if ty.params.is_empty() && target.args.is_empty() && !meta.guarded.contains(id) {
-				reexports.insert(*id, target.target);
-				exports.insert(*id, false);
-				continue;
-			}
+		if let TypeKind::Alias(target) = &ty.kind
+			&& ty.params.is_empty()
+			&& target.args.is_empty()
+			&& !meta.guarded.contains(id)
+		{
+			reexports.insert(*id, target.target);
+			exports.insert(*id, false);
+			continue;
 		}
 		let meta = &meta.at(meta.home(*id));
 		let declared = Cell::new(false);
@@ -1046,7 +1102,7 @@ fn emit(
 		let def = if forward {
 			native_view(meta, *id)
 		} else if !ty.kind.is_native() {
-			let mod_contents = match &ty.kind {
+			match &ty.kind {
 				TypeKind::Alias(target) => {
 					quote! {
 						pub type Ty$lt = $(meta.ty(target.target));
@@ -1075,8 +1131,7 @@ fn emit(
 					}
 				}
 				TypeKind::Native(_) => unreachable!("handled by the native branch"),
-			};
-			mod_contents
+			}
 		} else {
 			let TypeKind::Native(native) = &ty.kind else {
 				unreachable!();
@@ -1140,7 +1195,8 @@ fn emit(
 							.with_context(|| format!("codegen for {:?}", ty.name))?;
 						match view {
 							Some(v) if v.moves(*id) => {
-								let into = into_view().with_context(|| format!("into_view for {:?}", ty.name))?;
+								let into = into_view()
+									.with_context(|| format!("into_view for {:?}", ty.name))?;
 								quote!($module $['\r'] $into)
 							}
 							_ => module,

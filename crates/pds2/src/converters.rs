@@ -1,18 +1,18 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use genco::lang::rust;
 use genco::prelude::*;
 use pds2_core::ast::{Block, FieldRefSegment, Item, Value};
 use pds2_core::generator::common::scalar_of;
-use pds2_core::generator::recursion::{feedback_vertices, Graph};
 use pds2_core::generator::naming::{Case, Scope};
+use pds2_core::generator::recursion::{Graph, feedback_vertices};
 use pds2_core::generator::rust::RustNames;
 use pds2_core::hir::TypeId;
 use pds2_core::mir::{self, Expr, FieldItem, TypeKind, TypeMap};
 use pds2_core::specializer::expr::Elaborator;
-use pds2_core::specializer::{specialization_use, Registry, VALUE};
+use pds2_core::specializer::{Registry, VALUE, specialization_use};
 use pds2_specializer_protodef::{container, union};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -31,6 +31,7 @@ impl Dir {
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Action {
 	Drop,
 	Default,
@@ -69,7 +70,9 @@ pub struct Rules {
 
 impl Rules {
 	fn active(&self, dir: Dir) -> bool {
-		self.own || self.hooked.values().any(|c| c.get(dir).is_some()) || self.updated.values().any(|u| u.active(dir))
+		self.own
+			|| self.hooked.values().any(|c| c.get(dir).is_some())
+			|| self.updated.values().any(|u| u.active(dir))
 	}
 
 	fn disown(&mut self) -> Result<()> {
@@ -140,7 +143,10 @@ fn parse_rules(item: &Item, path: String, all: &mut BTreeSet<String>) -> Result<
 			"hooked" => {
 				let c = change(op);
 				for a in [&c.up, &c.down].into_iter().flatten() {
-					ensure!(matches!(a, Action::Custom(_)), "{key}: a hook should be custom(...)");
+					ensure!(
+						matches!(a, Action::Custom(_)),
+						"{key}: a hook should be custom(...)"
+					);
 				}
 				merge_change(r.hooked.entry(name).or_default(), c, &key)?
 			}
@@ -196,7 +202,11 @@ fn merge_rules(into: &mut Rules, from: Rules) -> Result<()> {
 		}
 	}
 	for (old, new) in from.renamed {
-		ensure!(into.renamed.insert(old.clone(), new).is_none(), "{}/renamed({old}) is given twice", into.path);
+		ensure!(
+			into.renamed.insert(old.clone(), new).is_none(),
+			"{}/renamed({old}) is given twice",
+			into.path
+		);
 	}
 	for (name, nested) in from.updated {
 		match into.updated.get_mut(&name) {
@@ -233,7 +243,12 @@ pub fn parse_migration(block: &Block) -> Result<Migration> {
 					ns.pop();
 				}
 				"updated" => {
-					let full = ns.iter().chain([&name]).cloned().collect::<Vec<_>>().join("::");
+					let full = ns
+						.iter()
+						.chain([&name])
+						.cloned()
+						.collect::<Vec<_>>()
+						.join("::");
 					let rules = parse_rules(head, full.clone(), all)?;
 					match out.get_mut(&full) {
 						Some(existing) => merge_rules(existing, rules)?,
@@ -371,7 +386,10 @@ impl<'a> Gen<'a> {
 				.chain(u.default.map(|(_, t)| t.target))
 				.collect();
 		}
-		specialization_use(n, VALUE).map(|t| t.target).into_iter().collect()
+		specialization_use(n, VALUE)
+			.map(|t| t.target)
+			.into_iter()
+			.collect()
 	}
 
 	fn base_name(&self, id: TypeId) -> Option<&String> {
@@ -388,8 +406,15 @@ impl<'a> Gen<'a> {
 			return *d;
 		}
 		self.dirty.borrow_mut().insert((step.index, dir, id), false);
-		let own = self.base_name(id).and_then(|b| step.rules.get(b)).is_some_and(|r| r.active(dir));
-		let d = own || self.children(id).into_iter().any(|c| self.dirty(step, dir, c));
+		let own = self
+			.base_name(id)
+			.and_then(|b| step.rules.get(b))
+			.is_some_and(|r| r.active(dir));
+		let d = own
+			|| self
+				.children(id)
+				.into_iter()
+				.any(|c| self.dirty(step, dir, c));
 		self.dirty.borrow_mut().insert((step.index, dir, id), d);
 		d
 	}
@@ -397,23 +422,42 @@ impl<'a> Gen<'a> {
 	fn leaf(&self, id: TypeId) -> bool {
 		let id = self.resolve(id);
 		match kind_of(self.types, id) {
-			Some("container" | "bitfield" | "bitflags" | "union" | "registryEntryHolder" | "registryEntryHolderSet") => false,
+			Some(
+				"container"
+				| "bitfield"
+				| "bitflags"
+				| "union"
+				| "registryEntryHolder"
+				| "registryEntryHolderSet",
+			) => false,
 			Some(_) => self.children(id).into_iter().all(|c| self.leaf(c)),
 			None => true,
 		}
 	}
 
-	fn hook_tree(&self, dir: Dir, versions: (usize, usize), id: TypeId, r: &Rules, place: rust::Tokens, depth: usize, out: &mut Vec<rust::Tokens>) {
+	fn hook_tree(
+		&self,
+		dir: Dir,
+		versions: (usize, usize),
+		id: TypeId,
+		r: &Rules,
+		place: rust::Tokens,
+		depth: usize,
+		out: &mut Vec<rust::Tokens>,
+	) {
 		let id = self.resolve(id);
 		let p = format!("__h{depth}");
 		let visit = |name: &str, ty: TypeId, value: rust::Tokens, body: &mut Vec<rust::Tokens>| {
-			if let Some(Action::Custom(f)) = r.hooked.get(name).and_then(|c| c.get(dir)) {
-				if self.leaf(ty) {
-					let f = self.custom(f);
-					let (a, b) = (&self.version_variants[versions.0], &self.version_variants[versions.1]);
-					body.push(quote!($f(&mut $(&value), Version::$a, Version::$b, cx)?;));
-					self.used(format!("{}/hooked({name})", r.path));
-				}
+			if let Some(Action::Custom(f)) = r.hooked.get(name).and_then(|c| c.get(dir))
+				&& self.leaf(ty)
+			{
+				let f = self.custom(f);
+				let (a, b) = (
+					&self.version_variants[versions.0],
+					&self.version_variants[versions.1],
+				);
+				body.push(quote!($f(&mut $(&value), Version::$a, Version::$b, cx)?;));
+				self.used(format!("{}/hooked({name})", r.path));
 			}
 			if let Some(nested) = r.updated.get(name) {
 				self.used(nested.path.clone());
@@ -432,22 +476,42 @@ impl<'a> Gen<'a> {
 			}
 			return;
 		}
-		let Some(n) = native(self.types, id) else { return };
+		let Some(n) = native(self.types, id) else {
+			return;
+		};
 		let ty = self.names.ty(id);
-		let inner = |boxed: bool| if boxed { quote!((**$(&p))) } else { quote!((*$(&p))) };
+		let inner = |boxed: bool| {
+			if boxed {
+				quote!((**$(&p)))
+			} else {
+				quote!((*$(&p)))
+			}
+		};
 		if let Some(u) = union::view(n) {
 			let mut arms = Vec::new();
 			let void = |t: TypeId| self.types.is_void(self.resolve(t));
 			for (_, name, t) in u.arms.iter().filter(|(_, _, t)| !void(t.target)) {
 				let mut body = Vec::new();
-				visit(name.as_str(), t.target, inner(self.names.boxed(id, name)), &mut body);
+				visit(
+					name.as_str(),
+					t.target,
+					inner(self.names.boxed(id, name)),
+					&mut body,
+				);
 				if !body.is_empty() {
-					arms.push(quote!($(&ty)::$(self.names.variant(id, name.as_str()))($(&p)) => { $(for b in body => $b) }));
+					arms.push(
+						quote!($(&ty)::$(self.names.variant(id, name.as_str()))($(&p)) => { $(for b in body => $b) }),
+					);
 				}
 			}
 			if let Some((name, t)) = u.default.filter(|(_, t)| !void(t.target)) {
 				let mut body = Vec::new();
-				visit("default", t.target, inner(self.names.boxed(id, name)), &mut body);
+				visit(
+					"default",
+					t.target,
+					inner(self.names.boxed(id, name)),
+					&mut body,
+				);
 				if !body.is_empty() {
 					arms.push(quote!($(&ty)::$(self.names.variant(id, name.as_str()))(_, $(&p)) => { $(for b in body => $b) }));
 				}
@@ -471,14 +535,25 @@ impl<'a> Gen<'a> {
 				let Some(e) = self.element(id) else { return };
 				visit("value", e, inner(self.names.boxed(id, &slot)), &mut body);
 				if !body.is_empty() {
-					out.push(quote!(if let Some($(&p)) = &mut $(&place) { $(for b in body => $b) }));
+					out.push(
+						quote!(if let Some($(&p)) = &mut $(&place) { $(for b in body => $b) }),
+					);
 				}
 			}
 			Some("registryEntryHolder") => {
-				let Some((name, t)) = n.fields.first() else { return };
-				visit(name.as_str(), t.target, inner(self.names.boxed(id, name)), &mut body);
+				let Some((name, t)) = n.fields.first() else {
+					return;
+				};
+				visit(
+					name.as_str(),
+					t.target,
+					inner(self.names.boxed(id, name)),
+					&mut body,
+				);
 				if !body.is_empty() {
-					out.push(quote!(if let $(&ty)::Inline($(&p)) = &mut $(&place) { $(for b in body => $b) }));
+					out.push(
+						quote!(if let $(&ty)::Inline($(&p)) = &mut $(&place) { $(for b in body => $b) }),
+					);
 				}
 			}
 			_ => {}
@@ -490,7 +565,9 @@ impl<'a> Gen<'a> {
 		let name = match self.base.get(&full_name(self.types, id)) {
 			Some(base) => base.replace("::", "_"),
 			None => match path {
-				Some(p) if !matches!(&self.types[id].kind, TypeKind::Native(n) if n.specializer.is_none()) => p,
+				Some(p) if !matches!(&self.types[id].kind, TypeKind::Native(n) if n.specializer.is_none()) => {
+					p
+				}
 				_ => return,
 			},
 		};
@@ -498,7 +575,9 @@ impl<'a> Gen<'a> {
 			return;
 		}
 		out.insert(name.clone(), id);
-		let TypeKind::Native(n) = &self.types[id].kind else { return };
+		let TypeKind::Native(n) = &self.types[id].kind else {
+			return;
+		};
 		for (field, t) in &n.fields {
 			self.alias_names(t.target, Some(format!("{name}__{}", field.as_str())), out);
 		}
@@ -516,13 +595,19 @@ impl<'a> Gen<'a> {
 	}
 
 	fn numeric(&self, id: TypeId) -> bool {
-		scalar_of(self.types, id).is_some_and(|s| s.is_number() || s == pds2_core::specializer::Scalar::Bool)
+		scalar_of(self.types, id)
+			.is_some_and(|s| s.is_number() || s == pds2_core::specializer::Scalar::Bool)
 	}
 
 	fn fresh(&self, step: &Step, dir: Dir, to: TypeId) -> String {
 		let n = self.counter.get();
 		self.counter.set(n + 1);
-		format!("{}_{}_{}_{n}", dir.name(), step.label, self.names.flat_name(to))
+		format!(
+			"{}_{}_{}_{n}",
+			dir.name(),
+			step.label,
+			self.names.flat_name(to)
+		)
 	}
 
 	fn apply(&self, conv: &Conv, value: rust::Tokens) -> rust::Tokens {
@@ -553,11 +638,16 @@ impl<'a> Gen<'a> {
 			Value::Int(n) => Expr::Const(mir::Value::Signed(*n)),
 			Value::Float(f) => Expr::Const(mir::Value::Float(f.0)),
 			Value::String { string, .. } => Expr::Const(mir::Value::String(string.clone())),
-			Value::Binary(op, a, b) => {
-				Expr::Binary(*op, Box::new(self.expr(a, src)?), Box::new(self.expr(b, src)?))
-			}
+			Value::Binary(op, a, b) => Expr::Binary(
+				*op,
+				Box::new(self.expr(a, src)?),
+				Box::new(self.expr(b, src)?),
+			),
 			Value::FieldRef(r) => {
-				ensure!(r.up == 0, "rule expressions read the converted value with `./field`");
+				ensure!(
+					r.up == 0,
+					"rule expressions read the converted value with `./field`"
+				);
 				let mut cur = self.resolve(src);
 				let mut items = Vec::new();
 				for seg in &r.path.0 {
@@ -566,10 +656,13 @@ impl<'a> Gen<'a> {
 					};
 					let fields = stored_fields(self.types, cur)
 						.ok_or_else(|| anyhow!("{} has no fields", full_name(self.types, cur)))?;
-					let (_, ty) = fields
-						.iter()
-						.find(|(n, _)| n == to.as_str())
-						.ok_or_else(|| anyhow!("{} has no field {to:?}", full_name(self.types, cur)))?;
+					let (_, ty) =
+						fields
+							.iter()
+							.find(|(n, _)| n == to.as_str())
+							.ok_or_else(|| {
+								anyhow!("{} has no field {to:?}", full_name(self.types, cur))
+							})?;
 					items.push(FieldItem {
 						from: Cell::new(cur),
 						segment: seg.clone(),
@@ -579,19 +672,26 @@ impl<'a> Gen<'a> {
 				}
 				Expr::Field(mir::Field(items))
 			}
-			Value::List(items) => Expr::List(items.iter().map(|i| self.expr(i, src)).collect::<Result<_>>()?),
+			Value::List(items) => Expr::List(
+				items
+					.iter()
+					.map(|i| self.expr(i, src))
+					.collect::<Result<_>>()?,
+			),
 			Value::Record(fields) => Expr::Record(
 				fields
 					.iter()
 					.map(|(n, v)| Ok((n.clone(), self.expr(v, src)?)))
 					.collect::<Result<_>>()?,
 			),
-			Value::Item(item) if item.args.positional().is_empty() && !item.args.is_empty() => Expr::Record(
-				item.args
-					.named_values()
-					.map(|(n, v)| Ok((n.clone(), self.expr(v, src)?)))
-					.collect::<Result<_>>()?,
-			),
+			Value::Item(item) if item.args.positional().is_empty() && !item.args.is_empty() => {
+				Expr::Record(
+					item.args
+						.named_values()
+						.map(|(n, v)| Ok((n.clone(), self.expr(v, src)?)))
+						.collect::<Result<_>>()?,
+				)
+			}
 			Value::Item(item) if item.args.positional().len() == 1 => {
 				let name = item.name.readable_name();
 				let (id, _) = self
@@ -691,7 +791,14 @@ impl<'a> Gen<'a> {
 		if from == to && !root && rules.is_none() && !self.dirty(step, dir, from) {
 			return Conv::Identity;
 		}
-		let key = (step.index, dir, from, to, root, rules.map(|r| r.path.clone()));
+		let key = (
+			step.index,
+			dir,
+			from,
+			to,
+			root,
+			rules.map(|r| r.path.clone()),
+		);
 		if let Some(name) = self.fns.borrow().get(&key) {
 			self.call(name);
 			return Conv::Call(name.clone());
@@ -701,7 +808,11 @@ impl<'a> Gen<'a> {
 		self.fns.borrow_mut().insert(key, name.clone());
 		self.current.borrow_mut().push(name.clone());
 		let (from_ty, to_ty) = (self.names.ty(from), self.names.ty(to));
-		let ret = if root { quote!(Vec<$(&to_ty)>) } else { to_ty.clone() };
+		let ret = if root {
+			quote!(Vec<$(&to_ty)>)
+		} else {
+			to_ty.clone()
+		};
 		let mut hooks = Vec::new();
 		if let Some(r) = rules.filter(|_| !passed) {
 			let versions = match dir {
@@ -733,7 +844,11 @@ impl<'a> Gen<'a> {
 
 	fn call(&self, callee: &str) {
 		if let Some(caller) = self.current.borrow().last() {
-			self.calls.borrow_mut().entry(caller.clone()).or_default().insert(callee.to_owned());
+			self.calls
+				.borrow_mut()
+				.entry(caller.clone())
+				.or_default()
+				.insert(callee.to_owned());
 		}
 	}
 
@@ -764,12 +879,21 @@ impl<'a> Gen<'a> {
 					})
 				}
 				_ => {
-					self.error(format!("{at}: `{}` of a whole packet should be drop or custom(...)", dir.name()));
+					self.error(format!(
+						"{at}: `{}` of a whole packet should be drop or custom(...)",
+						dir.name()
+					));
 					None
 				}
 			};
 		}
-		let wrap = |t: rust::Tokens| if root { quote!(Ok(vec![$t])) } else { quote!(Ok($t)) };
+		let wrap = |t: rust::Tokens| {
+			if root {
+				quote!(Ok(vec![$t]))
+			} else {
+				quote!(Ok($t))
+			}
+		};
 		let (kf, kt) = (kind_of(self.types, from), kind_of(self.types, to));
 		if from == to && rules.is_none() && !self.dirty(step, dir, from) {
 			return Some(wrap(quote!(v)));
@@ -788,13 +912,25 @@ impl<'a> Gen<'a> {
 			{
 				let (ef, et) = (self.element(from)?, self.element(to)?);
 				let (rf, rt) = (self.resolve(ef), self.resolve(et));
-				if rf != rt && self.numeric(rf) && self.numeric(rt) && rules.is_some_and(|r| r.converted.contains_key("items")) {
+				if rf != rt
+					&& self.numeric(rf)
+					&& self.numeric(rt)
+					&& rules.is_some_and(|r| r.converted.contains_key("items"))
+				{
 					self.used(format!("{}/converted(items)", rules.expect("checked").path));
 					let cast = self.cast(quote!(x), rt);
 					let items = quote!(v.into_iter().map(|x| $cast).collect::<Vec<_>>());
 					return Some(wrap(items));
 				}
-				match self.convert(step, dir, ef, et, rules.and_then(|r| r.updated.get("items")), false, &format!("{at}/items")) {
+				match self.convert(
+					step,
+					dir,
+					ef,
+					et,
+					rules.and_then(|r| r.updated.get("items")),
+					false,
+					&format!("{at}/items"),
+				) {
 					Conv::Identity => Some(wrap(quote!(v))),
 					Conv::Call(f) => {
 						let items = quote! {
@@ -805,16 +941,38 @@ impl<'a> Gen<'a> {
 								})
 								.collect::<crate::pds::convert::Result<Vec<_>>>()
 						};
-						Some(if root { quote!(Ok(vec![$items?])) } else { items })
+						Some(if root {
+							quote!(Ok(vec![$items?]))
+						} else {
+							items
+						})
 					}
 				}
 			}
 			(Some("option"), Some("option")) => {
 				let (ef, et) = (self.element(from)?, self.element(to)?);
 				let slot = pds2_core::ast::Ident::new(VALUE);
-				let unbox = if self.names.boxed(from, &slot) { quote!(*x) } else { quote!(x) };
-				let rebox = |t: rust::Tokens| if self.names.boxed(to, &slot) { quote!(Box::new($t)) } else { t };
-				let conv = self.convert(step, dir, ef, et, rules.and_then(|r| r.updated.get("value")), false, &format!("{at}/value"));
+				let unbox = if self.names.boxed(from, &slot) {
+					quote!(*x)
+				} else {
+					quote!(x)
+				};
+				let rebox = |t: rust::Tokens| {
+					if self.names.boxed(to, &slot) {
+						quote!(Box::new($t))
+					} else {
+						t
+					}
+				};
+				let conv = self.convert(
+					step,
+					dir,
+					ef,
+					et,
+					rules.and_then(|r| r.updated.get("value")),
+					false,
+					&format!("{at}/value"),
+				);
 				let inner = rebox(self.apply(&conv, unbox));
 				let mapped = quote! {
 					match v.map(|x| -> crate::pds::convert::Result<_> { Ok($inner) }).transpose() {
@@ -827,19 +985,43 @@ impl<'a> Gen<'a> {
 			(Some("registryEntryHolder"), Some("registryEntryHolder")) => {
 				let (fname, fty) = native(self.types, from)?.fields.first()?;
 				let (tname, tty) = native(self.types, to)?.fields.first()?;
-				let unbox = if self.names.boxed(from, fname) { quote!(*p) } else { quote!(p) };
-				let conv = self.convert(step, dir, fty.target, tty.target, rules.and_then(|r| r.updated.get(fname.as_str())), false, &format!("{at}/{}", fname.as_str()));
+				let unbox = if self.names.boxed(from, fname) {
+					quote!(*p)
+				} else {
+					quote!(p)
+				};
+				let conv = self.convert(
+					step,
+					dir,
+					fty.target,
+					tty.target,
+					rules.and_then(|r| r.updated.get(fname.as_str())),
+					false,
+					&format!("{at}/{}", fname.as_str()),
+				);
 				let value = self.apply(&conv, unbox);
-				let value = if self.names.boxed(to, tname) { quote!(Box::new($value)) } else { value };
+				let value = if self.names.boxed(to, tname) {
+					quote!(Box::new($value))
+				} else {
+					value
+				};
 				let (fm, tm) = (self.names.ty(from), self.names.ty(to));
-				Some(wrap(quote!(match v { $(&fm)::Id(i) => $(&tm)::Id(i), $(&fm)::Inline(p) => $(&tm)::Inline($value) })))
+				Some(wrap(
+					quote!(match v { $(&fm)::Id(i) => $(&tm)::Id(i), $(&fm)::Inline(p) => $(&tm)::Inline($value) }),
+				))
 			}
 			(Some("registryEntryHolderSet"), Some("registryEntryHolderSet")) => {
 				let (fm, tm) = (self.names.ty(from), self.names.ty(to));
-				Some(wrap(quote!(match v { $(&fm)::Named(n) => $(&tm)::Named(n), $(&fm)::Ids(i) => $(&tm)::Ids(i) })))
+				Some(wrap(
+					quote!(match v { $(&fm)::Named(n) => $(&tm)::Named(n), $(&fm)::Ids(i) => $(&tm)::Ids(i) }),
+				))
 			}
-			_ if from == to && kf.is_some_and(|k| matches!(k, "buffer" | "pstring")) => Some(wrap(quote!(v))),
-			(Some(a), Some(b)) if a == b && matches!(a, "buffer" | "pstring") => Some(wrap(quote!(v))),
+			_ if from == to && kf.is_some_and(|k| matches!(k, "buffer" | "pstring")) => {
+				Some(wrap(quote!(v)))
+			}
+			(Some(a), Some(b)) if a == b && matches!(a, "buffer" | "pstring") => {
+				Some(wrap(quote!(v)))
+			}
 			_ if self.numeric(from) && self.numeric(to) => {
 				self.error(format!(
 					"{at}: {} became {}, mention it with `converted`",
@@ -928,7 +1110,8 @@ impl<'a> Gen<'a> {
 						if rule.is_some() && fs != ft && self.numeric(fs) && self.numeric(ft) {
 							self.cast(unbox, ft)
 						} else {
-							let conv = self.convert(step, dir, *sty, *dty, nested, false, &field_at);
+							let conv =
+								self.convert(step, dir, *sty, *dty, nested, false, &field_at);
 							self.apply(&conv, unbox)
 						}
 					}
@@ -1071,7 +1254,11 @@ impl<'a> Gen<'a> {
 				}
 			};
 			if let Some(action) = override_.or(missing) {
-				let payload = if void(ty.target) { quote!(()) } else { quote!(p) };
+				let payload = if void(ty.target) {
+					quote!(())
+				} else {
+					quote!(p)
+				};
 				let unboxed = if !void(ty.target) && self.names.boxed(from, name) {
 					quote!(*$payload)
 				} else {
@@ -1080,7 +1267,9 @@ impl<'a> Gen<'a> {
 				let body = match action {
 					Action::Default => {
 						let Some((tname, tty)) = ut.default.filter(|(_, t)| void(t.target)) else {
-							self.error(format!("{arm_at}: `default` needs a payload-less default arm in the target"));
+							self.error(format!(
+								"{arm_at}: `default` needs a payload-less default arm in the target"
+							));
 							continue;
 						};
 						let mir::Value::Signed(tag) = tag_value else {
@@ -1110,16 +1299,29 @@ impl<'a> Gen<'a> {
 						};
 						let value = match target {
 							Some((_, tname, tty)) if !void(tty.target) => {
-								let Some(v) = self.field_value(action, ty.target, tty.target, &arm_at) else { continue };
-								let v = if self.names.boxed(to, tname) { quote!(Box::new($v)) } else { v };
+								let Some(v) =
+									self.field_value(action, ty.target, tty.target, &arm_at)
+								else {
+									continue;
+								};
+								let v = if self.names.boxed(to, tname) {
+									quote!(Box::new($v))
+								} else {
+									v
+								};
 								quote!($(&to_ty)::$(self.names.variant(to, tname.as_str()))($v))
 							}
 							Some(_) => {
-								self.error(format!("{arm_at}: the target arm carries no data, rename it instead"));
+								self.error(format!(
+									"{arm_at}: the target arm carries no data, rename it instead"
+								));
 								continue;
 							}
 							None => {
-								let Some(v) = self.field_value(action, ty.target, to, &arm_at) else { continue };
+								let Some(v) = self.field_value(action, ty.target, to, &arm_at)
+								else {
+									continue;
+								};
 								v
 							}
 						};
@@ -1135,19 +1337,40 @@ impl<'a> Gen<'a> {
 			match (void(ty.target), void(tty.target)) {
 				(true, true) => arms.push(quote!($(src_pat(false)) => $(one(to_arm)),)),
 				(false, false) => {
-					let unbox = if self.names.boxed(from, name) { quote!(*p) } else { quote!(p) };
+					let unbox = if self.names.boxed(from, name) {
+						quote!(*p)
+					} else {
+						quote!(p)
+					};
 					let (fs, ft) = (self.resolve(ty.target), self.resolve(tty.target));
-					let value = if r.converted.contains_key(&newer) && fs != ft && self.numeric(fs) && self.numeric(ft) {
+					let value = if r.converted.contains_key(&newer)
+						&& fs != ft && self.numeric(fs)
+						&& self.numeric(ft)
+					{
 						self.cast(unbox, ft)
 					} else {
-						let conv = self.convert(step, dir, ty.target, tty.target, r.updated.get(&newer), false, &arm_at);
+						let conv = self.convert(
+							step,
+							dir,
+							ty.target,
+							tty.target,
+							r.updated.get(&newer),
+							false,
+							&arm_at,
+						);
 						self.apply(&conv, unbox)
 					};
-					let value = if self.names.boxed(to, tname) { quote!(Box::new($value)) } else { value };
+					let value = if self.names.boxed(to, tname) {
+						quote!(Box::new($value))
+					} else {
+						value
+					};
 					arms.push(quote!($(src_pat(true)) => $(one(quote!($to_arm($value)))),));
 				}
 				_ => {
-					self.error(format!("{arm_at}: payload appeared or disappeared, add `converted({n}, ...)`"));
+					self.error(format!(
+						"{arm_at}: payload appeared or disappeared, add `converted({n}, ...)`"
+					));
 				}
 			}
 		}
@@ -1163,20 +1386,42 @@ impl<'a> Gen<'a> {
 			} else if self.numeric(tf) && self.numeric(tt) {
 				self.cast(quote!(t), tt)
 			} else {
-				self.error(format!("{at}: the tag type changed in a way that needs a rule"));
+				self.error(format!(
+					"{at}: the tag type changed in a way that needs a rule"
+				));
 				return None;
 			};
 			let src_ty = &from_ty;
 			let to_d = quote!($(&to_ty)::$(self.names.variant(to, tname.as_str())));
 			let from_d = self.names.variant(from, dname.as_str());
 			match (void(dty.target), void(tty.target)) {
-				(true, true) => arms.push(quote!($src_ty::$(&from_d)(t) => $(one(quote!($to_d($tag)))),)),
+				(true, true) => {
+					arms.push(quote!($src_ty::$(&from_d)(t) => $(one(quote!($to_d($tag)))),))
+				}
 				(false, false) => {
-					let unbox = if self.names.boxed(from, dname) { quote!(*p) } else { quote!(p) };
-					let conv = self.convert(step, dir, dty.target, tty.target, r.updated.get("default"), false, &format!("{at}/default"));
+					let unbox = if self.names.boxed(from, dname) {
+						quote!(*p)
+					} else {
+						quote!(p)
+					};
+					let conv = self.convert(
+						step,
+						dir,
+						dty.target,
+						tty.target,
+						r.updated.get("default"),
+						false,
+						&format!("{at}/default"),
+					);
 					let value = self.apply(&conv, unbox);
-					let value = if self.names.boxed(to, tname) { quote!(Box::new($value)) } else { value };
-					arms.push(quote!($src_ty::$(&from_d)(t, p) => $(one(quote!($to_d($tag, $value)))),));
+					let value = if self.names.boxed(to, tname) {
+						quote!(Box::new($value))
+					} else {
+						value
+					};
+					arms.push(
+						quote!($src_ty::$(&from_d)(t, p) => $(one(quote!($to_d($tag, $value)))),),
+					);
 				}
 				_ => {
 					self.error(format!("{at}: the default arm changed shape"));
@@ -1213,8 +1458,12 @@ fn version_range_macro(variants: &[String]) -> String {
 		);
 	}
 	for v in variants {
-		arms += &format!("    (@take [= {v}] [$($acc:ident)*] {v} $($rest:ident)*) => {{ $(Version::$acc |)* Version::{v} }};\n");
-		arms += &format!("    (@take [{v}] [] {v} $($rest:ident)*) => {{ compile_error!(\"empty version range\") }};\n");
+		arms += &format!(
+			"    (@take [= {v}] [$($acc:ident)*] {v} $($rest:ident)*) => {{ $(Version::$acc |)* Version::{v} }};\n"
+		);
+		arms += &format!(
+			"    (@take [{v}] [] {v} $($rest:ident)*) => {{ compile_error!(\"empty version range\") }};\n"
+		);
 		arms += &format!(
 			"    (@take [{v}] [$($acc:ident)+] {v} $($rest:ident)*) => {{ $(Version::$acc)|+ }};\n"
 		);
@@ -1257,7 +1506,10 @@ pub fn generate(
 		.flat_map(|(i, v)| v.legacy.iter().map(move |p| (*p, i)))
 		.collect();
 	let versions: Vec<String> = versions.iter().map(|v| v.name.clone()).collect();
-	let variant_names: Vec<String> = versions.iter().map(|v| format!("V{}", v.replace(['.', '-'], "_"))).collect();
+	let variant_names: Vec<String> = versions
+		.iter()
+		.map(|v| format!("V{}", v.replace(['.', '-'], "_")))
+		.collect();
 	ensure!(
 		migrations.len() + 1 == versions.len(),
 		"{} versions need {} migrations",
@@ -1268,7 +1520,9 @@ pub fn generate(
 	let mut base = BTreeMap::new();
 	fn defs(block: &Block, ns: &mut Vec<String>, out: &mut Vec<String>) {
 		for stmt in &block.statements {
-			let Some(Value::Item(head)) = stmt.items.first() else { continue };
+			let Some(Value::Item(head)) = stmt.items.first() else {
+				continue;
+			};
 			let Ok(name) = first_name(head) else { continue };
 			match head.name.item.as_str() {
 				"namespace" => {
@@ -1276,7 +1530,13 @@ pub fn generate(
 					defs(&head.block, ns, out);
 					ns.pop();
 				}
-				"def" => out.push(ns.iter().chain([&name]).cloned().collect::<Vec<_>>().join("::")),
+				"def" => out.push(
+					ns.iter()
+						.chain([&name])
+						.cloned()
+						.collect::<Vec<_>>()
+						.join("::"),
+				),
 				_ => {}
 			}
 		}
@@ -1298,10 +1558,16 @@ pub fn generate(
 		alias_base: {
 			let mut found: BTreeMap<TypeId, Option<String>> = BTreeMap::new();
 			for (id, def) in &types.0 {
-				let TypeKind::Alias(_) = def.kind else { continue };
-				let Some(name) = base.get(&full_name(types, *id)) else { continue };
+				let TypeKind::Alias(_) = def.kind else {
+					continue;
+				};
+				let Some(name) = base.get(&full_name(types, *id)) else {
+					continue;
+				};
 				let target = Elaborator { types, reg }.resolve(*id);
-				if base.contains_key(&full_name(types, target)) || matches!(&types[target].kind, TypeKind::Native(n) if n.specializer.is_none()) {
+				if base.contains_key(&full_name(types, target))
+					|| matches!(&types[target].kind, TypeKind::Native(n) if n.specializer.is_none())
+				{
 					continue;
 				}
 				found
@@ -1313,7 +1579,10 @@ pub fn generate(
 					})
 					.or_insert_with(|| Some(name.clone()));
 			}
-			found.into_iter().filter_map(|(k, v)| Some((k, v?))).collect()
+			found
+				.into_iter()
+				.filter_map(|(k, v)| Some((k, v?)))
+				.collect()
 		},
 		base,
 		fns: RefCell::default(),
@@ -1333,7 +1602,8 @@ pub fn generate(
 			.filter_map(|id| {
 				let full = full_name(types, *id);
 				let rest = full.strip_prefix(&format!("{tag}::"))?;
-				(rest.rsplit("::").next() == Some("packet")).then(|| (rest.to_owned(), g.resolve(*id)))
+				(rest.rsplit("::").next() == Some("packet"))
+					.then(|| (rest.to_owned(), g.resolve(*id)))
 			})
 			.collect()
 	};
@@ -1362,9 +1632,15 @@ pub fn generate(
 			let Some(tb) = b.get(root) else { continue };
 			root_names.insert(root.clone());
 			let variant = root_variant(root.trim_end_matches("::packet"));
-			for (dir, from, to, fi, ti) in [(Dir::Up, *ta, *tb, i, i + 1), (Dir::Down, *tb, *ta, i + 1, i)] {
+			for (dir, from, to, fi, ti) in [
+				(Dir::Up, *ta, *tb, i, i + 1),
+				(Dir::Down, *tb, *ta, i + 1, i),
+			] {
 				let (fm, tm) = (g.names.ty(from), g.names.ty(to));
-				let (fd, ts) = (g.names.item(from, "deserialize"), g.names.item(to, "serialize"));
+				let (fd, ts) = (
+					g.names.item(from, "deserialize"),
+					g.names.item(to, "serialize"),
+				);
 				let body = if from == to && !g.dirty(&step, dir, from) {
 					quote!(Ok(vec![data.to_vec()]))
 				} else {
@@ -1389,7 +1665,9 @@ pub fn generate(
 				};
 				let arm = format!("step_{}_{fi}_{ti}", variant.to_lowercase());
 				let (vf, vt) = (&variant_names[fi], &variant_names[ti]);
-				dispatch.push(quote!((Root::$(&variant), Version::$vf, Version::$vt) => $(&arm)(data, cx),));
+				dispatch.push(
+					quote!((Root::$(&variant), Version::$vf, Version::$vt) => $(&arm)(data, cx),),
+				);
 				arms.push(quote! {
 					fn $(&arm)(data: &[u8], cx: &mut crate::Session) -> crate::pds::convert::Result<Vec<Vec<u8>>> {
 						$body
@@ -1399,17 +1677,32 @@ pub fn generate(
 		}
 		let unused: Vec<String> = rules.all.difference(&g.used.borrow()).cloned().collect();
 		for u in unused {
-			g.error(format!("{} -> {}: rule {u} is not used", versions[i], versions[i + 1]));
+			g.error(format!(
+				"{} -> {}: rule {u} is not used",
+				versions[i],
+				versions[i + 1]
+			));
 		}
 	}
-	for u in every.iter().flat_map(|e| e.all.difference(&g.used.borrow()).cloned().collect::<Vec<_>>()) {
+	for u in every.iter().flat_map(|e| {
+		e.all
+			.difference(&g.used.borrow())
+			.cloned()
+			.collect::<Vec<_>>()
+	}) {
 		g.error(format!("every step: rule {u} is not used"));
 	}
 	let errors = g.errors.borrow();
 	if !errors.is_empty() {
-		bail!("migrations are incomplete:\n{}", errors.iter().cloned().collect::<Vec<_>>().join("\n"));
+		bail!(
+			"migrations are incomplete:\n{}",
+			errors.iter().cloned().collect::<Vec<_>>().join("\n")
+		);
 	}
-	let variants: Vec<String> = root_names.iter().map(|r| root_variant(r.trim_end_matches("::packet"))).collect();
+	let variants: Vec<String> = root_names
+		.iter()
+		.map(|r| root_variant(r.trim_end_matches("::packet")))
+		.collect();
 	let mut inspect = Vec::new();
 	let mut names = Vec::new();
 	for (i, tag) in tags.iter().enumerate() {
@@ -1418,18 +1711,19 @@ pub fn generate(
 				continue;
 			}
 			let variant = root_variant(root.trim_end_matches("::packet"));
-			if let Some(u) = native(types, id).and_then(union::view) {
-				if matches!(u.tag, union::TagView::Inline(_)) {
-					let arms: Vec<(i128, String)> = u
-						.arms
-						.iter()
-						.filter_map(|(v, n, _)| match v {
-							mir::Value::Signed(t) => Some((*t, n.as_str().to_owned())),
-							_ => None,
-						})
-						.collect();
-					let de = g.names.item(u.tag_type, "deserialize");
-					names.push(quote! {
+			if let Some(u) = native(types, id).and_then(union::view)
+				&& matches!(u.tag, union::TagView::Inline(_))
+			{
+				let arms: Vec<(i128, String)> = u
+					.arms
+					.iter()
+					.filter_map(|(v, n, _)| match v {
+						mir::Value::Signed(t) => Some((*t, n.as_str().to_owned())),
+						_ => None,
+					})
+					.collect();
+				let de = g.names.item(u.tag_type, "deserialize");
+				names.push(quote! {
 						(Root::$(&variant), Version::$(&variant_names[i])) => {
 							let tag = $de(&mut input).ok()? as i64;
 							let table: &[(i64, &str)] = &[$(for (t, n) in &arms join(, ) => ($(*t as i64), $(quoted(n))))];
@@ -1439,7 +1733,6 @@ pub fn generate(
 								.map(|(_, n)| *n)
 						}
 					});
-				}
 			}
 			let de = g.names.item(id, "deserialize");
 			let name = match native(types, id).and_then(union::view) {
@@ -1449,7 +1742,8 @@ pub fn generate(
 				},
 			};
 			let arm = format!("inspect_{}_{i}", variant.to_lowercase());
-			inspect.push(quote!((Root::$(&variant), Version::$(&variant_names[i])) => $(&arm)(data),));
+			inspect
+				.push(quote!((Root::$(&variant), Version::$(&variant_names[i])) => $(&arm)(data),));
 			arms.push(quote! {
 				fn $(&arm)(data: &[u8]) -> std::result::Result<String, String> {
 					let mut input = crate::pds::Input::new(data);
@@ -1493,7 +1787,12 @@ pub fn generate(
 		})
 		.collect::<Result<_>>()?;
 	let guarded = feedback_vertices(&g.calls.borrow());
-	let code: Vec<rust::Tokens> = g.code.borrow().iter().map(|f| f.emit(guarded.contains(&f.name))).collect();
+	let code: Vec<rust::Tokens> = g
+		.code
+		.borrow()
+		.iter()
+		.map(|f| f.emit(guarded.contains(&f.name)))
+		.collect();
 	let file: rust::Tokens = quote! {
 		pub const VERSIONS: &[&str] = &[$(for v in &versions join(, ) => $(quoted(v)))];
 

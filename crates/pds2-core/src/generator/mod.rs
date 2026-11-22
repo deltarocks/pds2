@@ -1,5 +1,5 @@
-use anyhow::{bail, Result};
-use std::{collections::HashMap, path::PathBuf, str::FromStr};
+use anyhow::Result;
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::mir;
 use crate::specializer::Registry;
@@ -8,10 +8,10 @@ mod boxing;
 pub mod common;
 pub mod naming;
 pub mod recursion;
-pub mod split;
-mod views;
 pub mod rust;
+pub mod split;
 pub mod typescript;
+mod views;
 
 pub type GeneratorOutput = HashMap<PathBuf, String>;
 pub type Generator =

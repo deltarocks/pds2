@@ -10,7 +10,7 @@
 	clippy::all
 )]
 
-pub mod gen;
+pub mod generated;
 pub mod pds {
 	pub use pds_bits_runtime::*;
 }
@@ -20,8 +20,10 @@ pub mod pds_native {
 
 #[cfg(test)]
 mod tests {
-	use crate::gen::rr::{self, GprsIndicator, SelectionParameter};
-	use crate::gen::{synthetic, synthetic_fixture, synthetic_roundtrip, si3_fixture, LhFlag};
+	use crate::generated::rr::{self, GprsIndicator, SelectionParameter};
+	use crate::generated::{
+		LhFlag, si3_fixture, synthetic, synthetic_fixture, synthetic_roundtrip,
+	};
 	use crate::pds::{Error, Input, Output, Result};
 
 	fn roundtrip<T: PartialEq + std::fmt::Debug>(
@@ -95,7 +97,12 @@ mod tests {
 	#[test]
 	fn synthetic_message_writes_every_construct() {
 		let bytes = [0xaa, 0xf2, 0xc7, 0xe6, 0x17, 0xfe, 0xab];
-		let v = roundtrip(synthetic::deserialize, synthetic::serialize, synthetic::size_of, &bytes);
+		let v = roundtrip(
+			synthetic::deserialize,
+			synthetic::serialize,
+			synthetic::size_of,
+			&bytes,
+		);
 		assert_eq!(v, synthetic_fixture::value());
 		assert_eq!(v, synthetic_roundtrip::value());
 		assert_eq!(v.deltas, [-16, 15, -1]);
@@ -106,18 +113,30 @@ mod tests {
 	fn values_too_wide_for_their_bits_are_rejected() {
 		let mut v = synthetic_fixture::value();
 		v.items[0] = 16;
-		assert!(matches!(synthetic::serialize(&v, &mut Output::new()), Err(Error::InvalidValue)));
+		assert!(matches!(
+			synthetic::serialize(&v, &mut Output::new()),
+			Err(Error::InvalidValue)
+		));
 		let mut v = synthetic_fixture::value();
 		v.deltas.push(16);
-		assert!(matches!(synthetic::serialize(&v, &mut Output::new()), Err(Error::InvalidValue)));
+		assert!(matches!(
+			synthetic::serialize(&v, &mut Output::new()),
+			Err(Error::InvalidValue)
+		));
 	}
 
 	#[test]
 	fn fixed_bits_are_checked_and_shortfalls_are_hinted() {
 		let mut input = Input::new(&[0b0010_0000]);
-		assert!(matches!(synthetic::deserialize(&mut input), Err(Error::InvalidValue)));
+		assert!(matches!(
+			synthetic::deserialize(&mut input),
+			Err(Error::InvalidValue)
+		));
 		let mut input = Input::new(&[0xaa, 0xf2, 0xc7]);
-		assert!(matches!(synthetic::deserialize(&mut input), Err(Error::NotEnoughData)));
+		assert!(matches!(
+			synthetic::deserialize(&mut input),
+			Err(Error::NotEnoughData)
+		));
 		assert_eq!(input.needed(), 27);
 	}
 }

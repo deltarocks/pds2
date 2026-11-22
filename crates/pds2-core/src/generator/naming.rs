@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use heck::{ToSnakeCase, ToUpperCamelCase};
 
 use crate::ast::Ident;
@@ -144,7 +144,8 @@ impl Modules {
 		for def in types.0.values() {
 			let full = def.name.segments();
 			for i in 0..full.len() {
-				*dirs.entry(full[..i].to_vec())
+				*dirs
+					.entry(full[..i].to_vec())
 					.or_default()
 					.entry(full[i].clone())
 					.or_default() |= i + 1 == full.len();
@@ -218,7 +219,8 @@ pub fn rust_modules(types: &TypeMap) -> Result<Modules> {
 				out.insert(name.clone(), Module::new(first, None));
 				continue;
 			}
-			let mut module = convert(Case::Snake, name.as_str()).unwrap_or_else(|| name.to_string());
+			let mut module =
+				convert(Case::Snake, name.as_str()).unwrap_or_else(|| name.to_string());
 			while taken.contains(&escape(&module)) {
 				module.push('_');
 			}
@@ -236,18 +238,60 @@ pub fn raw_modules(types: &TypeMap) -> Result<Modules> {
 			.iter()
 			.map(|(name, is_type)| {
 				let raw = name.as_str().to_owned();
-				(name.clone(), Module::new(raw.clone(), is_type.then_some(raw)))
+				(
+					name.clone(),
+					Module::new(raw.clone(), is_type.then_some(raw)),
+				)
 			})
 			.collect())
 	})
 }
 
 const SHADOWED: &[&str] = &[
-	"Ty", "Args", "Input", "Output", "Result", "Error", "Option", "Some", "None", "Ok", "Err",
-	"Vec", "String", "Box", "Default", "Into", "From", "TryFrom", "TryInto", "Clone", "Copy",
-	"PartialEq", "Eq", "PartialOrd", "Ord", "Debug", "Iterator", "IntoIterator", "FromIterator",
-	"DoubleEndedIterator", "ExactSizeIterator", "Extend", "ToString", "ToOwned", "AsRef", "AsMut",
-	"Send", "Sync", "Sized", "Unpin", "Drop", "Fn", "FnMut", "FnOnce",
+	"Ty",
+	"Args",
+	"Input",
+	"Output",
+	"Result",
+	"Error",
+	"Option",
+	"Some",
+	"None",
+	"Ok",
+	"Err",
+	"Vec",
+	"String",
+	"Box",
+	"Default",
+	"Into",
+	"From",
+	"TryFrom",
+	"TryInto",
+	"Clone",
+	"Copy",
+	"PartialEq",
+	"Eq",
+	"PartialOrd",
+	"Ord",
+	"Debug",
+	"Iterator",
+	"IntoIterator",
+	"FromIterator",
+	"DoubleEndedIterator",
+	"ExactSizeIterator",
+	"Extend",
+	"ToString",
+	"ToOwned",
+	"AsRef",
+	"AsMut",
+	"Send",
+	"Sync",
+	"Sized",
+	"Unpin",
+	"Drop",
+	"Fn",
+	"FnMut",
+	"FnOnce",
 ];
 
 pub fn nominal(ty: &str) -> bool {
@@ -275,14 +319,24 @@ mod tests {
 
 	#[test]
 	fn conventional_names_unless_they_clash() {
-		let s = Scope::new(Case::Snake, ["fooBar", "foo_bar", "Baz", "type", "self"], &[]).unwrap();
+		let s = Scope::new(
+			Case::Snake,
+			["fooBar", "foo_bar", "Baz", "type", "self"],
+			&[],
+		)
+		.unwrap();
 		assert_eq!(s.get("fooBar"), "fooBar");
 		assert_eq!(s.get("foo_bar"), "foo_bar");
 		assert_eq!(s.get("Baz"), "baz");
 		assert_eq!(s.get("type"), "r#type");
 		assert_eq!(s.get("self"), "self_");
 
-		let p = Scope::new(Case::Pascal, ["LABEL_OPTIONAL", "number_value", "self", "ty"], &["Ty"]).unwrap();
+		let p = Scope::new(
+			Case::Pascal,
+			["LABEL_OPTIONAL", "number_value", "self", "ty"],
+			&["Ty"],
+		)
+		.unwrap();
 		assert_eq!(p.get("LABEL_OPTIONAL"), "LabelOptional");
 		assert_eq!(p.get("number_value"), "NumberValue");
 		assert_eq!(p.get("self"), "Self_");
@@ -297,9 +351,18 @@ mod tests {
 
 	#[test]
 	fn relative_paths() {
-		assert_eq!(rust_relative(&["a", "b", "T"], &["a", "b", "U"]), "super::U");
-		assert_eq!(rust_relative(&["a", "b", "T"], &["a", "c", "U"]), "super::super::c::U");
-		assert_eq!(rust_relative(&["view", "a", "T"], &["a", "T"]), "super::super::super::a::T");
+		assert_eq!(
+			rust_relative(&["a", "b", "T"], &["a", "b", "U"]),
+			"super::U"
+		);
+		assert_eq!(
+			rust_relative(&["a", "b", "T"], &["a", "c", "U"]),
+			"super::super::c::U"
+		);
+		assert_eq!(
+			rust_relative(&["view", "a", "T"], &["a", "T"]),
+			"super::super::super::a::T"
+		);
 		assert_eq!(rust_relative(&["view"], &["view", "a", "T"]), "self::a::T");
 		assert_eq!(rust_relative(&["T"], &["T"]), "self");
 	}

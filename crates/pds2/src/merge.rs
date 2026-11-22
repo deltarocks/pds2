@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use pds2_core::ast::{Attributes, Block, Ident, Item, ItemArgs, Path, Statement, Value};
 
 use crate::survey;
@@ -33,7 +33,12 @@ fn sources(block: &Block, ns: &mut Vec<String>, out: &mut BTreeMap<String, Sourc
 				ns.pop();
 			}
 			kind @ ("def" | "def_native") => {
-				let full = ns.iter().chain([&name]).cloned().collect::<Vec<_>>().join("::");
+				let full = ns
+					.iter()
+					.chain([&name])
+					.cloned()
+					.collect::<Vec<_>>()
+					.join("::");
 				out.insert(
 					full,
 					Source {
@@ -61,7 +66,12 @@ fn resolve(names: &BTreeMap<String, Source>, ns: &[String], p: &Path) -> Option<
 		.collect();
 	let prefixes = if p.absolute { 0..=0 } else { 0..=ns.len() };
 	prefixes.rev().find_map(|k| {
-		let candidate = ns[..k].iter().chain(&tail).cloned().collect::<Vec<_>>().join("::");
+		let candidate = ns[..k]
+			.iter()
+			.chain(&tail)
+			.cloned()
+			.collect::<Vec<_>>()
+			.join("::");
 		names.contains_key(&candidate).then_some(candidate)
 	})
 }
@@ -134,7 +144,8 @@ struct Ns {
 
 impl Ns {
 	fn at(&mut self, path: &[String]) -> &mut Ns {
-		path.iter().fold(self, |ns, p| ns.inner.entry(p.clone()).or_default())
+		path.iter()
+			.fold(self, |ns, p| ns.inner.entry(p.clone()).or_default())
 	}
 	fn into_block(self, root: bool) -> Block {
 		let mut statements = self.statements;
@@ -194,7 +205,10 @@ pub fn merge(inputs: &[(String, Block)]) -> Result<Merged> {
 	}
 	let home = |name: &str, h: u64| -> Option<String> {
 		let list = &shapes[name];
-		let (_, first) = list.iter().find(|(x, _)| *x == h).expect("hash of this name");
+		let (_, first) = list
+			.iter()
+			.find(|(x, _)| *x == h)
+			.expect("hash of this name");
 		(!srcs[*first][name].native).then(|| tag(&inputs[*first].0))
 	};
 	let variant = |name: &str, h: u64| -> String {
@@ -223,7 +237,10 @@ pub fn merge(inputs: &[(String, Block)]) -> Result<Merged> {
 					rewrite_value(v, &map, false);
 				}
 			}
-			let ns: Vec<String> = home(name, *h).into_iter().chain(src.ns.iter().cloned()).collect();
+			let ns: Vec<String> = home(name, *h)
+				.into_iter()
+				.chain(src.ns.iter().cloned())
+				.collect();
 			root.at(&ns).statements.push(stmt);
 			let used: Vec<String> = deeps
 				.iter()
@@ -257,7 +274,9 @@ pub fn merge(inputs: &[(String, Block)]) -> Result<Merged> {
 				args: ItemArgs::builder().arg(simple(item)).build(),
 				block: Block::default(),
 			};
-			def.block.statements.push(Statement::simple(vec![simple("export")]));
+			def.block
+				.statements
+				.push(Statement::simple(vec![simple("export")]));
 			let alias = Statement::simple(vec![
 				Value::Item(def),
 				Value::Item(Item {
@@ -266,7 +285,9 @@ pub fn merge(inputs: &[(String, Block)]) -> Result<Merged> {
 					block: Block::default(),
 				}),
 			]);
-			let ns: Vec<String> = std::iter::once(tag(version)).chain(src.ns.iter().cloned()).collect();
+			let ns: Vec<String> = std::iter::once(tag(version))
+				.chain(src.ns.iter().cloned())
+				.collect();
 			root.at(&ns).statements.push(alias);
 		}
 	}
@@ -289,11 +310,16 @@ pub fn merge(inputs: &[(String, Block)]) -> Result<Merged> {
 	let (first, last) = (&inputs[0].0, &inputs[inputs.len() - 1].0);
 	root.attributes.insert(
 		Ident::new("doc"),
-		doc(format!("Minecraft protocol types of versions {first} to {last}")),
+		doc(format!(
+			"Minecraft protocol types of versions {first} to {last}"
+		)),
 	);
 	for (version, block) in inputs {
 		let ns = root.at(&[tag(version)]);
-		ns.attributes.insert(Ident::new("doc"), doc(format!("Minecraft {version} protocol types")));
+		ns.attributes.insert(
+			Ident::new("doc"),
+			doc(format!("Minecraft {version} protocol types")),
+		);
 		for key in ["protocol", "legacy_protocol"] {
 			if let Some(protocols) = block.attributes.get(&Ident::new(key)) {
 				ns.attributes.insert(Ident::new(key), protocols.clone());
@@ -341,14 +367,23 @@ pub fn versions(merged: &Block) -> Result<Vec<Version>> {
 				bail!("`@!versions` lists strings, got {v:?}");
 			};
 			let tag = tag(string);
-			let ns = merged.statements.iter().find_map(|s| match s.items.first() {
-				Some(Value::Item(i)) if i.name.item.as_str() == "namespace" && first_name(i).as_deref() == Some(tag.as_str()) => {
-					Some(i)
-				}
-				_ => None,
-			});
+			let ns = merged
+				.statements
+				.iter()
+				.find_map(|s| match s.items.first() {
+					Some(Value::Item(i))
+						if i.name.item.as_str() == "namespace"
+							&& first_name(i).as_deref() == Some(tag.as_str()) =>
+					{
+						Some(i)
+					}
+					_ => None,
+				});
 			let (protocols, legacy) = match ns {
-				Some(ns) => (numbers(&ns.block, "protocol")?, numbers(&ns.block, "legacy_protocol")?),
+				Some(ns) => (
+					numbers(&ns.block, "protocol")?,
+					numbers(&ns.block, "legacy_protocol")?,
+				),
 				None => (vec![], vec![]),
 			};
 			Ok(Version {

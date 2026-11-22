@@ -13,14 +13,12 @@
 //!
 //! After this every type reference is either generic, or resolved (by-id)
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use std::collections::{BTreeSet, HashMap};
 
 use crate::{
 	ast::{Ident, Path},
-	hir::{
-		id_generator::TypeId, Namespace, NativeType, Reference, ReferenceKind, Type, TypeKind,
-	},
+	hir::{Namespace, NativeType, Reference, ReferenceKind, Type, TypeKind, id_generator::TypeId},
 };
 
 /// Declared shape of one native overload, used to match a use-site against it.
@@ -66,8 +64,7 @@ fn select<'s>(r: &Reference, variants: &'s [VariantSig]) -> Result<&'s VariantSi
 		let args_ok = provided_args.iter().all(|n| v.params.contains(*n));
 		let types_ok = provided_types.iter().all(|n| v.types.contains(*n));
 		let body_ok = !has_body
-			|| v
-				.body_items
+			|| v.body_items
 				.as_ref()
 				.is_some_and(|items| r.body.iter().all(|f| items.contains(&f.kind)));
 		if args_ok && types_ok && body_ok {
@@ -150,12 +147,10 @@ impl TypeKind {
 
 impl Type {
 	fn resolve_paths_to_ids(&mut self, paths: &Paths) -> Result<()> {
-		for (_, t) in self.types.iter_mut() {
-			if let Some(t) = t {
-				t.resolve_paths_to_ids(paths)?;
-			}
+		for t in self.types.values_mut().flatten() {
+			t.resolve_paths_to_ids(paths)?;
 		}
-		for (_, t) in self.param_types.iter_mut() {
+		for t in self.param_types.values_mut() {
 			t.resolve_paths_to_ids(paths)?;
 		}
 		self.kind.resolve_paths_to_ids(paths)

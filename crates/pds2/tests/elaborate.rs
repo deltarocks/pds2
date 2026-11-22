@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use pds2_core::mir::{self, Expr, TypeKind, TypeMap, Value};
 
@@ -88,7 +88,8 @@ fn counts(types: &TypeMap) -> Vec<Expr> {
 
 #[test]
 fn arithmetic_operands_share_a_type() {
-	let err = error("field(a) => u8; field(b) => u16; field(c) => array(count: ../a + ../b) => u8;");
+	let err =
+		error("field(a) => u8; field(b) => u16; field(c) => array(count: ../a + ../b) => u8;");
 	assert!(err.contains("different types"), "{err}");
 	compile("field(a) => u8; field(b) => u16; field(c) => array(count: u16(../a) + ../b) => u8;")
 		.unwrap();
@@ -120,12 +121,19 @@ fn generic_argument_types_are_inferred_from_typed_values() {
 
 fn exprs(types: &TypeMap) -> Vec<Expr> {
 	let mut out = counts(types);
-	out.extend(types.0.values().flat_map(|d| d.exprs().into_iter().cloned()));
+	out.extend(
+		types
+			.0
+			.values()
+			.flat_map(|d| d.exprs().into_iter().cloned()),
+	);
 	out
 }
 
 fn with_fns(fns: &str, body: &str) -> Result<TypeMap> {
-	constant(&format!("{fns} def(T) {{ export; }} => container {{ {body} }};"))
+	constant(&format!(
+		"{fns} def(T) {{ export; }} => container {{ {body} }};"
+	))
 }
 
 fn fn_error(fns: &str, body: &str) -> String {
@@ -139,27 +147,40 @@ fn functions_inline_at_call_sites() {
 		"field(n) => u8; field(c) => array(count: name(../n, ../n)) => u8;",
 	)
 	.unwrap();
-	assert!(exprs(&types)
-		.iter()
-		.any(|e| matches!(e, Expr::Binary(pds2_core::ast::BinOp::Mul, a, _) if a.as_field().is_some())));
+	assert!(exprs(&types).iter().any(
+		|e| matches!(e, Expr::Binary(pds2_core::ast::BinOp::Mul, a, _) if a.as_field().is_some())
+	));
 	let types = with_fns(
 		"fn(add, a, b) => a + b; fn(twice, n) => add(n, n);",
 		"field(c) => array(count: twice(add(2, 3))) => u8;",
 	)
 	.unwrap();
-	assert!(exprs(&types)
-		.iter()
-		.any(|e| matches!(e, Expr::Const(Value::Signed(10)))));
+	assert!(
+		exprs(&types)
+			.iter()
+			.any(|e| matches!(e, Expr::Const(Value::Signed(10))))
+	);
 }
 
 #[test]
 fn typed_parameters_check_their_values() {
 	let fns = "fn(wide, n: u16) => n * 2;";
-	let err = fn_error(fns, "field(n) => u8; field(c) => array(count: wide(../n)) => u8;");
+	let err = fn_error(
+		fns,
+		"field(n) => u8; field(c) => array(count: wide(../n)) => u8;",
+	);
 	assert!(err.contains("expected u16, got u8"), "{err}");
-	with_fns(fns, "field(n) => u8; field(c) => array(count: wide(u16(../n))) => u8;").unwrap();
+	with_fns(
+		fns,
+		"field(n) => u8; field(c) => array(count: wide(u16(../n))) => u8;",
+	)
+	.unwrap();
 	with_fns(fns, "field(c) => array(count: wide(3)) => u8;").unwrap();
-	with_fns("fn(zero, n: u8) => n;", "field(w) => terminated(end: zero(0)) => u8;").unwrap();
+	with_fns(
+		"fn(zero, n: u8) => n;",
+		"field(w) => terminated(end: zero(0)) => u8;",
+	)
+	.unwrap();
 }
 
 #[test]
@@ -214,7 +235,10 @@ fn bad_functions_are_rejected() {
 	let err = fn_error("fn(u8, n) => n;", body);
 	assert!(err.contains("both as a function and an item"), "{err}");
 	let err = fn_error("", "field(c) => array(count: nope(1, 2)) => u8;");
-	assert!(err.contains("not a declared or registered function"), "{err}");
+	assert!(
+		err.contains("not a declared or registered function"),
+		"{err}"
+	);
 }
 
 #[test]
@@ -222,7 +246,12 @@ fn constants_fold() {
 	let types = compile("field(c) => array(count: 2 * 3 + 1) => u8;").unwrap();
 	let folded = counts(&types)
 		.into_iter()
-		.chain(types.0.values().flat_map(|d| d.exprs().into_iter().cloned()))
+		.chain(
+			types
+				.0
+				.values()
+				.flat_map(|d| d.exprs().into_iter().cloned()),
+		)
 		.any(|e| matches!(e, Expr::Const(Value::Signed(7))));
 	assert!(folded);
 }

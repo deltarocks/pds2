@@ -1,15 +1,15 @@
 [package]
 name = "pds2-specializer-minecraft-data"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
 description = "PDS2 specializer for minecraft-data protocols"
-license = "MIT"
 
 [dependencies]
-anyhow = "1.0"
-genco = "0.20"
-pds2-core = { path = "../pds2-core" }
-pds2-specializer-bytes = { path = "../pds2-specializer-bytes" }
-pds2-specializer-generic = { path = "../pds2-specializer-generic" }
-pds2-specializer-protodef = { path = "../pds2-specializer-protodef" }
-serde_json = "1.0"
+anyhow.workspace = true
+genco.workspace = true
+pds2-core.workspace = true
+pds2-specializer-bytes.workspace = true
+pds2-specializer-generic.workspace = true
+pds2-specializer-protodef.workspace = true
+serde_json.workspace = true

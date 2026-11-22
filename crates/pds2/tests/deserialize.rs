@@ -1,8 +1,8 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use pds2_core::mir::{self, TypeMap};
-use protobuf_descriptor::gen::google::protobuf::file_descriptor_set as file_set;
-use protobuf_descriptor::gen::google::protobuf::FieldDescriptorProtoType;
+use protobuf_descriptor::generated::google::protobuf::FieldDescriptorProtoType;
+use protobuf_descriptor::generated::google::protobuf::file_descriptor_set as file_set;
 use protobuf_descriptor::pds::{Input, Output};
 
 const DECL: &str = r#"
@@ -87,7 +87,10 @@ fn roundtrip(schema: &str, ty: &str, bytes: &[u8]) -> String {
 fn minimum_wire_sizes_are_known_at_compile_time() {
 	let reg = pds2::registry();
 	let types = constant("").unwrap();
-	let elab = pds2_core::specializer::expr::Elaborator { types: &types, reg: &reg };
+	let elab = pds2_core::specializer::expr::Elaborator {
+		types: &types,
+		reg: &reg,
+	};
 	let enc = pds2_specializer_bytes::Encoding::new(&elab);
 	let min = |name: &str| enc.min_size(elab.resolve_name(name).unwrap());
 	assert_eq!(min("u16"), 2);
@@ -103,7 +106,10 @@ fn deserialized_values_take_their_type_from_context() {
 	constant("def(c) => const(value: Counted(deserialized(b\"\\x02\\x07\\x08\")));").unwrap();
 	constant("def(c) => const(value: [deserialized(b\"\\x00\"), (dot: (x: 1, y: 2))]) => array(count: 2) => Shape;")
 		.unwrap();
-	constant("def(c) => const(value: Shape(deserialized(serialized(Shape((dot: (x: -1, y: 2)))))));").unwrap();
+	constant(
+		"def(c) => const(value: Shape(deserialized(serialized(Shape((dot: (x: -1, y: 2)))))));",
+	)
+	.unwrap();
 	constant("def(c) => const(value: deserialized(b\"\\x07\")) => u8;").unwrap();
 	let e = err("def(c) => const(value: serialized(deserialized(b\"\\x00\"))) => u8;");
 	assert!(e.contains("needs a type"), "{e}");
@@ -120,7 +126,10 @@ fn deserialized_bytes_are_checked() {
 	let e = err("def(c) => const(value: Shape(deserialized(7)));");
 	assert!(e.contains("takes bytes"), "{e}");
 	let e = err("def(c) => const(value: Mirrored(deserialized(b\"\\x05\\x07\\x08\")));");
-	assert!(e.contains("virtual field n reads Signed(5), but its value source gives Signed(2)"), "{e}");
+	assert!(
+		e.contains("virtual field n reads Signed(5), but its value source gives Signed(2)"),
+		"{e}"
+	);
 	let e = err("def(c) => const(value: Shape(deserialized(b\"\\x00\\x00\")));");
 	assert!(e.contains("1 bytes are left after Shape"), "{e}");
 }
@@ -136,7 +145,10 @@ fn decoded_values_are_written_back_as_source() {
 		text,
 		"Numbers(\n\ts: -2,\n\tw: 513,\n\tf: 0.1,\n\td: 1.5,\n\tb: true,\n\to: 9,\n\tshapes: [empty, (dot: (x: 1, y: -1)), (default: 5)],\n\tname: \"q\\\"\\\\\\n\",\n)\n"
 	);
-	assert_eq!(roundtrip(DECL, "Counted", &[2, 7, 8]), "Counted(data: [7, 8])\n");
+	assert_eq!(
+		roundtrip(DECL, "Counted", &[2, 7, 8]),
+		"Counted(data: [7, 8])\n"
+	);
 }
 
 #[test]
@@ -183,8 +195,14 @@ fn protobuf_extensions_become_fields_of_the_extended_message() {
 	let set = protobuf_descriptor::decode(&pds2_cli::encode(DESCRIPTOR, None, text, &reg).unwrap())
 		.unwrap();
 	let schema = pds2_specializer_protobuf::convert(&set, &["a.proto".to_owned()]).unwrap();
-	assert!(schema.contains("optional(b_tag, number: 100) => root::b::Tag;"), "{schema}");
-	assert!(schema.contains("repeated(b_Holder_nested, number: 101) => root::string;"), "{schema}");
+	assert!(
+		schema.contains("optional(b_tag, number: 100) => root::b::Tag;"),
+		"{schema}"
+	);
+	assert!(
+		schema.contains("repeated(b_Holder_nested, number: 101) => root::string;"),
+		"{schema}"
+	);
 	assert!(!schema.contains("def(Holder)"), "{schema}");
 	let value = "root::a::Opts(x: 1, b_tag: (v: true), b_Holder_nested: [\"p\", \"q\"])\n";
 	let bytes = pds2_cli::encode(&schema, None, value, &reg).unwrap();
@@ -239,7 +257,10 @@ fn protobuf_text_encodes_like_generated_code() {
 	let set = file_set::deserialize(&mut Input::new(&bytes)).unwrap();
 	let fields = &set.file[0].message_type[0].field;
 	assert_eq!(fields[0].oneof_index, Some(-1));
-	assert_eq!(fields[1].r#type, Some(FieldDescriptorProtoType::Unknown(99)));
+	assert_eq!(
+		fields[1].r#type,
+		Some(FieldDescriptorProtoType::Unknown(99))
+	);
 	assert_eq!(fields[1].default_value.as_deref(), Some("\u{e9}\t"));
 	let mut out = Output::new();
 	file_set::serialize(&set, &mut out).unwrap();
@@ -247,11 +268,20 @@ fn protobuf_text_encodes_like_generated_code() {
 
 	let decoded = roundtrip(DESCRIPTOR, FILE_SET, &bytes);
 	assert!(decoded.contains("type: 99"), "{decoded}");
-	assert!(decoded.contains("positive_int_value: 18446744073709551615"), "{decoded}");
-	assert!(decoded.contains("string_value: b\"\\x00\\xff\""), "{decoded}");
+	assert!(
+		decoded.contains("positive_int_value: 18446744073709551615"),
+		"{decoded}"
+	);
+	assert!(
+		decoded.contains("string_value: b\"\\x00\\xff\""),
+		"{decoded}"
+	);
 	let e = pds2_cli::encode(DESCRIPTOR, None, "(file: [])", &reg).unwrap_err();
 	assert!(format!("{e:#}").contains("--type"), "{e:#}");
-	assert_eq!(pds2_cli::encode(DESCRIPTOR, Some(FILE_SET), "(file: [])", &reg).unwrap(), b"");
+	assert_eq!(
+		pds2_cli::encode(DESCRIPTOR, Some(FILE_SET), "(file: [])", &reg).unwrap(),
+		b""
+	);
 }
 
 #[test]
@@ -341,17 +371,38 @@ fn protobuf_presence_follows_syntax_labels_and_features() {
 	}
 
 	let e = pds2_cli::encode(&schema, None, "root::p2::Old(note: \"x\")\n", &reg).unwrap_err();
-	assert!(format!("{e:#}").contains("needs its required field"), "{e:#}");
+	assert!(
+		format!("{e:#}").contains("needs its required field"),
+		"{e:#}"
+	);
 	let e = pds2_cli::decode(&schema, "root::p2::Old", b"\x12\x01x", &reg).unwrap_err();
 	assert!(format!("{e:#}").contains("is missing"), "{e:#}");
 	let old = "root::p2::Old(id: 0)\n";
-	assert_eq!(pds2_cli::encode(&schema, None, old, &reg).unwrap(), b"\x08\x00");
+	assert_eq!(
+		pds2_cli::encode(&schema, None, old, &reg).unwrap(),
+		b"\x08\x00"
+	);
 	assert_eq!(roundtrip(&schema, "root::p2::Old", b"\x08\x00"), old);
 
 	let zeros = "root::p3::New(n: 0, kept: 0, a: \"\", d: 0.0)\n";
-	assert_eq!(pds2_cli::encode(&schema, None, zeros, &reg).unwrap(), b"\x10\x00\x22\x00");
-	let decoded = pds2_cli::decode(&schema, "root::p3::New", b"\x08\x00\x29\0\0\0\0\0\0\0\0", &reg).unwrap();
-	assert!(!decoded.contains("n:") && !decoded.contains("d:"), "{decoded}");
+	assert_eq!(
+		pds2_cli::encode(&schema, None, zeros, &reg).unwrap(),
+		b"\x10\x00\x22\x00"
+	);
+	let decoded = pds2_cli::decode(
+		&schema,
+		"root::p3::New",
+		b"\x08\x00\x29\0\0\0\0\0\0\0\0",
+		&reg,
+	)
+	.unwrap();
+	assert!(
+		!decoded.contains("n:") && !decoded.contains("d:"),
+		"{decoded}"
+	);
 	let negative = b"\x29\0\0\0\0\0\0\0\x80";
-	assert_eq!(roundtrip(&schema, "root::p3::New", negative), "root::p3::New(d: -0.0)\n");
+	assert_eq!(
+		roundtrip(&schema, "root::p3::New", negative),
+		"root::p3::New(d: -0.0)\n"
+	);
 }

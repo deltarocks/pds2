@@ -81,6 +81,7 @@ impl BodyItem {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum TypeKind {
 	Native(NativeType),
 	/// An exported named alias to another type, possibly binding its arguments
@@ -164,4 +165,3 @@ impl std::fmt::Debug for Field {
 		Ok(())
 	}
 }
-

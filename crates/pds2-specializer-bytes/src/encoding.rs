@@ -2,12 +2,12 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ops::Deref;
 
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{Result, anyhow, bail, ensure};
 use pds2_core::hir::TypeId;
 use pds2_core::mir::{self, Construction, Expr};
-use pds2_core::specializer::eval::{Args, Scope, Target, Val};
-use pds2_core::specializer::expr::{describe, Elaborator};
 use pds2_core::specializer::Registry;
+use pds2_core::specializer::eval::{Args, Scope, Target, Val};
+use pds2_core::specializer::expr::{Elaborator, describe};
 
 use crate::Input;
 
@@ -91,9 +91,15 @@ impl<'a> Encoding<'a> {
 		let reg = self.elab.reg;
 		let encoder = reg.encoder::<dyn Encoder>(name.as_str()).ok_or_else(|| {
 			if reg.has_encoder(name.as_str()) {
-				anyhow!("{} uses encoder {name:?}, which doesn't write bytes", self.name(id))
+				anyhow!(
+					"{} uses encoder {name:?}, which doesn't write bytes",
+					self.name(id)
+				)
 			} else {
-				anyhow!("no encoder {name:?} is registered, {} uses it", self.name(id))
+				anyhow!(
+					"no encoder {name:?} is registered, {} uses it",
+					self.name(id)
+				)
 			}
 		})?;
 		Ok((native, encoder))

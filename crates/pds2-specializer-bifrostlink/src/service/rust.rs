@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use genco::lang::rust;
 use genco::prelude::*;
 use pds2_core::ast::Ident;
@@ -55,8 +55,14 @@ pub fn generate(uses: &[&DefinitionUse], ctx: &DefinitionRustCtx) -> Result<Vec<
 	services
 		.into_iter()
 		.map(|s| {
-			let namespace: Vec<Ident> = s.namespace.iter().cloned().chain([s.name.clone()]).collect();
-			let tokens = service(s, &namespace, ctx).with_context(|| format!("service {}", s.full_name))?;
+			let namespace: Vec<Ident> = s
+				.namespace
+				.iter()
+				.cloned()
+				.chain([s.name.clone()])
+				.collect();
+			let tokens =
+				service(s, &namespace, ctx).with_context(|| format!("service {}", s.full_name))?;
 			Ok(ExtraModule { namespace, tokens })
 		})
 		.collect()
@@ -66,7 +72,11 @@ fn method(m: &Method, name: String, names: &RustNames, ctx: &DefinitionRustCtx) 
 	let types = ctx.types();
 	let request = ctx.type_id(&m.request)?;
 	let def = &types[request];
-	ensure!(def.params.is_empty(), "request of {} can't take arguments", m.name);
+	ensure!(
+		def.params.is_empty(),
+		"request of {} can't take arguments",
+		m.name
+	);
 	let TypeKind::Native(native) = &def.kind else {
 		bail!("request of {} is not a container", m.name);
 	};
@@ -77,7 +87,11 @@ fn method(m: &Method, name: String, names: &RustNames, ctx: &DefinitionRustCtx) 
 		.filter(|f| f.load_from.is_none())
 		.map(|f| {
 			let field = names.field(request, f.name.as_str());
-			ensure!(field != "from", "{}: a request field can't be named `from`", m.name);
+			ensure!(
+				field != "from",
+				"{}: a request field can't be named `from`",
+				m.name
+			);
 			Ok(Param {
 				name: field,
 				ty: names.ty(f.ty.target),
@@ -90,7 +104,11 @@ fn method(m: &Method, name: String, names: &RustNames, ctx: &DefinitionRustCtx) 
 		.as_ref()
 		.map(|path| -> Result<Response> {
 			let id = ctx.type_id(path)?;
-			ensure!(types[id].params.is_empty(), "response of {} can't take arguments", m.name);
+			ensure!(
+				types[id].params.is_empty(),
+				"response of {} can't take arguments",
+				m.name
+			);
 			Ok(Response {
 				ty: names.ty(id),
 				serialize: names.serialize(id),
@@ -112,17 +130,26 @@ fn method(m: &Method, name: String, names: &RustNames, ctx: &DefinitionRustCtx) 
 
 fn service(s: &ServiceData, namespace: &[Ident], ctx: &DefinitionRustCtx) -> Result<rust::Tokens> {
 	let names = ctx.names_in(namespace)?;
-	let scope = Scope::new(Case::Snake, s.methods.iter().map(|m| m.name.as_str()), RESERVED)
-		.context("naming methods")?;
+	let scope = Scope::new(
+		Case::Snake,
+		s.methods.iter().map(|m| m.name.as_str()),
+		RESERVED,
+	)
+	.context("naming methods")?;
 	let methods = s
 		.methods
 		.iter()
-		.map(|m| method(m, scope.get(m.name.as_str()), &names, ctx).with_context(|| format!("method {}", m.name)))
+		.map(|m| {
+			method(m, scope.get(m.name.as_str()), &names, ctx)
+				.with_context(|| format!("method {}", m.name))
+		})
 		.collect::<Result<Vec<_>>>()?;
 
-	let constants = s.methods.iter().zip(&methods).map(|(m, g)| {
-		quote!(pub const $(&g.constant): u64 = $(m.id.to_string());)
-	});
+	let constants = s
+		.methods
+		.iter()
+		.zip(&methods)
+		.map(|(m, g)| quote!(pub const $(&g.constant): u64 = $(m.id.to_string());));
 	let signatures = methods.iter().map(signature);
 	let registrations = methods.iter().map(registration);
 	let calls = methods.iter().map(call);

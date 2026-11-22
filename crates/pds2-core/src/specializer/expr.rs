@@ -1,6 +1,6 @@
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
 
-use super::eval::{record_field, Val};
+use super::eval::{Val, record_field};
 use super::{Function, Registry, Scalar};
 use crate::ast::{self, BinOp, Ident};
 use crate::generator::common::{sanitize, scalar_of};
@@ -219,7 +219,12 @@ impl Elaborator<'_> {
 		Ok(Expr::Record(
 			fields
 				.iter()
-				.map(|(n, e)| Ok((n.clone(), self.literal(e).with_context(|| format!("field {n:?}"))?)))
+				.map(|(n, e)| {
+					Ok((
+						n.clone(),
+						self.literal(e).with_context(|| format!("field {n:?}"))?,
+					))
+				})
 				.collect::<Result<_>>()?,
 		))
 	}
@@ -243,7 +248,10 @@ impl Elaborator<'_> {
 			Construction::Variant(n, p) => match p.as_slice() {
 				[] => Expr::Const(Value::UnionDescriminator(n.clone())),
 				[v] => Expr::Record(vec![(n.clone(), self.literal(v)?)]),
-				_ => bail!("variant {n:?} holding {} values has no literal form", p.len()),
+				_ => bail!(
+					"variant {n:?} holding {} values has no literal form",
+					p.len()
+				),
 			},
 		})
 	}
@@ -354,7 +362,10 @@ impl Elaborator<'_> {
 			.or_else(|| b.ty())
 			.ok_or_else(|| anyhow!("{} of untyped operands", op.symbol()))?;
 		let (a, b) = (self.typed(a, ty)?, self.typed(b, ty)?);
-		let (ta, tb) = (a.ty().map(|t| self.resolve(t)), b.ty().map(|t| self.resolve(t)));
+		let (ta, tb) = (
+			a.ty().map(|t| self.resolve(t)),
+			b.ty().map(|t| self.resolve(t)),
+		);
 		ensure!(
 			ta == tb,
 			"{} of different types {:?} and {:?}, cast one explicitly",
@@ -397,10 +408,15 @@ impl Elaborator<'_> {
 			Expr::Binary(op, a, b) => self.binary(op, *a, *b)?,
 			Expr::Eq(a, b) => match (*a, *b) {
 				(Expr::Const(a), Expr::Const(b)) => bail!("{a:?} compared with {b:?}"),
-				(x, Expr::Const(v)) | (Expr::Const(v), x) => self.compare(self.elaborate(x)?, &v)?,
+				(x, Expr::Const(v)) | (Expr::Const(v), x) => {
+					self.compare(self.elaborate(x)?, &v)?
+				}
 				(a, b) => {
 					let (a, b) = (self.elaborate(a)?, self.elaborate(b)?);
-					let (ta, tb) = (a.ty().map(|t| self.resolve(t)), b.ty().map(|t| self.resolve(t)));
+					let (ta, tb) = (
+						a.ty().map(|t| self.resolve(t)),
+						b.ty().map(|t| self.resolve(t)),
+					);
 					ensure!(
 						ta.is_some() && ta == tb,
 						"comparison of different types {:?} and {:?}",

@@ -10,7 +10,7 @@
 	clippy::all
 )]
 
-pub mod gen;
+pub mod generated;
 pub mod pds {
 	pub use pds_bytes_runtime::*;
 }
@@ -19,12 +19,13 @@ pub mod pds_native {
 	pub use pds_bytes_runtime::protobuf::natives::*;
 }
 
-pub use gen::google::protobuf::{
-	DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FieldDescriptorProtoLabel as Label,
-	FieldDescriptorProtoType as Type, FileDescriptorProto, FileDescriptorSet,
+pub use generated::google::protobuf::{
+	DescriptorProto, Edition, EnumDescriptorProto, FeatureSet, FeatureSetFieldPresence,
+	FieldDescriptorProto, FieldDescriptorProtoLabel as Label, FieldDescriptorProtoType as Type,
+	FileDescriptorProto, FileDescriptorSet,
 };
 
-use self::gen::google::protobuf::file_descriptor_set;
+use self::generated::google::protobuf::file_descriptor_set;
 
 pub fn decode(bytes: &[u8]) -> pds::Result<FileDescriptorSet> {
 	file_descriptor_set::deserialize(&mut pds::Input::new(bytes))

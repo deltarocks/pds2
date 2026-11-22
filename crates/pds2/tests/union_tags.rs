@@ -1,5 +1,5 @@
-use pds2_core::specializer::expr::Elaborator;
 use pds2_core::mir::{self, Construction, Expr, TypeKind, Value};
+use pds2_core::specializer::expr::Elaborator;
 use pds2_specializer_protodef::union;
 
 const SRC: &str = r#"

@@ -1,13 +1,13 @@
 [package]
 name = "pds2-specializer-csn1"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
 description = "PDS2 specializer for CSN.1"
-license = "MIT"
 
 [dependencies]
-anyhow = "1.0"
-genco = "0.20"
-pds-bits-runtime = { path = "../pds-bits-runtime" }
-pds2-core = { path = "../pds2-core" }
-pds2-specializer-protodef = { path = "../pds2-specializer-protodef" }
+anyhow.workspace = true
+genco.workspace = true
+pds-bits-runtime.workspace = true
+pds2-core.workspace = true
+pds2-specializer-protodef.workspace = true

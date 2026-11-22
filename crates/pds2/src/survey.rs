@@ -62,7 +62,10 @@ fn format_statement(stmt: &Statement) -> String {
 		statements: vec![stmt.clone()],
 		root: true,
 	};
-	ast::format(&block).split_whitespace().collect::<Vec<_>>().join(" ")
+	ast::format(&block)
+		.split_whitespace()
+		.collect::<Vec<_>>()
+		.join(" ")
 }
 
 fn first_name(item: &Item) -> Option<String> {
@@ -131,7 +134,8 @@ fn shape(ty: Option<&Value>) -> Shape {
 					let Value::Item(head) = s.items.first()? else {
 						return None;
 					};
-					let name = first_name(head).unwrap_or_else(|| head.name.item.as_str().to_owned());
+					let name =
+						first_name(head).unwrap_or_else(|| head.name.item.as_str().to_owned());
 					let matched = head
 						.args
 						.named_values()
@@ -161,13 +165,17 @@ fn collect(block: &Block, ns: &mut Vec<String>, out: &mut BTreeMap<String, Raw>)
 		};
 		match head.name.item.as_str() {
 			"namespace" => {
-				let Some(name) = first_name(head) else { continue };
+				let Some(name) = first_name(head) else {
+					continue;
+				};
 				ns.push(name);
 				collect(&head.block, ns, out);
 				ns.pop();
 			}
 			kind @ ("def" | "def_native") => {
-				let Some(name) = first_name(head) else { continue };
+				let Some(name) = first_name(head) else {
+					continue;
+				};
 				let mut paths = Vec::new();
 				for v in &stmt.items[1..] {
 					item_paths(v, &mut paths);
@@ -177,7 +185,12 @@ fn collect(block: &Block, ns: &mut Vec<String>, out: &mut BTreeMap<String, Raw>)
 						item_paths(v, &mut paths);
 					}
 				}
-				let full = ns.iter().chain(std::iter::once(&name)).cloned().collect::<Vec<_>>().join("::");
+				let full = ns
+					.iter()
+					.chain(std::iter::once(&name))
+					.cloned()
+					.collect::<Vec<_>>()
+					.join("::");
 				out.insert(
 					full,
 					Raw {
@@ -211,7 +224,12 @@ pub fn load(name: &str, block: &Block) -> Version {
 					.collect();
 				let prefixes = if p.absolute { 0..=0 } else { 0..=r.ns.len() };
 				for k in prefixes.rev() {
-					let candidate = r.ns[..k].iter().chain(&tail).cloned().collect::<Vec<_>>().join("::");
+					let candidate = r.ns[..k]
+						.iter()
+						.chain(&tail)
+						.cloned()
+						.collect::<Vec<_>>()
+						.join("::");
 					if candidate != full && names.contains(&candidate) {
 						refs.insert(candidate);
 						break;
@@ -285,10 +303,21 @@ pub fn classify(a: &Def, b: &Def) -> (BTreeSet<Change>, Vec<String>) {
 			let old_names: Vec<&String> = old.iter().map(|(n, _)| n).collect();
 			let new_names: Vec<&String> = new.iter().map(|(n, _)| n).collect();
 			let ty = |list: &[(String, String)], n: &String| {
-				list.iter().find(|(m, _)| m == n).map(|(_, t)| t.clone()).unwrap_or_default()
+				list.iter()
+					.find(|(m, _)| m == n)
+					.map(|(_, t)| t.clone())
+					.unwrap_or_default()
 			};
-			let mut added: Vec<&String> = new_names.iter().filter(|n| !old_names.contains(n)).copied().collect();
-			let mut removed: Vec<&String> = old_names.iter().filter(|n| !new_names.contains(n)).copied().collect();
+			let mut added: Vec<&String> = new_names
+				.iter()
+				.filter(|n| !old_names.contains(n))
+				.copied()
+				.collect();
+			let mut removed: Vec<&String> = old_names
+				.iter()
+				.filter(|n| !new_names.contains(n))
+				.copied()
+				.collect();
 			removed.retain(|r| {
 				let t = ty(old, r);
 				match added.iter().position(|a| ty(new, a) == t) {
@@ -309,8 +338,16 @@ pub fn classify(a: &Def, b: &Def) -> (BTreeSet<Change>, Vec<String>) {
 				out.insert(Change::FieldsRemoved);
 				detail.push(format!("-{n}: {}", ty(old, n)));
 			}
-			let common_old: Vec<&String> = old_names.iter().filter(|n| new_names.contains(n)).copied().collect();
-			let common_new: Vec<&String> = new_names.iter().filter(|n| old_names.contains(n)).copied().collect();
+			let common_old: Vec<&String> = old_names
+				.iter()
+				.filter(|n| new_names.contains(n))
+				.copied()
+				.collect();
+			let common_new: Vec<&String> = new_names
+				.iter()
+				.filter(|n| old_names.contains(n))
+				.copied()
+				.collect();
 			if common_old != common_new {
 				out.insert(Change::FieldsReordered);
 				detail.push("fields reordered".to_owned());
@@ -334,7 +371,9 @@ pub fn classify(a: &Def, b: &Def) -> (BTreeSet<Change>, Vec<String>) {
 				out.insert(Change::TagChanged);
 				detail.push(format!("tag {ta} -> {tb}"));
 			}
-			let find = |l: &[(String, String, String)], n: &str| l.iter().find(|(m, _, _)| m == n).cloned();
+			let find = |l: &[(String, String, String)], n: &str| {
+				l.iter().find(|(m, _, _)| m == n).cloned()
+			};
 			let mut renumbered = 0;
 			for (n, m, p) in new {
 				match find(old, n) {
@@ -397,7 +436,9 @@ pub fn diff(a: &Version, b: &Version) -> String {
 		let _ = writeln!(out, "- {name}");
 	}
 	for (name, new) in &b.defs {
-		let Some(old) = a.defs.get(name) else { continue };
+		let Some(old) = a.defs.get(name) else {
+			continue;
+		};
 		if old.text != new.text {
 			let (kinds, detail) = classify(old, new);
 			let kinds: Vec<String> = kinds.iter().map(|k| format!("{k:?}")).collect();
@@ -435,7 +476,11 @@ pub fn report(versions: &[Version]) -> String {
 		.collect();
 	let _ = writeln!(out, "of which natives: {}", natives.len());
 	let _ = writeln!(out, "distinct by own text: {}", own.len());
-	let _ = writeln!(out, "distinct by own text and referenced types: {}", deep_distinct.len());
+	let _ = writeln!(
+		out,
+		"distinct by own text and referenced types: {}",
+		deep_distinct.len()
+	);
 	let _ = writeln!(out);
 	let _ = writeln!(
 		out,
@@ -463,7 +508,12 @@ pub fn report(versions: &[Version]) -> String {
 					*t.kinds.entry(k).or_default() += 1;
 					let ex = examples.entry(k).or_default();
 					if ex.len() < 4 {
-						ex.push(format!("{} -> {} {name}: {}", a.name, b.name, detail.join(", ")));
+						ex.push(format!(
+							"{} -> {} {name}: {}",
+							a.name,
+							b.name,
+							detail.join(", ")
+						));
 					}
 				}
 			} else if da[name] != db[name] {
@@ -504,7 +554,10 @@ pub fn report(versions: &[Version]) -> String {
 		"all transitions", sum.added, sum.dropped, sum.identical, sum.deps_only, sum.own
 	);
 	let _ = writeln!(out);
-	let _ = writeln!(out, "own changes by kind (a change can have several kinds):");
+	let _ = writeln!(
+		out,
+		"own changes by kind (a change can have several kinds):"
+	);
 	for (k, n) in &totals {
 		let _ = writeln!(out, "  {:<16} {n}", format!("{k:?}"));
 	}

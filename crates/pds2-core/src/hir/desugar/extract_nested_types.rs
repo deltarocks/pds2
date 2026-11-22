@@ -45,8 +45,8 @@ use anyhow::Result;
 use crate::{
 	ast::{BaseFieldRef, FieldRef, FieldRefSegment, Ident},
 	hir::{
-		Expr, IdGenerator, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip,
-		Type, TypeKind, Visitor,
+		Expr, IdGenerator, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip, Type,
+		TypeKind, Visitor,
 	},
 	specializer::Registry,
 };
@@ -71,7 +71,11 @@ impl Visitor for TypeReceiver {
 		// when it still carries scope-crossing refs that need rewiring into params.
 		if matches!(ty, TypeKind::Reference(_)) {
 			let mut escaping = false;
-			ty.traverse(&mut HasEscapingRefs(&mut escaping), TraverseSkip::empty(), reg)?;
+			ty.traverse(
+				&mut HasEscapingRefs(&mut escaping),
+				TraverseSkip::empty(),
+				reg,
+			)?;
 			if !escaping {
 				return Ok(());
 			}

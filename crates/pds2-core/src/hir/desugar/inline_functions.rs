@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 
 use crate::{
 	ast::{FieldRef, FieldRefSegment, Ident, Path},
@@ -28,7 +28,10 @@ struct Inliner<'r> {
 }
 
 fn display(path: &[Ident]) -> String {
-	path.iter().map(Ident::as_str).collect::<Vec<_>>().join("::")
+	path.iter()
+		.map(Ident::as_str)
+		.collect::<Vec<_>>()
+		.join("::")
 }
 
 fn cast_path(ty: &TypeKind) -> Option<&Path> {
@@ -65,7 +68,9 @@ fn substitute(body: &Expr, bound: &[(Ident, Expr)]) -> Expr {
 		Expr::Binary(op, a, b) => Expr::Binary(*op, Box::new(rec(a)), Box::new(rec(b))),
 		Expr::Cast(e, t) => Expr::Cast(Box::new(rec(e)), t.clone()),
 		Expr::Typed(e, t) => Expr::Typed(Box::new(rec(e)), t.clone()),
-		Expr::Record(fields) => Expr::Record(fields.iter().map(|(n, e)| (n.clone(), rec(e))).collect()),
+		Expr::Record(fields) => {
+			Expr::Record(fields.iter().map(|(n, e)| (n.clone(), rec(e))).collect())
+		}
 		Expr::List(items) => Expr::List(items.iter().map(rec).collect()),
 		Expr::Call(f, args) => Expr::Call(f.clone(), args.iter().map(rec).collect()),
 	}
@@ -73,7 +78,10 @@ fn substitute(body: &Expr, bound: &[(Ident, Expr)]) -> Expr {
 
 impl Inliner<'_> {
 	fn function(&self, path: &Path, scope: &Scope) -> Option<Vec<Ident>> {
-		if path.simple_name().is_some_and(|n| scope.generics.contains(&n)) {
+		if path
+			.simple_name()
+			.is_some_and(|n| scope.generics.contains(&n))
+		{
 			return None;
 		}
 		let mut path = path.clone();
@@ -248,12 +256,18 @@ fn take_functions(
 	}
 }
 
-fn inline_ns(ns: &mut Namespace, path: &mut Vec<Ident>, inliner: &mut Inliner, reg: &Registry) -> Result<()> {
+fn inline_ns(
+	ns: &mut Namespace,
+	path: &mut Vec<Ident>,
+	inliner: &mut Inliner,
+	reg: &Registry,
+) -> Result<()> {
 	for (name, item) in ns.items.iter_mut() {
 		match item {
 			NamespaceItem::Inner(inner) => {
 				path.push(name.clone());
-				inline_ns(inner, path, inliner, reg).with_context(|| format!("namespace({name:?})"))?;
+				inline_ns(inner, path, inliner, reg)
+					.with_context(|| format!("namespace({name:?})"))?;
 				path.pop();
 			}
 			NamespaceItem::Type(t) => {

@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{anyhow, ensure, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, ensure};
 use tracing::info;
 
 use pds2_core::ast::{self, Ident, Statement};
 
 use crate::container::Container;
 use crate::upgrade::{
-	keys_fit, plan, ContainerScope, NativeSig, NativeSigVariant, TagKind, Upgrade, UpgradeCtx,
+	ContainerScope, NativeSig, NativeSigVariant, TagKind, Upgrade, UpgradeCtx, keys_fit, plan,
 };
 
 macro_rules! trivial_upgrade {
@@ -230,7 +230,9 @@ impl Upgrade for Container {
 			let (name, field) = &fields[i];
 			match &plans[i] {
 				Plan::Inline(TagKind::Mapper(mapper), switch, _, _) => {
-					info!("container field {name} looks like legacy protodef mapper+switch, it will be replaced with union");
+					info!(
+						"container field {name} looks like legacy protodef mapper+switch, it will be replaced with union"
+					);
 					crate::upgrade::merge_mapper_switch(mapper, switch, ctx)
 				}
 				Plan::Inline(_, switch, tag, _) => {

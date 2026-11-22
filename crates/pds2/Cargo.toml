@@ -1,22 +1,22 @@
 [package]
 name = "pds2"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
 description = "PDS2 CLI"
-license = "MIT"
 
 [dependencies]
-anyhow = "1.0"
-genco = "0.20"
-pds2-cli = { path = "../pds2-cli" }
-pds2-core = { path = "../pds2-core" }
-pds2-specializer-bifrostlink = { path = "../pds2-specializer-bifrostlink" }
-pds2-specializer-bytes = { path = "../pds2-specializer-bytes" }
-pds2-specializer-csn1 = { path = "../pds2-specializer-csn1" }
-pds2-specializer-generic = { path = "../pds2-specializer-generic" }
-pds2-specializer-minecraft-data = { path = "../pds2-specializer-minecraft-data" }
-pds2-specializer-protobuf = { path = "../pds2-specializer-protobuf" }
-pds2-specializer-protodef = { path = "../pds2-specializer-protodef" }
-protobuf-descriptor = { path = "../protobuf-descriptor" }
-serde_json = "1.0"
-tracing = "0.1.44"
+anyhow.workspace = true
+genco.workspace = true
+pds2-cli.workspace = true
+pds2-core.workspace = true
+pds2-specializer-bifrostlink.workspace = true
+pds2-specializer-bytes.workspace = true
+pds2-specializer-csn1.workspace = true
+pds2-specializer-generic.workspace = true
+pds2-specializer-minecraft-data.workspace = true
+pds2-specializer-protobuf.workspace = true
+pds2-specializer-protodef.workspace = true
+protobuf-descriptor.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

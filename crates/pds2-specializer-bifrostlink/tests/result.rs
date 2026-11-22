@@ -32,7 +32,11 @@ fn result_is_a_std_result() {
 	pds2_specializer_bytes::register(&mut reg);
 	pds2_specializer_protodef::register(&mut reg);
 	pds2_specializer_bifrostlink::register(&mut reg);
-	let types = mir::from_hir(&hir::parse_ast(ast::parse(SCHEMA).unwrap(), &reg).unwrap(), &reg).unwrap();
+	let types = mir::from_hir(
+		&hir::parse_ast(ast::parse(SCHEMA).unwrap(), &reg).unwrap(),
+		&reg,
+	)
+	.unwrap();
 	let mut out = Default::default();
 	rust::generate(&types, &mut out, &reg, None, None, &[]).unwrap();
 	let holder = &out[&PathBuf::from("holder.rs")];

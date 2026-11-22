@@ -7,7 +7,7 @@ mod resource;
 mod result;
 mod service;
 
-pub use service::{service_id, Method, MethodKind, ServiceData};
+pub use service::{Method, MethodKind, ServiceData, service_id};
 
 pub fn register(reg: &mut Registry) {
 	reg.register_definition("service", service::Service);

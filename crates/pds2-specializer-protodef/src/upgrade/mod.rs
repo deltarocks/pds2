@@ -1,6 +1,8 @@
-use pds2_core::ast::{self, BaseFieldRef, Block, FieldRefSegment, Ident, Item, ItemArgs, Statement};
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use inflector::Inflector;
+use pds2_core::ast::{
+	self, BaseFieldRef, Block, FieldRefSegment, Ident, Item, ItemArgs, Statement,
+};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -417,7 +419,9 @@ fn switch_fields(obj: &Map<String, Value>) -> Result<Map<String, Value>> {
 		.and_then(Value::as_object)
 		.ok_or_else(|| anyhow!("switch missing fields"))?;
 	if let Some(key) = fields.keys().find(|k| k.starts_with('/')) {
-		bail!("switch key {key:?} compares against a root context variable, which pds has no equivalent for");
+		bail!(
+			"switch key {key:?} compares against a root context variable, which pds has no equivalent for"
+		);
 	}
 	let numeric = fields.keys().any(|k| key_int(k).is_some());
 	Ok(fields
@@ -533,7 +537,7 @@ fn upgrade_mapper(obj: &Map<String, Value>, ctx: &mut UpgradeCtx) -> Result<Vec<
 	statements.push(simple_stmt(Item::simple_builder("default").build_values()));
 
 	Ok(Item::simple_builder("union")
-		.argsb(ItemArgs::builder().named("Tag",upgrade_type_single(ty, ctx)?))
+		.argsb(ItemArgs::builder().named("Tag", upgrade_type_single(ty, ctx)?))
 		.block(Block {
 			attributes: Default::default(),
 			statements,
@@ -601,7 +605,7 @@ pub fn merge_mapper_switch(
 	statements.extend(default_stmt(switch, false, ctx)?);
 
 	Ok(Item::simple_builder("union")
-		.argsb(ItemArgs::builder().named("Tag",tag_ty))
+		.argsb(ItemArgs::builder().named("Tag", tag_ty))
 		.block(Block {
 			attributes: Default::default(),
 			statements,
@@ -627,7 +631,7 @@ pub fn merge_scalar_switch(
 	}
 	statements.extend(default_stmt(switch, bool_exhaustive(&fields), ctx)?);
 	Ok(Item::simple_builder("union")
-		.argsb(ItemArgs::builder().named("Tag",tag_ty))
+		.argsb(ItemArgs::builder().named("Tag", tag_ty))
 		.block(Block {
 			attributes: Default::default(),
 			statements,
@@ -737,8 +741,7 @@ pub fn upgrade_type(value: Value, ctx: &mut UpgradeCtx) -> Result<Vec<ast::Value
 				)?,
 				name if ctx.registry.get(name).is_none()
 					&& ctx.named_type(name).is_some_and(|t| t != "native")
-					&& a.len() == 2
-					&& a[1].is_object() =>
+					&& a.len() == 2 && a[1].is_object() =>
 				{
 					let mut args = ItemArgs::builder();
 					for (k, v) in a[1].as_object().expect("checked") {
@@ -747,7 +750,10 @@ pub fn upgrade_type(value: Value, ctx: &mut UpgradeCtx) -> Result<Vec<ast::Value
 								let reference = ast::Value::FieldRef(ctx.reference(r)?);
 								let got = ctx.reference_type(r);
 								let key = (name.to_owned(), k.clone());
-								ctx.param_uses.entry(key.clone()).or_default().push(got.clone());
+								ctx.param_uses
+									.entry(key.clone())
+									.or_default()
+									.push(got.clone());
 								match (ctx.param_types.get(&key), got) {
 									(Some(want), Some(got)) if *want != got => {
 										let mut cast = Item::simple_builder(want.as_str())
@@ -825,7 +831,7 @@ fn native_block(sig: &NativeSig) -> Block {
 		statements.push(simple_stmt(Item::simple_builder("is_void").build_values()));
 	}
 	for (name, stmts) in &sig.variants {
-		let body = native_variant(&stmts);
+		let body = native_variant(stmts);
 		statements.push(Statement::simple(
 			Item::simple_builder("variant")
 				.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(name.as_str())))
@@ -920,10 +926,11 @@ fn upgrade_namespace_inner(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::B
 					.ok_or_else(|| anyhow!("upgrader for native type {k} is not registered"))?;
 				let mut sig = sig.sig();
 				let has_varint = types.get("varint").is_some_and(|v| v == "native");
-				if (ctx.counted || has_varint) && matches!(k, "array" | "buffer") {
-					if let Some(sized) = sig.variants.get_mut("sized") {
-						sized.virtual_fields.insert("size".to_owned(), "varint");
-					}
+				if (ctx.counted || has_varint)
+					&& matches!(k, "array" | "buffer")
+					&& let Some(sized) = sig.variants.get_mut("sized")
+				{
+					sized.virtual_fields.insert("size".to_owned(), "varint");
 				}
 				let mut builder = Item::simple_builder("def_native")
 					.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(k)));
@@ -968,10 +975,14 @@ fn upgrade_namespace_inner(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::B
 						statements: params
 							.iter()
 							.map(|p| {
-								let arg = Item::simple_builder("argument")
-									.argsb(ItemArgs::builder().arg(ast::Value::new_simple_item(p.as_str())));
+								let arg = Item::simple_builder("argument").argsb(
+									ItemArgs::builder()
+										.arg(ast::Value::new_simple_item(p.as_str())),
+								);
 								simple_stmt(match ctx.param_types.get(&(k.clone(), p.clone())) {
-									Some(ty) => arg.then(vec![ast::Value::new_simple_item(ty.as_str())]),
+									Some(ty) => {
+										arg.then(vec![ast::Value::new_simple_item(ty.as_str())])
+									}
 									None => arg.build_values(),
 								})
 							})
@@ -1002,13 +1013,13 @@ fn upgrade_namespace_inner(value: &Value, ctx: &mut UpgradeCtx) -> Result<ast::B
 }
 
 pub fn upgrade(mut value: Value, registry: &UpgradeRegistry) -> Result<ast::Block> {
-	if let Some(types) = value.get_mut("types").and_then(Value::as_object_mut) {
-		if types.get("bitfield").is_some_and(|t| t == "native") {
-			for int in ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"] {
-				types
-					.entry(int)
-					.or_insert_with(|| Value::String("native".to_owned()));
-			}
+	if let Some(types) = value.get_mut("types").and_then(Value::as_object_mut)
+		&& types.get("bitfield").is_some_and(|t| t == "native")
+	{
+		for int in ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"] {
+			types
+				.entry(int)
+				.or_insert_with(|| Value::String("native".to_owned()));
 		}
 	}
 	let mut ctx = UpgradeCtx {
@@ -1033,7 +1044,7 @@ pub fn upgrade(mut value: Value, registry: &UpgradeRegistry) -> Result<ast::Bloc
 
 #[cfg(test)]
 mod tests {
-	use serde_json::{json, Value};
+	use serde_json::{Value, json};
 
 	use super::UpgradeRegistry;
 
@@ -1086,7 +1097,10 @@ mod tests {
 			&out,
 			"@specializer bitfield def_native(bitfield) { body { item(field) { argument(size); argument(signed) => false; }; }; };",
 		);
-		assert_has(&out, "def(p) => bitfield { field(x, size: 8, signed: true); };");
+		assert_has(
+			&out,
+			"def(p) => bitfield { field(x, size: 8, signed: true); };",
+		);
 	}
 
 	#[test]
@@ -1124,7 +1138,10 @@ mod tests {
 		}))
 		.unwrap();
 		assert_has(&out, "virtual_field(n, value: i16(./items/@size)) => i16;");
-		assert_has(&out, "variant(sized) { argument(count); virtual_field(size) => varint; };");
+		assert_has(
+			&out,
+			"variant(sized) { argument(count); virtual_field(size) => varint; };",
+		);
 	}
 
 	#[test]
@@ -1162,7 +1179,10 @@ mod tests {
 			{ "name": "v", "type": ["switch", { "compareTo": "has", "fields": { "true": "u8", "false": "void" } }] }
 		]] }))
 		.unwrap();
-		assert_has(&out, "def(p) => union(Tag: bool) { variant(false, match: false) => void; variant(true, match: true) => u8; };");
+		assert_has(
+			&out,
+			"def(p) => union(Tag: bool) { variant(false, match: false) => void; variant(true, match: true) => u8; };",
+		);
 	}
 
 	#[test]
@@ -1188,7 +1208,10 @@ mod tests {
 			{ "name": "y", "type": ["switch", { "compareTo": "m", "fields": { "0": "varint", "2": "u8" } }] }
 		]] }))
 		.unwrap();
-		assert_has(&out, "def(p) => union(Tag: varint) { variant(v0, match: 0) => varint; variant(v2, match: 2) => container { field(x) => u8; field(y) => u8; }; default; };");
+		assert_has(
+			&out,
+			"def(p) => union(Tag: varint) { variant(v0, match: 0) => varint; variant(v2, match: 2) => container { field(x) => u8; field(y) => u8; }; default; };",
+		);
 	}
 
 	#[test]

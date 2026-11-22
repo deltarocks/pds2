@@ -1,11 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
 
-use anyhow::{anyhow, bail, Context as _, Result};
-use protobuf_descriptor::gen::google::protobuf::{Edition, FeatureSet, FeatureSetFieldPresence};
+use anyhow::{Context as _, Result, anyhow, bail};
 use protobuf_descriptor::{
-	DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorProto,
-	FileDescriptorSet, Label, Type,
+	DescriptorProto, Edition, EnumDescriptorProto, FeatureSet, FeatureSetFieldPresence,
+	FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet, Label, Type,
 };
 
 const PRELUDE: &str = r#"
@@ -77,17 +76,24 @@ fn file_presence(file: &FileDescriptorProto) -> Result<Presence> {
 		Some("editions") => match &file.edition {
 			Some(Edition::EditionProto3) => Presence::Implicit,
 			Some(
-				Edition::EditionProto2 | Edition::Edition2023 | Edition::Edition2024 | Edition::Edition2026,
+				Edition::EditionProto2
+				| Edition::Edition2023
+				| Edition::Edition2024
+				| Edition::Edition2026,
 			) => Presence::Explicit,
 			e => bail!("edition {e:?} is not supported"),
 		},
 		Some(s) => bail!("unknown syntax {s:?}"),
 	};
-	overridden(base, file.options.as_ref().and_then(|o| o.features.as_ref()))
+	overridden(
+		base,
+		file.options.as_ref().and_then(|o| o.features.as_ref()),
+	)
 }
 
 fn name(n: &Option<String>) -> Result<&str> {
-	n.as_deref().ok_or_else(|| anyhow!("descriptor without a name"))
+	n.as_deref()
+		.ok_or_else(|| anyhow!("descriptor without a name"))
 }
 
 fn collect_message<'a>(
@@ -100,8 +106,15 @@ fn collect_message<'a>(
 ) -> Result<()> {
 	let n = name(&msg.name)?;
 	let full = format!("{scope}.{n}");
-	let local = if prefix.is_empty() { n.to_owned() } else { format!("{prefix}_{n}") };
-	let presence = overridden(inherited, msg.options.as_ref().and_then(|o| o.features.as_ref()))?;
+	let local = if prefix.is_empty() {
+		n.to_owned()
+	} else {
+		format!("{prefix}_{n}")
+	};
+	let presence = overridden(
+		inherited,
+		msg.options.as_ref().and_then(|o| o.features.as_ref()),
+	)?;
 	for nested in &msg.nested_type {
 		collect_message(out, package, &full, &local, nested, presence)?;
 	}
@@ -165,7 +178,10 @@ fn field_type<'a>(
 	decls: &'a BTreeMap<String, Decl>,
 	f: &FieldDescriptorProto,
 ) -> Result<(String, Option<&'a str>)> {
-	let ty = f.r#type.as_ref().ok_or_else(|| anyhow!("field without a type"))?;
+	let ty = f
+		.r#type
+		.as_ref()
+		.ok_or_else(|| anyhow!("field without a type"))?;
 	if let Some(s) = scalar(ty)? {
 		return Ok((format!("root::{s}"), None));
 	}
@@ -238,7 +254,10 @@ fn message(
 		let item = match oneof {
 			Some(g) => Item::Oneof(g),
 			None if matches!(f.label, Some(Label::LabelRequired)) => Item::Required,
-			None => match overridden(presence, f.options.as_ref().and_then(|o| o.features.as_ref()))? {
+			None => match overridden(
+				presence,
+				f.options.as_ref().and_then(|o| o.features.as_ref()),
+			)? {
 				Presence::Required => Item::Required,
 				Presence::Implicit if !explicit => Item::Implicit,
 				Presence::Implicit | Presence::Explicit => Item::Optional,
@@ -272,7 +291,9 @@ fn message_field(
 	f: &FieldDescriptorProto,
 	item: Item,
 ) -> Result<()> {
-	let number = f.number.ok_or_else(|| anyhow!("field {fname} without a number"))?;
+	let number = f
+		.number
+		.ok_or_else(|| anyhow!("field {fname} without a number"))?;
 	let (ty, _) = field_type(decls, f).with_context(|| format!("field {fname}"))?;
 	if matches!(f.label, Some(Label::LabelRepeated)) {
 		write!(out, "repeated({fname}, number: {number}) => {ty};")?;
@@ -282,7 +303,10 @@ fn message_field(
 		Item::Required => write!(out, "field({fname}, number: {number}) => {ty};")?,
 		Item::Implicit => write!(out, "implicit({fname}, number: {number}) => {ty};")?,
 		Item::Optional => write!(out, "optional({fname}, number: {number}) => {ty};")?,
-		Item::Oneof(g) => write!(out, "oneof({fname}, number: {number}, group: \"{g}\") => {ty};")?,
+		Item::Oneof(g) => write!(
+			out,
+			"oneof({fname}, number: {number}, group: \"{g}\") => {ty};"
+		)?,
 	}
 	Ok(())
 }
@@ -291,7 +315,9 @@ fn enumeration(out: &mut String, local: &str, e: &EnumDescriptorProto) -> Result
 	write!(out, "def({local}) => enum(Tag: root::int32) {{")?;
 	for v in &e.value {
 		let vname = name(&v.name)?;
-		let number = v.number.ok_or_else(|| anyhow!("enum value {vname} without a number"))?;
+		let number = v
+			.number
+			.ok_or_else(|| anyhow!("enum value {vname} without a number"))?;
 		write!(out, "value({vname}, number: {number});")?;
 	}
 	writeln!(out, "}};")?;
@@ -328,7 +354,9 @@ pub fn convert(set: &FileDescriptorSet, roots: &[String]) -> Result<String> {
 			.filter(|p| !p.is_empty())
 			.map(|p| p.split('.').map(str::to_owned).collect())
 			.unwrap_or_default();
-		let scope = package.iter().fold(String::new(), |s, p| format!("{s}.{p}"));
+		let scope = package
+			.iter()
+			.fold(String::new(), |s, p| format!("{s}.{p}"));
 		let is_root = roots.is_empty() || roots.iter().any(|r| file.name.as_deref() == Some(r));
 		let before: BTreeSet<String> = decls.keys().cloned().collect();
 		let presence = file_presence(file).with_context(|| format!("in {:?}", file.name))?;
@@ -369,8 +397,8 @@ pub fn convert(set: &FileDescriptorSet, roots: &[String]) -> Result<String> {
 		{
 			let extended = extensions.get(&full).into_iter().flatten().map(|(_, f)| *f);
 			for f in m.field.iter().chain(extended) {
-				if let (_, Some(dep)) = field_type(&decls, f)
-					.with_context(|| format!("in {full}"))?
+				if let (_, Some(dep)) =
+					field_type(&decls, f).with_context(|| format!("in {full}"))?
 				{
 					queue.push_back(dep.to_owned());
 				}
@@ -403,6 +431,7 @@ pub fn convert(set: &FileDescriptorSet, roots: &[String]) -> Result<String> {
 
 	let mut out = String::from(PRELUDE);
 	root.emit(&mut out);
-	let parsed = pds2_core::ast::parse(&out).map_err(|e| anyhow!("generated pds does not parse: {e}"))?;
+	let parsed =
+		pds2_core::ast::parse(&out).map_err(|e| anyhow!("generated pds does not parse: {e}"))?;
 	Ok(pds2_core::ast::format(&parsed))
 }

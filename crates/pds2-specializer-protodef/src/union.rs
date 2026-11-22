@@ -1,22 +1,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use genco::lang::{js, rust, JavaScript, Rust};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
+use genco::lang::{JavaScript, Rust, js, rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::eval::{Scope, Target, Val};
-use pds2_specializer_bytes::{Encoder, Encoding, Input};
-use pds2_core::specializer::expr::{value_eq, Elaborator, ValueModel};
-use pds2_core::specializer::{
-	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
-	Projection, SlotVisitor, ViewPolicy,
-};
 use crate::natives::{is_constant, sized_count};
 use crate::upgrade::{NativeSig, NativeSigVariant, Upgrade};
 use pds2_core::ast::{FieldRefSegment, Ident};
 use pds2_core::generator::common::sanitize;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, TypeKind, TypeMap, Value};
+use pds2_core::specializer::eval::{Scope, Target, Val};
+use pds2_core::specializer::expr::{Elaborator, ValueModel, value_eq};
+use pds2_core::specializer::{
+	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
+	Projection, SlotVisitor, ViewPolicy,
+};
+use pds2_specializer_bytes::{Encoder, Encoding, Input};
 
 pub struct Union;
 
@@ -228,18 +228,27 @@ impl ValueModel for Union {
 				.map(|(_, n, ty)| (*n, *ty))
 				.ok_or_else(|| {
 					let known: Vec<&str> = u.arms.iter().map(|(_, n, _)| n.as_str()).collect();
-					anyhow!("{} has no variant {name:?}, expected one of {known:?}", cx.name(id))
+					anyhow!(
+						"{} has no variant {name:?}, expected one of {known:?}",
+						cx.name(id)
+					)
 				})
 		};
 		match value {
 			Expr::Const(Value::UnionDescriminator(name)) => {
 				let (arm, ty) = arm(name)?;
-				ensure!(void(ty), "variant {name:?} carries a value, write it as `({name:?}: ...)`");
+				ensure!(
+					void(ty),
+					"variant {name:?} carries a value, write it as `({name:?}: ...)`"
+				);
 				Ok(Construction::Variant(arm.clone(), vec![]))
 			}
 			Expr::Const(value) => {
 				if let Some((_, arm, ty)) = u.arms.iter().find(|(v, _, _)| value_eq(v, value)) {
-					ensure!(void(ty), "variant {arm:?} carries a value, write it as `({arm:?}: ...)`");
+					ensure!(
+						void(ty),
+						"variant {arm:?} carries a value, write it as `({arm:?}: ...)`"
+					);
 					return Ok(Construction::Variant((*arm).clone(), vec![]));
 				}
 				let (default, ty) = u
@@ -269,13 +278,20 @@ impl ValueModel for Union {
 					return Ok(Construction::Variant(default.clone(), vec![tag]));
 				}
 				let (arm, ty) = arm(name)?;
-				ensure!(!void(ty), "variant {name:?} carries no value, write it as `{name:?}`");
+				ensure!(
+					!void(ty),
+					"variant {name:?} carries no value, write it as `{name:?}`"
+				);
 				let payload = cx
 					.coerce(payload.clone(), ty.target)
 					.with_context(|| format!("variant {name:?}"))?;
 				Ok(Construction::Variant(arm.clone(), vec![payload]))
 			}
-			v => bail!("{} can't be written as {}", cx.name(id), pds2_core::specializer::expr::describe(v)),
+			v => bail!(
+				"{} can't be written as {}",
+				cx.name(id),
+				pds2_core::specializer::expr::describe(v)
+			),
 		}
 	}
 	fn casts(&self, _cx: &Elaborator, _id: TypeId, native: &mir::NativeType) -> Vec<TypeId> {
@@ -296,7 +312,11 @@ impl ValueModel for Union {
 			.collect()
 	}
 	fn virtual_field(&self, cx: &Elaborator, v: &Val, name: &Ident) -> Result<Expr> {
-		ensure!(name.as_str() == "tag", "{} has no virtual field {name:?}", cx.name(v.id));
+		ensure!(
+			name.as_str() == "tag",
+			"{} has no virtual field {name:?}",
+			cx.name(v.id)
+		);
 		tag_of(cx, v)
 	}
 	fn cast_value(&self, cx: &Elaborator, v: &Val, to: TypeId) -> Result<Expr> {
@@ -441,7 +461,7 @@ impl Encoder for Union {
 	}
 }
 
-fn variant_of<'c>(c: &'c Construction) -> Result<(&'c Ident, &'c [Expr])> {
+fn variant_of(c: &Construction) -> Result<(&Ident, &[Expr])> {
 	match c {
 		Construction::Variant(name, payload) => Ok((name, payload)),
 		c => bail!("union is constructed from a variant, got {c:?}"),
@@ -550,11 +570,7 @@ impl NativeCodegen<Rust> for Union {
 		let expect = (min > 0).then(|| quote!(input.expect($(min.to_string()))?;));
 		let de_value = |u: &mir::Type, boxed: bool| -> rust::Tokens {
 			let read = quote!($(names.deserialize(u.target))(input, $(args_of(u)))?);
-			if boxed {
-				quote!(Box::new($read))
-			} else {
-				read
-			}
+			if boxed { quote!(Box::new($read)) } else { read }
 		};
 		let mut variants_decl: Vec<rust::Tokens> = Vec::new();
 		let mut ser_arms: Vec<rust::Tokens> = Vec::new();
@@ -630,7 +646,8 @@ impl NativeCodegen<Rust> for Union {
 				assert_arms.push(quote!(Ty::$(&d)(_) => true,));
 				quote!(Ok(Ty::$(&d)($tag_owned)))
 			} else {
-				variants_decl.push(quote!($(&d)($(names.ty(tag_ty)), $(payload_ty(dty.target, boxed))),));
+				variants_decl
+					.push(quote!($(&d)($(names.ty(tag_ty)), $(payload_ty(dty.target, boxed))),));
 				ser_arms.push(
 					quote!(Ty::$(&d)(_, __v) => $(names.serialize(dty.target))(__v, output),),
 				);
@@ -758,11 +775,7 @@ impl NativeCodegen<JavaScript> for Union {
 		let has_args = !ctx.params.is_empty();
 		let args_of = |t: &mir::Type| -> js::Tokens {
 			let a = (ctx.pass_args)(t);
-			if a.is_empty() {
-				quote!()
-			} else {
-				quote!(, $a)
-			}
+			if a.is_empty() { quote!() } else { quote!(, $a) }
 		};
 		let is_inline = matches!(u.tag, TagView::Inline(_));
 		let is_empty = u.arms.is_empty() && u.default.is_none();
@@ -853,7 +866,9 @@ impl NativeCodegen<JavaScript> for Union {
 				vtag.push(quote!(case $(&kind): return _0.tag;));
 				quote!(return { kind: $(&kind), tag: __tag };)
 			} else {
-				variants.push(quote!({ kind: $(&kind); tag: $(names.ty(tag_ty)); value: $(names.ty(dty.target)) }));
+				variants.push(
+					quote!({ kind: $(&kind); tag: $(names.ty(tag_ty)); value: $(names.ty(dty.target)) }),
+				);
 				ser.push(
 					quote!(case $(&kind): $(names.serialize(dty.target))(_0.value, output); return;),
 				);
@@ -953,8 +968,13 @@ impl NativeCodegen<JavaScript> for Union {
 		Ok(match (is_default, payload) {
 			(_, []) => quote!({ kind: $(quoted(name.as_str())) }),
 			(true, [tag]) => quote!({ kind: $(quoted(name.as_str())), tag: $((cx.lower)(tag)?) }),
-			(false, [value]) => quote!({ kind: $(quoted(name.as_str())), value: $((cx.lower)(value)?) }),
-			_ => bail!("union variant {name:?} constructed with {} values", payload.len()),
+			(false, [value]) => {
+				quote!({ kind: $(quoted(name.as_str())), value: $((cx.lower)(value)?) })
+			}
+			_ => bail!(
+				"union variant {name:?} constructed with {} values",
+				payload.len()
+			),
 		})
 	}
 	fn cast(

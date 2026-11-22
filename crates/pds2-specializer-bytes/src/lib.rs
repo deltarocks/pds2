@@ -1,8 +1,8 @@
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{Result, anyhow, bail, ensure};
 use pds2_core::generator::common::scalar_of;
 use pds2_core::hir::TypeId;
 use pds2_core::mir::{self, Construction, Expr, Value};
-use pds2_core::specializer::eval::{bits_of, float_of, int_of, width, wrap, Target, Val};
+use pds2_core::specializer::eval::{Target, Val, bits_of, float_of, int_of, width, wrap};
 use pds2_core::specializer::{Registry, Scalar};
 
 mod encoding;
@@ -10,7 +10,7 @@ mod functions;
 mod input;
 pub mod reflect;
 
-pub use encoding::{register_encoder, write_varint, Encoder, Encoding};
+pub use encoding::{Encoder, Encoding, register_encoder, write_varint};
 pub use functions::{Deserialized, Serialized};
 pub use input::Input;
 
@@ -52,7 +52,11 @@ impl Encoder for ScalarEncoding {
 			bail!("{} is not a literal", cx.name(v.id));
 		};
 		let s = scalar_of(cx.types(), v.id).ok_or_else(|| {
-			anyhow!("{} needs `@scalar` for `@encoding {}`", cx.name(v.id), self.name())
+			anyhow!(
+				"{} needs `@scalar` for `@encoding {}`",
+				cx.name(v.id),
+				self.name()
+			)
 		})?;
 		let e = Expr::Construct(v.id, v.c.clone());
 		let int = || int_of(&e).ok_or_else(|| anyhow!("{value:?} is not an integer"));
@@ -99,14 +103,22 @@ impl Encoder for ScalarEncoding {
 				};
 				write_varint(out, u);
 			}
-			(e, s) => bail!("`@encoding {}` can't encode {s:?} ({})", e.name(), cx.name(v.id)),
+			(e, s) => bail!(
+				"`@encoding {}` can't encode {s:?} ({})",
+				e.name(),
+				cx.name(v.id)
+			),
 		}
 		Ok(())
 	}
 
 	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
 		let s = scalar_of(cx.types(), t.id).ok_or_else(|| {
-			anyhow!("{} needs `@scalar` for `@encoding {}`", cx.name(t.id), self.name())
+			anyhow!(
+				"{} needs `@scalar` for `@encoding {}`",
+				cx.name(t.id),
+				self.name()
+			)
 		})?;
 		let int = |n: i128| {
 			if s == Scalar::Bool {
@@ -163,7 +175,11 @@ impl Encoder for ScalarEncoding {
 					}
 				})
 			}
-			(e, s) => bail!("`@encoding {}` can't decode {s:?} ({})", e.name(), cx.name(t.id)),
+			(e, s) => bail!(
+				"`@encoding {}` can't decode {s:?} ({})",
+				e.name(),
+				cx.name(t.id)
+			),
 		};
 		Ok(Construction::Literal(value))
 	}

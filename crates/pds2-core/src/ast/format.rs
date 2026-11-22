@@ -408,7 +408,7 @@ impl Item {
 
 		if !self.block.statements.is_empty() {
 			out.push_str_runtime_width_computed(" ");
-			(&self.block).print(out);
+			self.block.print(out);
 		}
 	}
 }
@@ -471,7 +471,11 @@ mod tests {
 
 	fn reformat(src: &str) -> String {
 		let out = super::format(&crate::ast::parse(src).unwrap());
-		assert_eq!(super::format(&crate::ast::parse(&out).unwrap()), out, "not idempotent");
+		assert_eq!(
+			super::format(&crate::ast::parse(&out).unwrap()),
+			out,
+			"not idempotent"
+		);
 		out
 	}
 
@@ -501,7 +505,10 @@ mod tests {
 		let item = "(name: \"some fairly long name\", tags: [(key: \"k\", value: [1, 2, 3]), (key: \"other key\", value: [(deep: [\"x\", \"y\"])])])";
 		let list = vec![item; 40].join(", ");
 		let out = reformat(&format!("def(a) => x(v: [{list}, [[{list}]]]);"));
-		assert!(out.lines().all(|l| l.replace('\t', "   ").len() <= 100), "{out}");
+		assert!(
+			out.lines().all(|l| l.replace('\t', "   ").len() <= 100),
+			"{out}"
+		);
 	}
 
 	#[test]

@@ -71,10 +71,10 @@ impl<'i> Input<'i> {
 	pub fn exact<const N: usize>(&self) -> Result<[u8; N]> {
 		let start = self.offset();
 		let mut out: [u8; N] = self.bytes(N)?.try_into().expect("bytes returns N bytes");
-		if let Some((at, and)) = self.mask.get() {
-			if let Some(b) = at.checked_sub(start).and_then(|i| out.get_mut(i)) {
-				*b &= and;
-			}
+		if let Some((at, and)) = self.mask.get()
+			&& let Some(b) = at.checked_sub(start).and_then(|i| out.get_mut(i))
+		{
+			*b &= and;
 		}
 		Ok(out)
 	}

@@ -1,10 +1,10 @@
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use pds2_core::ast::Ident;
 use pds2_core::mir::Expr;
-use pds2_core::specializer::eval::{int_of, Args, Target, Val};
+use pds2_core::specializer::VALUE;
+use pds2_core::specializer::eval::{Args, Target, Val, int_of};
 use pds2_core::specializer::expr::describe;
 use pds2_core::specializer::reflect::{native_variant, use_of};
-use pds2_core::specializer::VALUE;
 
 use crate::{Encoding, Input};
 

@@ -1,10 +1,10 @@
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use genco::lang::{js, rust, JavaScript, Rust};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
+use genco::lang::{JavaScript, Rust, js, rust};
 use genco::prelude::*;
 
-use super::eval::{int_of, Val};
-use super::expr::{describe, Elaborator};
-use super::{specialization_use, LowerCx};
+use super::eval::{Val, int_of};
+use super::expr::{Elaborator, describe};
+use super::{LowerCx, specialization_use};
 use crate::ast::Ident;
 use crate::hir::TypeId;
 use crate::mir::{self, Construction, Expr, Value};
@@ -36,7 +36,8 @@ pub fn variant_of(c: &Construction) -> Result<(&Ident, &[Expr])> {
 
 pub fn count_arg(v: &Val, len: usize) -> Result<()> {
 	if let Some(count) = v.args.get(&Ident::new("count")) {
-		let n = int_of(count).ok_or_else(|| anyhow!("count {} is not a number", describe(count)))?;
+		let n =
+			int_of(count).ok_or_else(|| anyhow!("count {} is not a number", describe(count)))?;
 		ensure!(
 			n == len as i128,
 			"{len} items, but the count argument says {n}"
@@ -71,7 +72,10 @@ pub fn record_fields(
 	value: &Expr,
 ) -> Result<Construction> {
 	let Expr::Record(given) = value else {
-		bail!("{} is written as a record `(field: value, ...)`", cx.name(id));
+		bail!(
+			"{} is written as a record `(field: value, ...)`",
+			cx.name(id)
+		);
 	};
 	for (n, _) in given {
 		ensure!(
@@ -112,11 +116,17 @@ pub fn construct_object(cx: &LowerCx<JavaScript>, c: &Construction) -> Result<js
 
 pub fn construct_bytes_rust(c: &Construction) -> Result<rust::Tokens> {
 	let bytes = bytes_of(c)?;
-	Ok(quote!(vec![$(for b in bytes join(, ) => $(format!("{b}_u8")))]))
+	Ok(quote!(
+		vec![$(for b in bytes join(, ) => $(format!("{b}_u8")))]
+	))
 }
 
 pub fn construct_bytes_js(c: &Construction) -> Result<js::Tokens> {
-	let bytes = bytes_of(c)?.iter().map(u8::to_string).collect::<Vec<_>>().join(", ");
+	let bytes = bytes_of(c)?
+		.iter()
+		.map(u8::to_string)
+		.collect::<Vec<_>>()
+		.join(", ");
 	Ok(quote!(new Uint8Array([$bytes])))
 }
 

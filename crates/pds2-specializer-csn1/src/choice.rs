@@ -1,21 +1,21 @@
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use genco::lang::{rust, Rust};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
+use genco::lang::{Rust, rust};
 use genco::prelude::*;
+use pds_bits_runtime::csn1;
 use pds2_core::ast::Ident;
 use pds2_core::generator::common::sanitize;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, Value};
 use pds2_core::specializer::eval::{Target, Val};
-use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
+use pds2_core::specializer::expr::{Elaborator, ValueModel, describe};
 use pds2_core::specializer::{
-	pds_io, AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
-	Projection, SlotVisitor,
+	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
+	Projection, SlotVisitor, pds_io,
 };
-use pds_bits_runtime::csn1;
 
 use crate::natives::{invalid, no_view, runtime};
 use crate::pattern::{literal, pattern, prefix_free};
-use crate::wire::{choose, Encoder, Encoding, Input, Output};
+use crate::wire::{Encoder, Encoding, Input, Output, choose};
 
 pub struct Choice;
 
@@ -39,7 +39,12 @@ pub fn arms(native: &mir::NativeType) -> Result<Vec<Arm<'_>>> {
 		})
 		.collect::<Result<Vec<_>>>()?;
 	ensure!(!arms.is_empty(), "a choice needs at least one variant");
-	prefix_free(&arms.iter().map(|a| (a.name, a.bits.as_slice())).collect::<Vec<_>>())?;
+	prefix_free(
+		&arms
+			.iter()
+			.map(|a| (a.name, a.bits.as_slice()))
+			.collect::<Vec<_>>(),
+	)?;
 	Ok(arms)
 }
 
@@ -52,10 +57,9 @@ impl AstHir for Choice {
 				matches!(f.constant("bits"), Some(hir::Value::String(_))),
 				"choice arm {name:?} needs a `bits` string"
 			);
-			let ty = f
-				.ty
-				.clone()
-				.ok_or_else(|| anyhow!("choice arm {name:?} has no type"))?;
+			let ty =
+				f.ty.clone()
+					.ok_or_else(|| anyhow!("choice arm {name:?} has no type"))?;
 			out.fields.push((name.clone(), ty));
 		}
 		Ok(out)
@@ -91,7 +95,10 @@ impl ValueModel for Choice {
 				.find(|(n, _)| sanitize(n.as_str()) == sanitize(name.as_str()))
 				.ok_or_else(|| {
 					let known: Vec<&str> = native.fields.iter().map(|(n, _)| n.as_str()).collect();
-					anyhow!("{} has no variant {name:?}, expected one of {known:?}", cx.name(id))
+					anyhow!(
+						"{} has no variant {name:?}, expected one of {known:?}",
+						cx.name(id)
+					)
 				})
 		};
 		match value {

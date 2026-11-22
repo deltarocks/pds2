@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 
 use crate::{
 	ast::{FieldRefSegment, Ident},
@@ -70,9 +70,8 @@ impl Definition {
 				}
 				for item in &native.body {
 					for (n, a) in &item.args {
-						Self::resolve_expr(self_id, types, a).with_context(|| {
-							format!("body item {:?} argument {n:?}", item.kind)
-						})?;
+						Self::resolve_expr(self_id, types, a)
+							.with_context(|| format!("body item {:?} argument {n:?}", item.kind))?;
 					}
 				}
 			}
@@ -196,7 +195,9 @@ impl Definition {
 					.ref_args
 					.iter()
 					.find(|(n, _)| n == &name)
-					.ok_or_else(|| anyhow!("virtual {name:?} has no argument to take its type from"))?;
+					.ok_or_else(|| {
+						anyhow!("virtual {name:?} has no argument to take its type from")
+					})?;
 				Self::resolve_expr(self_id, types, r)?
 					.ok_or_else(|| anyhow!("argument {name:?} has no type for virtual {name:?}"))?
 			}
@@ -232,9 +233,9 @@ impl Definition {
 		for (name, param) in self.params.iter_mut() {
 			*param = match self.param_types.iter().find(|(n, _)| n == name) {
 				Some((_, declared)) => *declared,
-				None => collector
-					.find_type(i, name)
-					.with_context(|| format!("argument {name:?} of {}", self.name.readable_name()))?,
+				None => collector.find_type(i, name).with_context(|| {
+					format!("argument {name:?} of {}", self.name.readable_name())
+				})?,
 			};
 		}
 		Ok(())
@@ -300,7 +301,7 @@ pub fn resolve_types(types: &mut TypeMap) -> Result<()> {
 		}
 	}
 
-	for (_, d) in types.0.iter() {
+	for d in types.0.values() {
 		d.assert_no_unresolved()
 			.with_context(|| format!("in {:?}", d.name))?;
 	}

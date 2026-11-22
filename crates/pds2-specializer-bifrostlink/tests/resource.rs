@@ -25,7 +25,11 @@ def(Holder) => container {
 "#;
 
 fn types(reg: &Registry) -> mir::TypeMap {
-	mir::from_hir(&hir::parse_ast(ast::parse(SCHEMA).unwrap(), reg).unwrap(), reg).unwrap()
+	mir::from_hir(
+		&hir::parse_ast(ast::parse(SCHEMA).unwrap(), reg).unwrap(),
+		reg,
+	)
+	.unwrap()
 }
 
 fn registry() -> Registry {

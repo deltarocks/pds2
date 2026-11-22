@@ -18,3 +18,35 @@ members = [
 	"crates/protobuf-descriptor",
 ]
 default-members = ["crates/pds2"]
+
+[workspace.package]
+license = "MIT"
+edition = "2024"
+
+[workspace.dependencies]
+pds-bits-runtime = { path = "crates/pds-bits-runtime" }
+pds-bytes-runtime = { path = "crates/pds-bytes-runtime" }
+pds2-cli = { path = "crates/pds2-cli" }
+pds2-core = { path = "crates/pds2-core" }
+pds2-specializer-bifrostlink = { path = "crates/pds2-specializer-bifrostlink" }
+pds2-specializer-bytes = { path = "crates/pds2-specializer-bytes" }
+pds2-specializer-csn1 = { path = "crates/pds2-specializer-csn1" }
+pds2-specializer-generic = { path = "crates/pds2-specializer-generic" }
+pds2-specializer-minecraft-data = { path = "crates/pds2-specializer-minecraft-data" }
+pds2-specializer-protobuf = { path = "crates/pds2-specializer-protobuf" }
+pds2-specializer-protodef = { path = "crates/pds2-specializer-protodef" }
+protobuf-descriptor = { path = "crates/protobuf-descriptor" }
+
+Inflector = "0.11.4"
+anyhow = "1.0"
+bitflags = "2.5.0"
+clap = "4.5"
+dprint-core = "0.70.0"
+genco = "0.20"
+heck = "0.5"
+peg = "0.8.2"
+psm = "0.1.32"
+serde_json = "1.0"
+sha3 = "0.10"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"

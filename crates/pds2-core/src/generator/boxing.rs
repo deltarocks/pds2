@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::ast::Ident;
 use crate::hir::TypeId;

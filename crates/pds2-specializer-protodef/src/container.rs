@@ -1,20 +1,20 @@
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use genco::lang::{js, rust, JavaScript, Rust};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
+use genco::lang::{JavaScript, Rust, js, rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::eval::{const_eq, Scope, Target, Val};
-use pds2_specializer_bytes::{Encoder, Encoding, Input};
-use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
 use crate::natives::sized_count;
 use crate::union::{self, TagView, UnionView};
-use pds2_core::specializer::{
-	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
-	SlotVisitor, ViewPolicy,
-};
 use pds2_core::ast::{FieldRefSegment, Ident};
 use pds2_core::generator::common::local;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, TypeKind, TypeMap};
+use pds2_core::specializer::eval::{Scope, Target, Val, const_eq};
+use pds2_core::specializer::expr::{Elaborator, ValueModel, describe};
+use pds2_core::specializer::{
+	AstHir, BoxCost, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout,
+	SlotVisitor, ViewPolicy,
+};
+use pds2_specializer_bytes::{Encoder, Encoding, Input};
 
 pub struct Container;
 
@@ -60,7 +60,10 @@ impl AstHir for Container {
 				let name = f.expect_name()?;
 				if f.kind.as_str() == "virtual_field" {
 					ensure!(
-						!matches!(f.args.get(&Ident::new("value")), Some(hir::Expr::Const(_)) | None),
+						!matches!(
+							f.args.get(&Ident::new("value")),
+							Some(hir::Expr::Const(_)) | None
+						),
 						"virtual_field {name:?} needs a `value` computed from the container"
 					);
 				}
@@ -82,10 +85,14 @@ impl ValueModel for Container {
 		value: &Expr,
 	) -> Result<Construction> {
 		let Expr::Record(given) = value else {
-			bail!("{} is written as a record `(field: value, ...)`", cx.name(id));
+			bail!(
+				"{} is written as a record `(field: value, ...)`",
+				cx.name(id)
+			);
 		};
 		let fields = view(native).ok_or_else(|| anyhow!("malformed container"))?;
-		let stored: Vec<&ContainerField> = fields.iter().filter(|f| f.load_from.is_none()).collect();
+		let stored: Vec<&ContainerField> =
+			fields.iter().filter(|f| f.load_from.is_none()).collect();
 		for (n, _) in given {
 			ensure!(
 				stored.iter().any(|f| f.name == n),
@@ -99,7 +106,9 @@ impl ValueModel for Container {
 				Some((_, e)) => cx
 					.coerce(e.clone(), f.ty.target)
 					.with_context(|| format!("field {:?}", f.name))?,
-				None if cx.types.is_void(f.ty.target) => cx.build(f.ty.target, &Expr::Record(vec![]))?,
+				None if cx.types.is_void(f.ty.target) => {
+					cx.build(f.ty.target, &Expr::Record(vec![]))?
+				}
 				None => bail!("{} needs field {:?}", cx.name(id), f.name),
 			};
 			out.push((f.name.clone(), e));
@@ -308,10 +317,14 @@ impl NativeCodegen<Rust> for Container {
 		let presult = &rust::import("crate::pds", "Result");
 		let lt = &ctx.lt();
 		let this = &ctx.this();
-		let stored: Vec<&ContainerField> = fields.iter().filter(|f| f.load_from.is_none()).collect();
+		let stored: Vec<&ContainerField> =
+			fields.iter().filter(|f| f.load_from.is_none()).collect();
 		let fname = |f: &ContainerField| ctx.field(f.name.as_str());
 		let view_fields = stored.iter().map(|f| {
-			let v = ctx.slot_new(f.name, quote!($(names.view_fn(f.ty.target))(&_0.$(fname(f)))));
+			let v = ctx.slot_new(
+				f.name,
+				quote!($(names.view_fn(f.ty.target))(&_0.$(fname(f)))),
+			);
 			quote!($(fname(f)): $v)
 		});
 		let assert_tag_call = |field: &ContainerField| -> rust::Tokens {
@@ -429,11 +442,7 @@ impl NativeCodegen<JavaScript> for Container {
 		let has_args = !ctx.params.is_empty();
 		let args_of = |t: &mir::Type| -> js::Tokens {
 			let a = (ctx.pass_args)(t);
-			if a.is_empty() {
-				quote!()
-			} else {
-				quote!(, $a)
-			}
+			if a.is_empty() { quote!() } else { quote!(, $a) }
 		};
 		let assert_tag_call = |field: &ContainerField| -> js::Tokens {
 			let Some(val) = assert_tag_arg(ctx.types, &fields, field) else {
@@ -457,7 +466,8 @@ impl NativeCodegen<JavaScript> for Container {
 				Some(from) => (ctx.read)(from, false),
 			}
 		};
-		let stored: Vec<&ContainerField> = fields.iter().filter(|f| f.load_from.is_none()).collect();
+		let stored: Vec<&ContainerField> =
+			fields.iter().filter(|f| f.load_from.is_none()).collect();
 		Ok(quote! {
 			$((ctx.args_struct)())
 			export type Ty = {

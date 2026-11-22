@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use pds2_core::ast::{Attributes, Block, Ident, Item, ItemArgs, Path, Statement, Value};
 use pds2_core::definition::{LowerCtx, Lowered};
 
@@ -26,7 +26,9 @@ fn check_shadowing(value: &Value) -> Result<()> {
 	match value {
 		Value::Item(item) => {
 			if let Some(name) = item.head_name().filter(|n| LOWERED.contains(n)) {
-				bail!("`{name}` would refer to the method's own lowered type here, qualify the path");
+				bail!(
+					"`{name}` would refer to the method's own lowered type here, qualify the path"
+				);
 			}
 			for (_, v) in item.args.ordered() {
 				check_shadowing(v)?;
@@ -64,7 +66,12 @@ pub fn lower(
 		..
 	} = block;
 
-	let service_ns: Vec<Ident> = ctx.namespace.iter().cloned().chain([name.clone()]).collect();
+	let service_ns: Vec<Ident> = ctx
+		.namespace
+		.iter()
+		.cloned()
+		.chain([name.clone()])
+		.collect();
 	let mut methods = Vec::new();
 	let mut lowered = Vec::new();
 	let mut seen = BTreeSet::new();
@@ -90,17 +97,23 @@ pub fn lower(
 					blocking: args.named::<Option<bool>>("blocking")?.unwrap_or(false),
 				}
 			}
-			other => bail!("unknown statement `{other}` in a service, expected `request` or `notification`"),
+			other => bail!(
+				"unknown statement `{other}` in a service, expected `request` or `notification`"
+			),
 		};
 		let id: Option<i128> = args.named("id")?;
 		let id = id.ok_or_else(|| anyhow!("`{label}` needs an explicit `id: <number>`"))?;
 		let id = u64::try_from(id).map_err(|_| anyhow!("`{label}`: id {id} is not a u64"))?;
-		args.verify_unused().with_context(|| format!("in `{label}`"))?;
+		args.verify_unused()
+			.with_context(|| format!("in `{label}`"))?;
 		ensure!(
 			method.as_str() != "method",
 			"`{label}`: the name `method` is taken by the generated id constants"
 		);
-		ensure!(seen.insert(method.clone()), "method {method} is defined twice");
+		ensure!(
+			seen.insert(method.clone()),
+			"method {method} is defined twice"
+		);
 		if let Some(other) = ids.insert(id, method.clone()) {
 			bail!("method id {id} is used by both {other} and {method}");
 		}

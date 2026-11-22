@@ -1,9 +1,9 @@
-use genco::lang::{js, JavaScript};
+use genco::lang::{JavaScript, js};
 use genco::prelude::*;
 
 use anyhow::Result;
 
-use super::{specialization_use, LowerCx, Names, NativeCodegenCtx, Scalar, VALUE};
+use super::{LowerCx, Names, NativeCodegenCtx, Scalar, VALUE, specialization_use};
 use crate::hir::TypeId;
 use crate::mir;
 
@@ -44,10 +44,12 @@ pub fn construct_array(
 ) -> Result<Tokens> {
 	let items = super::list_items(cx, c)?;
 	let list = quote!([$(for i in items join(, ) => $i)]);
-	Ok(match value_of(native).and_then(|v| typed_array(cx.names, v)) {
-		Some(a) => quote!(new $a($list)),
-		None => list,
-	})
+	Ok(
+		match value_of(native).and_then(|v| typed_array(cx.names, v)) {
+			Some(a) => quote!(new $a($list)),
+			None => list,
+		},
+	)
 }
 
 pub fn wide(names: &dyn Names<JavaScript>, ty: TypeId) -> bool {

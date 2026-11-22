@@ -162,9 +162,11 @@ impl Expr {
 		match hir {
 			hir::Expr::Field(field_ref) => Expr::Field(Field::from_hir(field_ref)),
 			hir::Expr::Const(value) => Expr::Const(Value::from_hir(value)),
-			hir::Expr::Binary(op, a, b) => {
-				Expr::Binary(*op, Box::new(Expr::from_hir(a)), Box::new(Expr::from_hir(b)))
-			}
+			hir::Expr::Binary(op, a, b) => Expr::Binary(
+				*op,
+				Box::new(Expr::from_hir(a)),
+				Box::new(Expr::from_hir(b)),
+			),
 			hir::Expr::Record(fields) => Expr::Record(
 				fields
 					.iter()
@@ -205,7 +207,10 @@ pub fn from_hir_internal(
 					path.pop().expect("stack underflow");
 					continue;
 				}
-				let old = out.insert(d.id(), Definition::from_hir(Path::new(path.clone()), namespaced, d)?);
+				let old = out.insert(
+					d.id(),
+					Definition::from_hir(Path::new(path.clone()), namespaced, d)?,
+				);
 				assert!(old.is_none());
 			}
 		}

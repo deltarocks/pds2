@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use pds2_core::mir::{self, TypeMap};
 
@@ -102,7 +102,8 @@ fn reference_arguments_start_at_the_reference() {
 		err.contains("./n is an argument of its item and points at that item itself"),
 		"{err}"
 	);
-	let err = error("field(n) => u8; field(a) => union(tag: ./n) { variant(one, match: 1) => u8; };");
+	let err =
+		error("field(n) => u8; field(a) => union(tag: ./n) { variant(one, match: 1) => u8; };");
 	assert!(err.contains("./n is an argument of its item"), "{err}");
 	let err = error("field(p) => Pick(k: ./$k);");
 	assert!(

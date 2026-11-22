@@ -1,11 +1,11 @@
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail};
 use genco::lang::JavaScript;
 use genco::prelude::*;
 
 use pds2_core::hir::TypeId;
 use pds2_core::mir;
 use pds2_core::specializer::ts::{
-	array_ty, construct_array, from_list, pds, typed_array, value_of, Ctx, Tokens,
+	Ctx, Tokens, array_ty, construct_array, from_list, pds, typed_array, value_of,
 };
 use pds2_core::specializer::{LowerCx, Names, NativeCodegen, VALUE};
 
@@ -71,7 +71,12 @@ impl NativeCodegen<JavaScript> for RegistryEntryHolderSet {
 		_native: &mir::NativeType,
 		c: &mir::Construction,
 	) -> Result<Tokens> {
-		let varint = cx.types.0.iter().find(|(_, d)| d.name.readable_name() == "varint").map(|(id, _)| *id);
+		let varint = cx
+			.types
+			.0
+			.iter()
+			.find(|(_, d)| d.name.readable_name() == "varint")
+			.map(|(id, _)| *id);
 		let typed = varint.and_then(|v| typed_array(cx.names, v));
 		let (kind, value) = crate::natives::holder_payload_js(cx, c, typed)?;
 		Ok(quote!({ kind: $(quoted(kind)), value: $value }))
@@ -84,7 +89,11 @@ impl NativeCodegen<JavaScript> for RegistryEntryHolderSet {
 		};
 		let nty = nty_use.target;
 		let read_named = ctx.slot_new(nname, ctx.deserialize_call(nty_use));
-		let (pinput, poutput, perror) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"), &pds(ctx.names, "PdsError"));
+		let (pinput, poutput, perror) = (
+			&pds(ctx.names, "Input"),
+			&pds(ctx.names, "Output"),
+			&pds(ctx.names, "PdsError"),
+		);
 		let ids_ty = array_ty(ctx.names, varint);
 		let new_ids = match typed_array(ctx.names, varint) {
 			Some(a) => quote!(new $a(count)),
@@ -167,7 +176,11 @@ impl NativeCodegen<JavaScript> for TopBitSetTerminatedArray {
 		let ty = self
 			.inline_ty(ctx.id, ctx.native, ctx.names)
 			.context("topBitSetTerminatedArray type")?;
-		let (pinput, poutput, perror) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"), &pds(ctx.names, "PdsError"));
+		let (pinput, poutput, perror) = (
+			&pds(ctx.names, "Input"),
+			&pds(ctx.names, "Output"),
+			&pds(ctx.names, "PdsError"),
+		);
 		Ok(quote! {
 			$((ctx.args_struct)())
 			export type Ty = $ty;

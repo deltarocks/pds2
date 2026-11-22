@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail};
 use genco::lang::JavaScript;
 use genco::prelude::*;
 
@@ -6,13 +6,12 @@ use pds2_core::ast::Ident;
 use pds2_core::hir::TypeId;
 use pds2_core::mir;
 use pds2_core::specializer::ts::{
-	array_ty, collect, construct_array, int_as, pds, read_count, value_of, wide, Ctx,
-	Tokens,
+	Ctx, Tokens, array_ty, collect, construct_array, int_as, pds, read_count, value_of, wide,
 };
-use pds2_core::specializer::{specialization_use, LowerCx, Names, NativeCodegen, VALUE};
+use pds2_core::specializer::{LowerCx, Names, NativeCodegen, VALUE, specialization_use};
 
 use crate::natives::{
-	bitfield_entries, map_pairs, Array, Bitfield, Bitflags, Buffer, MapP, OptionP, PString, KEY,
+	Array, Bitfield, Bitflags, Buffer, KEY, MapP, OptionP, PString, bitfield_entries, map_pairs,
 };
 
 fn check_count_js(ctx: &Ctx) -> Tokens {
@@ -250,7 +249,9 @@ impl NativeCodegen<JavaScript> for OptionP {
 		let mir::Construction::Wrap(inner) = c else {
 			return Ok(quote!(null));
 		};
-		Ok(cx.names.slot_new(id, &Ident::new(VALUE), (cx.lower)(inner)?))
+		Ok(cx
+			.names
+			.slot_new(id, &Ident::new(VALUE), (cx.lower)(inner)?))
 	}
 }
 
@@ -344,7 +345,10 @@ impl NativeCodegen<JavaScript> for PString {
 	fn generate(&self, ctx: &Ctx) -> Result<Tokens> {
 		let count = ctx.specialization("Count").context("pstring count type")?;
 		let (pinput, poutput) = (&pds(ctx.names, "Input"), &pds(ctx.names, "Output"));
-		let (encode, decode) = (&pds(ctx.names, "utf8_encode"), &pds(ctx.names, "utf8_decode"));
+		let (encode, decode) = (
+			&pds(ctx.names, "utf8_encode"),
+			&pds(ctx.names, "utf8_decode"),
+		);
 		Ok(quote! {
 			$((ctx.args_struct)())
 			export type Ty = string;
@@ -378,7 +382,7 @@ impl NativeCodegen<JavaScript> for Bitfield {
 	fn generate(&self, ctx: &Ctx) -> Result<Tokens> {
 		let entries = bitfield_entries(&ctx.native.body)?;
 		let total: u32 = entries.iter().map(|e| e.size).sum();
-		if total % 8 != 0 {
+		if !total.is_multiple_of(8) {
 			bail!("bitfield does not pack into whole bytes: {total} bits");
 		}
 		let bytes = (total / 8).to_string();

@@ -46,7 +46,11 @@ def(Plain) => container {
 "#;
 
 fn types(reg: &Registry) -> mir::TypeMap {
-	mir::from_hir(&hir::parse_ast(ast::parse(SCHEMA).unwrap(), reg).unwrap(), reg).unwrap()
+	mir::from_hir(
+		&hir::parse_ast(ast::parse(SCHEMA).unwrap(), reg).unwrap(),
+		reg,
+	)
+	.unwrap()
 }
 
 fn registry() -> Registry {
@@ -77,7 +81,10 @@ fn holders_are_move_only() {
 	assert!(holder.contains("pub io: ::bifrostlink::Pipe"), "{holder}");
 	move_only(holder);
 	let pipe = &out[&PathBuf::from("pipe.rs")];
-	assert!(pipe.contains("::bifrostlink::__private::pipe::serialize"), "{pipe}");
+	assert!(
+		pipe.contains("::bifrostlink::__private::pipe::serialize"),
+		"{pipe}"
+	);
 }
 
 #[test]

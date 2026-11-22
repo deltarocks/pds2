@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 use crate::{
 	ast::{Ident, Path},
@@ -121,15 +121,11 @@ impl Visitor for Apply<'_> {
 				TypeKind::Reference(Reference {
 					ty: ReferenceKind::Generic(g),
 					..
-				}) => r
-					.types
-					.get(g)
-					.cloned()
-					.ok_or_else(|| {
-						anyhow!(
-							"argument {n:?} is a {g:?}: bind `{g:?}: <type>` or give it a typed value like `u8(...)`"
-						)
-					})?,
+				}) => r.types.get(g).cloned().ok_or_else(|| {
+					anyhow!(
+						"argument {n:?} is a {g:?}: bind `{g:?}: <type>` or give it a typed value like `u8(...)`"
+					)
+				})?,
 				ty => ty.clone(),
 			};
 			arg_types.push((n.clone(), ty));
@@ -222,8 +218,8 @@ mod tests {
 	use crate::{
 		ast::{FieldRefSegment, Ident},
 		hir::{
-			parse_ast, BodyField, Expr, HirSpecializerCtx, Namespace, NamespaceItem,
-			ReferenceKind, TypeKind, Value,
+			BodyField, Expr, HirSpecializerCtx, Namespace, NamespaceItem, ReferenceKind, TypeKind,
+			Value, parse_ast,
 		},
 		specializer::{AstHir, Registry},
 	};
@@ -288,12 +284,13 @@ mod tests {
 				match item {
 					NamespaceItem::Inner(inner) => walk(inner, out),
 					NamespaceItem::Type(t) => {
-						if let TypeKind::Native(n) = &t.kind {
-							if n.accepts_body.is_none()
-								&& n.specializer.as_ref().is_some_and(|s| s.as_str() == "probe")
-							{
-								out.extend(n.body.iter().cloned());
-							}
+						if let TypeKind::Native(n) = &t.kind
+							&& n.accepts_body.is_none()
+							&& n.specializer
+								.as_ref()
+								.is_some_and(|s| s.as_str() == "probe")
+						{
+							out.extend(n.body.iter().cloned());
 						}
 					}
 				}
@@ -310,8 +307,9 @@ mod tests {
 
 	#[test]
 	fn body_defaults_are_filled_and_refs_captured() {
-		let ns = compile("field(a, at: ../n); field(b, at: 1, size: 3) => u8; flag(c); default => u8;")
-			.unwrap();
+		let ns =
+			compile("field(a, at: ../n); field(b, at: 1, size: 3) => u8; flag(c); default => u8;")
+				.unwrap();
 		let body = probe_body(&ns);
 		let [a, b, c, d] = body.as_slice() else {
 			panic!("unexpected body {body:?}");
@@ -323,7 +321,10 @@ mod tests {
 			panic!("`at` should stay a reference: {a:?}");
 		};
 		assert_eq!(at.up, 0);
-		assert!(matches!(at.path.0.as_slice(), [FieldRefSegment::Arg(_)]), "{at:?}");
+		assert!(
+			matches!(at.path.0.as_slice(), [FieldRefSegment::Arg(_)]),
+			"{at:?}"
+		);
 		assert!(is_u8(a), "default type should be filled: {a:?}");
 
 		assert_eq!(b.constant("size"), Some(&Value::Number(3)));

@@ -1,22 +1,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use genco::lang::{js, rust, JavaScript, Rust};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
+use genco::lang::{JavaScript, Rust, js, rust};
 use genco::prelude::*;
 
 use pds2_core::ast::{self, Ident};
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr};
-use pds2_core::specializer::eval::{int_of, Args, Target, Val};
-use pds2_specializer_bytes::{Encoder, Encoding, Input};
-use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
+use pds2_core::specializer::eval::{Args, Target, Val, int_of};
+use pds2_core::specializer::expr::{Elaborator, ValueModel, describe};
 use pds2_core::specializer::reflect::{list_of, use_of, variant_of};
 use pds2_core::specializer::{
-	construct_vec, pds_io, vec_of_value, visit_specialization, AstHir, BoxCost, Embed,
-	LowerCx, Names, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor, ViewPolicy,
-	into_view_vec, view_vec,
-	VALUE,
+	AstHir, BoxCost, Embed, LowerCx, Names, NativeCodegen, NativeCodegenCtx, NativeLayout,
+	SlotVisitor, VALUE, ViewPolicy, construct_vec, into_view_vec, pds_io, vec_of_value, view_vec,
+	visit_specialization,
 };
+use pds2_specializer_bytes::{Encoder, Encoding, Input};
 use pds2_specializer_protodef::upgrade::{NativeSig, NativeSigVariant, Upgrade, UpgradeCtx};
 
 pub struct EntityMetadataLoop;
@@ -57,7 +56,9 @@ impl NativeCodegen<Rust> for TopBitSetTerminatedArray {
 		true
 	}
 	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
-		let value = ctx.specialization("Value").context("topBitSetTerminatedArray value")?;
+		let value = ctx
+			.specialization("Value")
+			.context("topBitSetTerminatedArray value")?;
 		Ok(Some(into_view_vec(ctx, value)))
 	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
@@ -325,7 +326,10 @@ impl Upgrade for EntityMetadataLoop {
 
 	// https://github.com/PrismarineJS/node-minecraft-protocol/blob/master/src/datatypes/compiler-minecraft.js
 	fn upgrade(&self, data: &[serde_json::Value], ctx: &mut UpgradeCtx) -> Result<Vec<ast::Value>> {
-		ensure!(data.len() == 1, "entityMetadataLoop should have exactly one argument");
+		ensure!(
+			data.len() == 1,
+			"entityMetadataLoop should have exactly one argument"
+		);
 		let obj = data[0]
 			.as_object()
 			.ok_or_else(|| anyhow!("entityMetadataLoop needs an object"))?;
@@ -348,6 +352,7 @@ impl Upgrade for EntityMetadataLoop {
 	}
 }
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct UUID;
 
 impl Upgrade for UUID {
@@ -556,7 +561,10 @@ impl Upgrade for RegistryEntryHolderSet {
 impl Encoder for TopBitSetTerminatedArray {
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let items = list_of(v.c)?;
-		ensure!(!items.is_empty(), "a top-bit terminated array needs at least one item");
+		ensure!(
+			!items.is_empty(),
+			"a top-bit terminated array needs at least one item"
+		);
 		let value = use_of(v.native, VALUE)?;
 		for (i, item) in items.iter().enumerate() {
 			let mut buf = Vec::new();
@@ -578,9 +586,9 @@ impl Encoder for TopBitSetTerminatedArray {
 		let mut items = Vec::new();
 		loop {
 			let mut masked = input.peek().to_vec();
-			let first = masked
-				.first_mut()
-				.ok_or_else(|| anyhow!("byte {}: item {} is missing", input.position(), items.len()))?;
+			let first = masked.first_mut().ok_or_else(|| {
+				anyhow!("byte {}: item {} is missing", input.position(), items.len())
+			})?;
 			let more = *first & 0x80 != 0;
 			*first &= 0x7f;
 			let mut item_input = Input::at(&masked, input.position());
@@ -618,10 +626,17 @@ fn holder_value(
 	body_kind: &str,
 ) -> Result<Construction> {
 	let Expr::Record(given) = value else {
-		bail!("{} is written as `({list_key}: ...)` or `(<field>: ...)`", cx.name(id));
+		bail!(
+			"{} is written as `({list_key}: ...)` or `(<field>: ...)`",
+			cx.name(id)
+		);
 	};
 	let [(key, e)] = given.as_slice() else {
-		bail!("{} value names one representation, got {} fields", cx.name(id), given.len());
+		bail!(
+			"{} value names one representation, got {} fields",
+			cx.name(id),
+			given.len()
+		);
 	};
 	let varint = cx.resolve_name("varint")?;
 	if key.as_str() == list_key {
@@ -708,7 +723,11 @@ impl Encoder for RegistryEntryHolder {
 			}
 			(_, [value]) => {
 				cx.encode_number(varint, 0, out)?;
-				let (_, ty) = v.native.fields.first().ok_or_else(|| anyhow!("no body field"))?;
+				let (_, ty) = v
+					.native
+					.fields
+					.first()
+					.ok_or_else(|| anyhow!("no body field"))?;
 				cx.encode_use(ty, value, &v.scope(), out)
 			}
 			(k, p) => bail!("registryEntryHolder variant {k:?} with {} values", p.len()),
@@ -719,7 +738,11 @@ impl Encoder for RegistryEntryHolder {
 		let n = cx.decode(varint, &Args::new(), input)?;
 		match int_of(&n) {
 			Some(0) => {
-				let (_, ty) = t.native.fields.first().ok_or_else(|| anyhow!("no body field"))?;
+				let (_, ty) = t
+					.native
+					.fields
+					.first()
+					.ok_or_else(|| anyhow!("no body field"))?;
 				let value = cx.decode_use(ty, &t.scope(), input)?;
 				Ok(Construction::Variant(Ident::new("inline"), vec![value]))
 			}
@@ -769,10 +792,17 @@ impl Encoder for RegistryEntryHolderSet {
 			}
 			(_, [value]) => {
 				cx.encode_number(varint, 0, out)?;
-				let (_, ty) = v.native.fields.first().ok_or_else(|| anyhow!("no body field"))?;
+				let (_, ty) = v
+					.native
+					.fields
+					.first()
+					.ok_or_else(|| anyhow!("no body field"))?;
 				cx.encode_use(ty, value, &v.scope(), out)
 			}
-			(k, p) => bail!("registryEntryHolderSet variant {k:?} with {} values", p.len()),
+			(k, p) => bail!(
+				"registryEntryHolderSet variant {k:?} with {} values",
+				p.len()
+			),
 		}
 	}
 	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
@@ -780,7 +810,11 @@ impl Encoder for RegistryEntryHolderSet {
 		let n = cx.decode(varint, &Args::new(), input)?;
 		match cx.count(&n)? {
 			0 => {
-				let (_, ty) = t.native.fields.first().ok_or_else(|| anyhow!("no body field"))?;
+				let (_, ty) = t
+					.native
+					.fields
+					.first()
+					.ok_or_else(|| anyhow!("no body field"))?;
 				let value = cx.decode_use(ty, &t.scope(), input)?;
 				Ok(Construction::Variant(Ident::new("named"), vec![value]))
 			}
@@ -791,7 +825,10 @@ impl Encoder for RegistryEntryHolderSet {
 							.with_context(|| format!("id {i}"))
 					})
 					.collect::<Result<_>>()?;
-				Ok(Construction::Variant(Ident::new("ids"), vec![Expr::List(ids)]))
+				Ok(Construction::Variant(
+					Ident::new("ids"),
+					vec![Expr::List(ids)],
+				))
 			}
 		}
 	}

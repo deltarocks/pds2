@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use genco::{lang::Rust, prelude::*, tokens::FormatInto};
 use std::{
 	cell::RefCell,
@@ -145,7 +145,11 @@ impl Path {
 		}
 	}
 	pub fn segments(&self) -> Vec<Ident> {
-		self.path.iter().chain(iter::once(&self.item)).cloned().collect()
+		self.path
+			.iter()
+			.chain(iter::once(&self.item))
+			.cloned()
+			.collect()
 	}
 	pub fn readable_name(&self) -> String {
 		self.path

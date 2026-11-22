@@ -32,10 +32,7 @@ use std::collections::HashSet;
 
 use crate::{
 	ast::Ident,
-	hir::{
-		Namespace, NamespaceItem, ReferenceKind, Type,
-		TypeKind,
-	},
+	hir::{Namespace, NamespaceItem, ReferenceKind, Type, TypeKind},
 };
 
 impl TypeKind {
@@ -51,10 +48,10 @@ impl TypeKind {
 					// Try to resolve generic
 					{
 						let p = r.ty.path().unwrap();
-						if let Some(p) = p.simple_name() {
-							if generics.contains(&p) {
-								r.ty = ReferenceKind::Generic(p);
-							}
+						if let Some(p) = p.simple_name()
+							&& generics.contains(&p)
+						{
+							r.ty = ReferenceKind::Generic(p);
 						}
 					}
 					// Try to resolve absolute path
@@ -89,17 +86,11 @@ impl TypeKind {
 
 impl Type {
 	fn rewrite_paths_to_absolute(&mut self, current_ns: &[Ident], paths: &HashSet<Vec<Ident>>) {
-		let generics = self
-			.types
-			.iter()
-			.map(|(n, _)| n.clone())
-			.collect::<HashSet<_>>();
-		for (_, t) in self.types.iter_mut() {
-			if let Some(t) = t {
-				t.rewrite_paths_to_absolute(current_ns, &generics, paths);
-			}
+		let generics = self.types.keys().cloned().collect::<HashSet<_>>();
+		for t in self.types.values_mut().flatten() {
+			t.rewrite_paths_to_absolute(current_ns, &generics, paths);
 		}
-		for (_, t) in self.param_types.iter_mut() {
+		for t in self.param_types.values_mut() {
 			t.rewrite_paths_to_absolute(current_ns, &generics, paths);
 		}
 		self.kind
@@ -108,7 +99,11 @@ impl Type {
 }
 
 impl Namespace {
-	pub(super) fn discover_paths(&self, current_ns: &mut Vec<Ident>, paths: &mut HashSet<Vec<Ident>>) {
+	pub(super) fn discover_paths(
+		&self,
+		current_ns: &mut Vec<Ident>,
+		paths: &mut HashSet<Vec<Ident>>,
+	) {
 		for (name, item) in self.items.iter() {
 			match item {
 				NamespaceItem::Inner(ns) => {

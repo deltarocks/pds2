@@ -1,7 +1,5 @@
 use std::{cell::Cell, fmt, rc::Rc};
 
-use crate::ast::Ident;
-
 #[derive(Clone)]
 pub struct NameIdGenerator {
 	id: Rc<Cell<u64>>,
@@ -39,6 +37,12 @@ impl IdGenerator {
 	pub fn next_pending(&self) -> PendingTypeId {
 		let id = self.next();
 		PendingTypeId(id)
+	}
+}
+
+impl Default for IdGenerator {
+	fn default() -> Self {
+		Self::new()
 	}
 }
 

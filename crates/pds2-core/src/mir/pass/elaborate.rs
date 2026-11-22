@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use crate::ast::Ident;
 use crate::hir::TypeId;
 use crate::mir::{Definition, Expr, Type, TypeKind, TypeMap};
-use crate::specializer::{expr::Elaborator, Registry};
+use crate::specializer::{Registry, expr::Elaborator};
 
 impl Definition {
 	pub fn exprs(&self) -> Vec<&Expr> {
@@ -72,7 +72,11 @@ fn expected(types: &TypeMap, def: &Definition) -> Vec<Option<TypeId>> {
 			{
 				out.extend(use_args(u));
 			}
-			out.extend(n.ref_args.iter().map(|(name, _)| declared(&n.arg_types, name)));
+			out.extend(
+				n.ref_args
+					.iter()
+					.map(|(name, _)| declared(&n.arg_types, name)),
+			);
 			for item in &n.body {
 				out.extend(item.args.iter().map(|_| None));
 			}

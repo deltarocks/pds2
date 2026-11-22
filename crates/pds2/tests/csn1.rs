@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use pds2_core::mir::{self, TypeMap};
 
@@ -37,22 +37,31 @@ fn choices_must_tell_their_arms_apart() {
 
 #[test]
 fn decoding_bits_rejects_whole_octets_left_over() {
-	let e = err(r#"def(x) => const(value: rr::Si3RestOctets(deserialized_bits(b"\x2b\x2b\x2b\x2b\x00")));"#);
+	let e = err(
+		r#"def(x) => const(value: rr::Si3RestOctets(deserialized_bits(b"\x2b\x2b\x2b\x2b\x00")));"#,
+	);
 	assert!(e.contains("8 bits are left"), "{e}");
 }
 
 #[test]
 fn values_must_fit_their_bits() {
 	let value = SYNTHETIC.replace("ITEM", "16");
-	let e = err(&format!("def(x) => const(value: Synthetic(deserialized_bits(serialized_bits({value}))));"));
+	let e = err(&format!(
+		"def(x) => const(value: Synthetic(deserialized_bits(serialized_bits({value}))));"
+	));
 	assert!(e.contains("doesn't fit the 4 bits"), "{e}");
 	let value = SYNTHETIC.replace("ITEM", "15");
-	compile(&format!("def(x) => const(value: Synthetic(deserialized_bits(serialized_bits({value}))));")).unwrap();
+	compile(&format!(
+		"def(x) => const(value: Synthetic(deserialized_bits(serialized_bits({value}))));"
+	))
+	.unwrap();
 }
 
 #[test]
 fn byte_functions_refuse_bit_encodings() {
 	let value = SYNTHETIC.replace("ITEM", "1");
-	let e = err(&format!("@scalar bytes def_native(octets); def(x) => const(value: octets(serialized({value})));"));
+	let e = err(&format!(
+		"@scalar bytes def_native(octets); def(x) => const(value: octets(serialized({value})));"
+	));
 	assert!(e.contains("doesn't write bytes"), "{e}");
 }

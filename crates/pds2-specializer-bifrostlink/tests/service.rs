@@ -70,9 +70,16 @@ fn lowers_to_request_and_response_types() {
 		"root::remowt::Pty::resize::Request",
 		"root::remowt::Pty::exited::Request",
 	] {
-		assert!(names.iter().any(|n| n == expected), "{expected} missing from {names:?}");
+		assert!(
+			names.iter().any(|n| n == expected),
+			"{expected} missing from {names:?}"
+		);
 	}
-	assert!(!names.iter().any(|n| n == "root::remowt::Pty::resize::Response"));
+	assert!(
+		!names
+			.iter()
+			.any(|n| n == "root::remowt::Pty::resize::Response")
+	);
 }
 
 #[test]
@@ -103,7 +110,10 @@ fn generates_server_and_client() {
 #[test]
 fn method_needs_id() {
 	let e = err("service(S) { request(a) { field(x) => u8; }; };");
-	assert!(e.contains("`request a` needs an explicit `id: <number>`"), "{e}");
+	assert!(
+		e.contains("`request a` needs an explicit `id: <number>`"),
+		"{e}"
+	);
 }
 
 #[test]
@@ -132,8 +142,13 @@ fn flags_belong_to_their_kind() {
 
 #[test]
 fn lowered_names_are_not_shadowed() {
-	let e = err("def(Request) => container { field(x) => u8; }; service(S) { request(a, id: 1) { field(x) => Request; }; };");
-	assert!(e.contains("would refer to the method's own lowered type"), "{e}");
+	let e = err(
+		"def(Request) => container { field(x) => u8; }; service(S) { request(a, id: 1) { field(x) => Request; }; };",
+	);
+	assert!(
+		e.contains("would refer to the method's own lowered type"),
+		"{e}"
+	);
 }
 
 #[test]
@@ -166,11 +181,15 @@ fn service_ids_are_unique() {
 	let (a, b) = (0u32..)
 		.find_map(|n| {
 			let name = format!("S{n}");
-			seen.insert(service_id(&name), name.clone()).map(|other| (other, name))
+			seen.insert(service_id(&name), name.clone())
+				.map(|other| (other, name))
 		})
 		.unwrap();
 	let e = err(&format!(
 		"service({a}) {{ notification(x, id: 0) {{}}; }}; service({b}) {{ notification(x, id: 0) {{}}; }};"
 	));
-	assert!(e.contains(&format!("services {a} and {b} have the same id")), "{e}");
+	assert!(
+		e.contains(&format!("services {a} and {b} have the same id")),
+		"{e}"
+	);
 }

@@ -1,18 +1,18 @@
 [package]
 name = "pds2-core"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
 description = "PDS2 compiler"
-license = "MIT"
 
 [dependencies]
-anyhow = "1.0"
-bitflags = "2.5.0"
-dprint-core = "0.70.0"
-genco = "0.20"
-heck = "0.5"
-peg = "0.8.2"
-tracing = "0.1.44"
+anyhow.workspace = true
+bitflags.workspace = true
+dprint-core.workspace = true
+genco.workspace = true
+heck.workspace = true
+peg.workspace = true
+tracing.workspace = true
 
 [features]
 trace = ["peg/trace"]

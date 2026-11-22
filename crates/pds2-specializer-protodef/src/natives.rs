@@ -1,27 +1,27 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use genco::lang::{rust, Rust};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
+use genco::lang::{Rust, rust};
 use genco::prelude::*;
 
 use pds2_core::ast::{self, Ident, Statement};
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, Value};
-use pds2_core::specializer::eval::{int_of, Args, Target, Val};
-use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
+use pds2_core::specializer::eval::{Args, Target, Val, int_of};
+use pds2_core::specializer::expr::{Elaborator, ValueModel, describe};
 use pds2_core::specializer::reflect::{
 	self, bytes_of, count_arg, list_of, record_fields, record_of, use_of, variant_name,
+};
+use pds2_core::specializer::{
+	AstHir, BoxCost, Embed, LowerCx, Members, Names, NativeCodegen, NativeCodegenCtx, NativeLayout,
+	SlotVisitor, VALUE, ViewPolicy, byte_scalar, construct_vec, into_view_vec, list_value,
+	param_ty, pds_io, specialization_use, vec_of_value, view_vec, visit_fields,
+	visit_specialization,
 };
 use pds2_specializer_bytes::reflect::{
 	decode_bytes, decode_count, decode_items, encode_bytes, encode_items,
 };
 use pds2_specializer_bytes::{Encoder, Encoding, Input};
-use pds2_core::specializer::{
-	construct_vec, list_value, param_ty, pds_io, specialization_use, vec_of_value, visit_fields,
-	visit_specialization, AstHir, BoxCost, Embed, LowerCx, Members, Names, NativeCodegen,
-	NativeCodegenCtx, NativeLayout, SlotVisitor, ViewPolicy, byte_scalar, into_view_vec, view_vec,
-	VALUE,
-};
 
 fn field_members(native: &mir::NativeType) -> Members {
 	Members {
@@ -134,7 +134,7 @@ impl NativeCodegen<Rust> for Bitfield {
 		let entries = bitfield_entries(&ctx.native.body)?;
 		let total: u32 = entries.iter().map(|e| e.size).sum();
 		ensure!(
-			total % 8 == 0,
+			total.is_multiple_of(8),
 			"bitfield does not pack into whole bytes: {total} bits"
 		);
 		let bytes = total / 8;
@@ -409,7 +409,10 @@ impl ValueModel for Array {
 			.iter()
 			.find(|(n, _)| n == name)
 			.ok_or_else(|| anyhow!("{} has no virtual field {name:?}", cx.name(v.id)))?;
-		ensure!(name.as_str() == "size", "unknown array virtual field {name:?}");
+		ensure!(
+			name.as_str() == "size",
+			"unknown array virtual field {name:?}"
+		);
 		cx.number(ty.target, list_of(v.c)?.len() as i128)
 	}
 }
@@ -470,7 +473,9 @@ impl NativeCodegen<Rust> for Array {
 			n => Some(quote!(input.expect(count.saturating_mul($(n.to_string())))?;)),
 		};
 		let read_items = &match bytes {
-			Some("i8") => quote!(input.bytes(count).map($(rust::import("crate::pds::view", "as_i8")))),
+			Some("i8") => {
+				quote!(input.bytes(count).map($(rust::import("crate::pds::view", "as_i8"))))
+			}
 			Some(_) => quote!(input.bytes(count)),
 			None => quote! {
 				$expect
@@ -663,7 +668,10 @@ impl ValueModel for MapP {
 		value: &mir::Expr,
 	) -> Result<mir::Construction> {
 		let mir::Expr::List(entries) = value else {
-			bail!("{} is written as a list `[(key: ..., value: ...), ...]`", cx.name(id));
+			bail!(
+				"{} is written as a list `[(key: ..., value: ...), ...]`",
+				cx.name(id)
+			);
 		};
 		let key = use_of(native, KEY)?.target;
 		let value = use_of(native, VALUE)?.target;
@@ -683,8 +691,10 @@ impl ValueModel for MapP {
 				};
 				ensure!(fields.len() == 2, "entry {i} has only `key` and `value`");
 				Ok(mir::Expr::List(vec![
-					cx.coerce(field("key")?, key).with_context(|| format!("entry {i} key"))?,
-					cx.coerce(field("value")?, value).with_context(|| format!("entry {i} value"))?,
+					cx.coerce(field("key")?, key)
+						.with_context(|| format!("entry {i} key"))?,
+					cx.coerce(field("value")?, value)
+						.with_context(|| format!("entry {i} value"))?,
 				]))
 			})
 			.collect::<Result<_>>()?;
@@ -701,7 +711,9 @@ impl NativeCodegen<Rust> for MapP {
 	) -> Option<rust::Tokens> {
 		let key = specialization_use(native, KEY)?.target;
 		let value = specialization_use(native, VALUE)?.target;
-		Some(quote!($(rust::import("std::collections", "BTreeMap"))<$(names.ty(key)), $(names.ty(value))>))
+		Some(
+			quote!($(rust::import("std::collections", "BTreeMap"))<$(names.ty(key)), $(names.ty(value))>),
+		)
 	}
 	fn construct(
 		&self,
@@ -714,7 +726,9 @@ impl NativeCodegen<Rust> for MapP {
 			.into_iter()
 			.map(|(k, v)| Ok(quote!(($((cx.lower)(k)?), $((cx.lower)(v)?)))))
 			.collect::<Result<Vec<_>>>()?;
-		Ok(quote!($(rust::import("std::collections", "BTreeMap"))::from([$(for p in pairs join(, ) => $p)])))
+		Ok(
+			quote!($(rust::import("std::collections", "BTreeMap"))::from([$(for p in pairs join(, ) => $p)])),
+		)
 	}
 	fn view_take(&self) -> bool {
 		true
@@ -779,7 +793,11 @@ impl NativeCodegen<Rust> for MapP {
 
 impl AstHir for MapP {
 	fn fields(&self, ctx: &HirSpecializerCtx) -> Result<Vec<(Ident, hir::TypeKind)>> {
-		ensure!(ctx.body.is_empty(), "map does not accept a body, got {:?}", ctx.body);
+		ensure!(
+			ctx.body.is_empty(),
+			"map does not accept a body, got {:?}",
+			ctx.body
+		);
 		ensure!(
 			ctx.types.contains_key(&Ident::new("Count")),
 			"map needs a `Count:` type binding"
@@ -842,11 +860,18 @@ pub fn sized_count<'a>(types: &mir::TypeMap, ty: &'a mir::Type) -> Option<&'a Ex
 	let mir::TypeKind::Native(n) = &types.0.get(&ty.target)?.kind else {
 		return None;
 	};
-	match n.specializer.as_ref().map(|(s, v)| (s.as_str(), v.as_str())) {
+	match n
+		.specializer
+		.as_ref()
+		.map(|(s, v)| (s.as_str(), v.as_str()))
+	{
 		Some(("buffer" | "array", "sized")) => {}
 		_ => return None,
 	}
-	ty.args.iter().find(|(n, _)| n.as_str() == "count").map(|(_, e)| e)
+	ty.args
+		.iter()
+		.find(|(n, _)| n.as_str() == "count")
+		.map(|(_, e)| e)
 }
 
 pub fn is_constant(e: &Expr) -> bool {
@@ -1063,7 +1088,10 @@ impl NativeCodegen<Rust> for OptionP {
 	}
 	fn into_view(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<Option<rust::Tokens>> {
 		let value = ctx.specialization("Value").context("option value type")?;
-		let inner = ctx.slot_new(&Ident::new(VALUE), quote!($(ctx.names.into_view_fn(value))(v)));
+		let inner = ctx.slot_new(
+			&Ident::new(VALUE),
+			quote!($(ctx.names.into_view_fn(value))(v)),
+		);
 		Ok(Some(ctx.into_view_fn(quote!(_0.as_mut().map(|v| $inner)))))
 	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
@@ -1120,7 +1148,9 @@ impl NativeCodegen<Rust> for OptionP {
 		let mir::Construction::Wrap(inner) = c else {
 			return Ok(quote!(None));
 		};
-		let value = cx.names.slot_new(id, &Ident::new(VALUE), (cx.lower)(inner)?);
+		let value = cx
+			.names
+			.slot_new(id, &Ident::new(VALUE), (cx.lower)(inner)?);
 		Ok(quote!(Some($value)))
 	}
 }
@@ -1133,13 +1163,16 @@ impl ValueModel for OptionP {
 		native: &mir::NativeType,
 		value: &mir::Expr,
 	) -> Result<mir::Construction> {
-		if matches!(value, mir::Expr::Const(mir::Value::UnionDescriminator(n)) if n.as_str() == "none") {
+		if matches!(value, mir::Expr::Const(mir::Value::UnionDescriminator(n)) if n.as_str() == "none")
+		{
 			return Ok(mir::Construction::Variant(Ident::new("none"), vec![]));
 		}
 		let inner = specialization_use(native, VALUE)
 			.ok_or_else(|| anyhow!("option without a value type"))?
 			.target;
-		Ok(mir::Construction::Wrap(Box::new(cx.coerce(value.clone(), inner)?)))
+		Ok(mir::Construction::Wrap(Box::new(
+			cx.coerce(value.clone(), inner)?,
+		)))
 	}
 }
 
@@ -1340,13 +1373,17 @@ impl ValueModel for Bitfield {
 
 impl Encoder for Bitfield {
 	fn min_size(&self, _cx: &Encoding, _id: TypeId, native: &mir::NativeType) -> usize {
-		bitfield_entries(&native.body).map_or(0, |e| (e.iter().map(|e| e.size).sum::<u32>() / 8) as usize)
+		bitfield_entries(&native.body)
+			.map_or(0, |e| (e.iter().map(|e| e.size).sum::<u32>() / 8) as usize)
 	}
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let entries = bitfield_entries(&v.native.body)?;
 		let given = record_of(v.c)?;
 		let total: u32 = entries.iter().map(|e| e.size).sum();
-		ensure!(total % 8 == 0, "bitfield does not pack into whole bytes: {total} bits");
+		ensure!(
+			total.is_multiple_of(8),
+			"bitfield does not pack into whole bytes: {total} bits"
+		);
 		let mut acc: u128 = 0;
 		for e in &entries {
 			let (_, value) = given
@@ -1359,16 +1396,27 @@ impl Encoder for Bitfield {
 			} else {
 				0..=(1i128 << e.size) - 1
 			};
-			ensure!(range.contains(&n), "{:?} = {n} does not fit {} bits", e.name, e.size);
+			ensure!(
+				range.contains(&n),
+				"{:?} = {n} does not fit {} bits",
+				e.name,
+				e.size
+			);
 			acc = (acc << e.size) | ((n as u128) & ((1u128 << e.size) - 1));
 		}
-		let bytes: Vec<u8> = (0..total / 8).rev().map(|i| (acc >> (i * 8)) as u8).collect();
+		let bytes: Vec<u8> = (0..total / 8)
+			.rev()
+			.map(|i| (acc >> (i * 8)) as u8)
+			.collect();
 		encode_bytes(cx, &bytes, out)
 	}
 	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
 		let entries = bitfield_entries(&t.native.body)?;
 		let total: u32 = entries.iter().map(|e| e.size).sum();
-		ensure!(total % 8 == 0, "bitfield does not pack into whole bytes: {total} bits");
+		ensure!(
+			total.is_multiple_of(8),
+			"bitfield does not pack into whole bytes: {total} bits"
+		);
 		let acc = decode_bytes(cx, (total / 8) as usize, input)?
 			.into_iter()
 			.fold(0u128, |acc, b| (acc << 8) | u128::from(b));
@@ -1403,7 +1451,10 @@ impl ValueModel for Bitflags {
 		value: &Expr,
 	) -> Result<Construction> {
 		let Expr::List(items) = value else {
-			bail!("{} is written as a list of set flags `[flag, ...]`", cx.name(id));
+			bail!(
+				"{} is written as a list of set flags `[flag, ...]`",
+				cx.name(id)
+			);
 		};
 		let mut set = BTreeSet::new();
 		for item in items {
@@ -1475,7 +1526,9 @@ impl Encoder for Bitflags {
 			.iter()
 			.enumerate()
 			.map(|(i, (name, ty))| {
-				let on = cx.elab.build(ty.target, &Expr::Const(Value::Bool(n >> i & 1 == 1)))?;
+				let on = cx
+					.elab
+					.build(ty.target, &Expr::Const(Value::Bool(n >> i & 1 == 1)))?;
 				Ok((name.clone(), on))
 			})
 			.collect::<Result<_>>()?;
@@ -1496,7 +1549,11 @@ impl ValueModel for Buffer {
 			Expr::Const(Value::String(s)) => {
 				Ok(Construction::Literal(Value::Bytes(s.as_bytes().to_vec())))
 			}
-			v => bail!("{} is written as bytes `b\"...\"`, got {}", cx.name(id), describe(v)),
+			v => bail!(
+				"{} is written as bytes `b\"...\"`, got {}",
+				cx.name(id),
+				describe(v)
+			),
 		}
 	}
 	fn virtual_field(&self, cx: &Elaborator, v: &Val, name: &Ident) -> Result<Expr> {
@@ -1506,7 +1563,10 @@ impl ValueModel for Buffer {
 			.iter()
 			.find(|(n, _)| n == name)
 			.ok_or_else(|| anyhow!("{} has no virtual field {name:?}", cx.name(v.id)))?;
-		ensure!(name.as_str() == "size", "unknown buffer virtual field {name:?}");
+		ensure!(
+			name.as_str() == "size",
+			"unknown buffer virtual field {name:?}"
+		);
 		cx.number(ty.target, bytes_of(v.c)?.len() as i128)
 	}
 }
@@ -1528,7 +1588,9 @@ impl Encoder for Buffer {
 	}
 	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
 		let n = decode_count(cx, t, input)?;
-		Ok(Construction::Literal(Value::Bytes(decode_bytes(cx, n, input)?)))
+		Ok(Construction::Literal(Value::Bytes(decode_bytes(
+			cx, n, input,
+		)?)))
 	}
 }
 
@@ -1545,7 +1607,11 @@ impl ValueModel for PString {
 			Expr::Const(Value::UnionDescriminator(s)) => {
 				Ok(Construction::Literal(Value::String(s.as_str().to_owned())))
 			}
-			v => bail!("{} is written as a string, got {}", cx.name(id), describe(v)),
+			v => bail!(
+				"{} is written as a string, got {}",
+				cx.name(id),
+				describe(v)
+			),
 		}
 	}
 }
@@ -1558,14 +1624,16 @@ impl Encoder for PString {
 		let bytes = bytes_of(v.c)?;
 		let count = use_of(v.native, "Count")?;
 		let n = cx.number(count.target, bytes.len() as i128)?;
-		cx.encode_use(count, &n, &v.scope(), out).context("length")?;
+		cx.encode_use(count, &n, &v.scope(), out)
+			.context("length")?;
 		encode_bytes(cx, bytes, out)
 	}
 	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
 		let count = use_of(t.native, "Count")?;
 		let n = cx.decode_use(count, &t.scope(), input).context("length")?;
 		let bytes = decode_bytes(cx, cx.count(&n).context("length")?, input)?;
-		let s = String::from_utf8(bytes).map_err(|e| anyhow!("{} is not UTF-8: {e}", cx.name(t.id)))?;
+		let s =
+			String::from_utf8(bytes).map_err(|e| anyhow!("{} is not UTF-8: {e}", cx.name(t.id)))?;
 		Ok(Construction::Literal(Value::String(s)))
 	}
 }

@@ -1,18 +1,18 @@
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use genco::lang::{js, rust, JavaScript, Rust};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
+use genco::lang::{JavaScript, Rust, js, rust};
 use genco::prelude::*;
 
-use pds2_core::specializer::eval::{int_of, Target, Val};
-use pds2_specializer_bytes::{Encoder, Encoding, Input};
-use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
-use pds2_core::specializer::{
-	specialization_use, AstHir, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx,
-	NativeLayout, SlotVisitor,
-};
 use pds2_core::ast::Ident;
 use pds2_core::generator::common::scalar_of;
 use pds2_core::hir::{self, HirSpecializerCtx, TypeId};
 use pds2_core::mir::{self, Construction, Expr, Value};
+use pds2_core::specializer::eval::{Target, Val, int_of};
+use pds2_core::specializer::expr::{Elaborator, ValueModel, describe};
+use pds2_core::specializer::{
+	AstHir, Embed, LowerCx, Members, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor,
+	specialization_use,
+};
+use pds2_specializer_bytes::{Encoder, Encoding, Input};
 
 pub struct Enum;
 
@@ -125,20 +125,28 @@ impl ValueModel for Enum {
 			Expr::Const(Value::UnionDescriminator(name)) => {
 				let (v, _) = e.values.iter().find(|(v, _)| *v == name).ok_or_else(|| {
 					let known: Vec<&str> = e.values.iter().map(|(v, _)| v.as_str()).collect();
-					anyhow!("{} has no value {name:?}, expected one of {known:?}", cx.name(id))
+					anyhow!(
+						"{} has no value {name:?}, expected one of {known:?}",
+						cx.name(id)
+					)
 				})?;
 				Ok(Construction::Variant((*v).clone(), vec![]))
 			}
 			Expr::Const(_) => {
-				let n = int_of(value)
-					.ok_or_else(|| anyhow!("{} can't be written as {}", cx.name(id), describe(value)))?;
+				let n = int_of(value).ok_or_else(|| {
+					anyhow!("{} can't be written as {}", cx.name(id), describe(value))
+				})?;
 				if let Some((v, _)) = e.values.iter().find(|(_, m)| *m == n) {
 					return Ok(Construction::Variant((*v).clone(), vec![]));
 				}
 				let tag = cx.build(e.tag.target, value)?;
 				Ok(Construction::Variant(e.unknown.clone(), vec![tag]))
 			}
-			v => bail!("{} is written as a value name or number, got {}", cx.name(id), describe(v)),
+			v => bail!(
+				"{} is written as a value name or number, got {}",
+				cx.name(id),
+				describe(v)
+			),
 		}
 	}
 	fn casts(&self, _cx: &Elaborator, _id: TypeId, native: &mir::NativeType) -> Vec<TypeId> {
@@ -179,12 +187,16 @@ impl Encoder for Enum {
 	fn encode(&self, cx: &Encoding, v: &Val, out: &mut Vec<u8>) -> Result<()> {
 		let e = view_of(v.native)?;
 		let n = number_of(cx.elab, &e, v.c)?;
-		cx.encode_use(e.tag, &n, &v.scope(), out).context("enum number")
+		cx.encode_use(e.tag, &n, &v.scope(), out)
+			.context("enum number")
 	}
 	fn decode(&self, cx: &Encoding, t: &Target, input: &mut Input) -> Result<Construction> {
 		let e = view_of(t.native)?;
-		let tag = cx.decode_use(e.tag, &t.scope(), input).context("enum number")?;
-		let n = int_of(&tag).ok_or_else(|| anyhow!("enum number {} is not a number", describe(&tag)))?;
+		let tag = cx
+			.decode_use(e.tag, &t.scope(), input)
+			.context("enum number")?;
+		let n = int_of(&tag)
+			.ok_or_else(|| anyhow!("enum number {} is not a number", describe(&tag)))?;
 		Ok(match e.values.iter().find(|(_, m)| *m == n) {
 			Some((v, _)) => Construction::Variant((*v).clone(), vec![]),
 			None => Construction::Variant(e.unknown.clone(), vec![tag]),
@@ -200,7 +212,9 @@ fn literals<L: Lang>(ctx: &NativeCodegenCtx<L>, e: &EnumView) -> Result<Vec<Toke
 	e.values
 		.iter()
 		.map(|(_, n)| {
-			let lit = ctx.elab.build(e.tag.target, &Expr::Const(Value::Signed(*n)))?;
+			let lit = ctx
+				.elab
+				.build(e.tag.target, &Expr::Const(Value::Signed(*n)))?;
 			(ctx.lower)(&lit, false)
 		})
 		.collect()

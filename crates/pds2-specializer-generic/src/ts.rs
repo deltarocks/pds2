@@ -4,10 +4,12 @@ use genco::prelude::*;
 
 use pds2_core::hir::TypeId;
 use pds2_core::mir;
-use pds2_core::specializer::ts::{array_ty, construct_array, from_list, pds, value_of, Ctx, Tokens};
+use pds2_core::specializer::ts::{
+	Ctx, Tokens, array_ty, construct_array, from_list, pds, value_of,
+};
 use pds2_core::specializer::{LowerCx, Names, NativeCodegen, Scalar, VALUE};
 
-use crate::terminated::{terminator, Terminated};
+use crate::terminated::{Terminated, terminator};
 
 impl NativeCodegen<JavaScript> for Terminated {
 	fn inline_ty(

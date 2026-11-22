@@ -1,12 +1,12 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use genco::lang::rust;
 
 use crate::ast::{Attributes, Block, Ident, Item, ParseValue, Value};
-use crate::generator::rust::DefinitionRustCtx;
 use crate::generator::GeneratorOutput;
+use crate::generator::rust::DefinitionRustCtx;
 use crate::mir;
 use crate::specializer::Registry;
 
@@ -184,14 +184,21 @@ mod tests {
 			let mut statements = Vec::new();
 			for suffix in ["a", "b"] {
 				let def = Item::simple_builder("def")
-					.argsb(ast::ItemArgs::builder().arg(Value::new_simple_item(format!("{name}_{suffix}").as_str())))
+					.argsb(
+						ast::ItemArgs::builder()
+							.arg(Value::new_simple_item(format!("{name}_{suffix}").as_str())),
+					)
 					.block(ast::Block {
-						statements: vec![ast::Statement::simple(vec![Value::new_simple_item("export")])],
+						statements: vec![ast::Statement::simple(vec![Value::new_simple_item(
+							"export",
+						)])],
 						..Default::default()
 					})
 					.build();
 				statements.push(ast::Statement::simple(
-					std::iter::once(Value::Item(def)).chain(chain.iter().cloned()).collect(),
+					std::iter::once(Value::Item(def))
+						.chain(chain.iter().cloned())
+						.collect(),
 				));
 			}
 			Ok(Lowered {
@@ -218,7 +225,13 @@ mod tests {
 
 	struct Nest;
 	impl Definition for Nest {
-		fn lower(&self, _: Attributes, item: Item, chain: Vec<Value>, _: &LowerCtx) -> Result<Lowered> {
+		fn lower(
+			&self,
+			_: Attributes,
+			item: Item,
+			chain: Vec<Value>,
+			_: &LowerCtx,
+		) -> Result<Lowered> {
 			Ok(Lowered {
 				statements: vec![ast::Statement::simple(
 					std::iter::once(Value::Item(item)).chain(chain).collect(),
@@ -226,7 +239,11 @@ mod tests {
 				data: Box::new(()),
 			})
 		}
-		fn generate_rust(&self, _: &[&DefinitionUse], _: &DefinitionRustCtx) -> Result<Vec<ExtraModule>> {
+		fn generate_rust(
+			&self,
+			_: &[&DefinitionUse],
+			_: &DefinitionRustCtx,
+		) -> Result<Vec<ExtraModule>> {
 			Ok(vec![])
 		}
 	}
@@ -265,7 +282,10 @@ mod tests {
 		let reg = registry();
 		let block = ast::parse("bogus(x);").unwrap();
 		let err = format!("{:#}", super::lower(block, &reg).err().unwrap());
-		assert!(err.contains("unknown top level statement `bogus` (registered definitions: pair)"), "{err}");
+		assert!(
+			err.contains("unknown top level statement `bogus` (registered definitions: pair)"),
+			"{err}"
+		);
 	}
 
 	#[test]

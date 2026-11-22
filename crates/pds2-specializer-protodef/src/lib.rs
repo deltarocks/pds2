@@ -12,7 +12,7 @@ mod upgraders;
 use container::Container;
 use natives::{Array, Bitfield, Bitflags, Buffer, MapP, OptionP, PString};
 use union::Union;
-pub use upgrade::{upgrade, Upgrade, UpgradeRegistry};
+pub use upgrade::{Upgrade, UpgradeRegistry, upgrade};
 use upgraders::*;
 
 pub fn register(reg: &mut Registry) {

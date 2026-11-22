@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail};
 
-use super::expr::{describe, value_eq, Elaborator, ValueModel};
 use super::Scalar;
+use super::expr::{Elaborator, ValueModel, describe, value_eq};
 use crate::ast::{FieldRefSegment, Ident};
 use crate::generator::common::scalar_of;
 use crate::hir::TypeId;
@@ -72,9 +72,8 @@ pub fn int_of(e: &Expr) -> Option<i128> {
 
 pub fn float_of(e: &Expr) -> Option<f64> {
 	match e {
-		Expr::Construct(_, Construction::Literal(Value::Float(f))) | Expr::Const(Value::Float(f)) => {
-			Some(*f)
-		}
+		Expr::Construct(_, Construction::Literal(Value::Float(f)))
+		| Expr::Const(Value::Float(f)) => Some(*f),
 		e => int_of(e).map(|n| n as f64),
 	}
 }
@@ -97,11 +96,7 @@ pub fn wrap(n: i128, s: Scalar) -> i128 {
 	let Some(bits) = width(s) else { return n };
 	let m = 1i128 << bits;
 	let u = n.rem_euclid(m);
-	if signed(s) && u >= m / 2 {
-		u - m
-	} else {
-		u
-	}
+	if signed(s) && u >= m / 2 { u - m } else { u }
 }
 
 pub fn bits_of(n: i128, bits: u32) -> u64 {
@@ -118,7 +113,8 @@ pub fn const_eq(a: &Expr, b: &Expr) -> bool {
 			(Construction::Wrap(a), Construction::Wrap(b)) => const_eq(a, b),
 			(Construction::Record(f), Construction::Record(g)) => {
 				f.len() == g.len()
-					&& f.iter().all(|(n, a)| g.iter().any(|(m, b)| n == m && const_eq(a, b)))
+					&& f.iter()
+						.all(|(n, a)| g.iter().any(|(m, b)| n == m && const_eq(a, b)))
 			}
 			(Construction::List(p), Construction::List(q)) => {
 				p.len() == q.len() && p.iter().zip(q).all(|(a, b)| const_eq(a, b))
@@ -204,7 +200,13 @@ impl<'a> Elaborator<'a> {
 		}
 	}
 
-	fn virtual_field(&self, id: TypeId, c: &Construction, args: &Args, name: &Ident) -> Result<Expr> {
+	fn virtual_field(
+		&self,
+		id: TypeId,
+		c: &Construction,
+		args: &Args,
+		name: &Ident,
+	) -> Result<Expr> {
 		match self.value_of(id, c, args)? {
 			(v, Some(model)) => model.virtual_field(self, &v, name),
 			_ => bail!("{} has no virtual field {name:?}", self.name(id)),
@@ -253,7 +255,12 @@ impl<'a> Elaborator<'a> {
 					.cloned()
 					.ok_or_else(|| anyhow!("argument {name:?} is not bound"))?,
 				FieldRefSegment::Down { to, .. } => {
-					match scope.fields.iter().find(|(n, _)| n == to).filter(|_| cur.is_none()) {
+					match scope
+						.fields
+						.iter()
+						.find(|(n, _)| n == to)
+						.filter(|_| cur.is_none())
+					{
 						Some((_, e)) => e.clone(),
 						None => {
 							let (id, c, root) = base(&cur)?;
@@ -339,7 +346,9 @@ impl<'a> Elaborator<'a> {
 				.map(|(_, e)| e.clone())
 				.ok_or_else(|| anyhow!("{n:?} is not bound"))?,
 			Expr::Field(f) => self.path(f, scope)?,
-			Expr::Binary(op, a, b) => self.arith(*op, self.eval(a, scope)?, self.eval(b, scope)?)?,
+			Expr::Binary(op, a, b) => {
+				self.arith(*op, self.eval(a, scope)?, self.eval(b, scope)?)?
+			}
 			Expr::Cast(e, to) => self.cast_value(self.eval(e, scope)?, *to)?,
 			Expr::Typed(e, ty) => self.coerce(self.eval(e, scope)?, *ty)?,
 			Expr::Eq(a, b) => {
@@ -354,9 +363,8 @@ impl<'a> Elaborator<'a> {
 
 	pub fn truthy(&self, e: &Expr, scope: &Scope) -> Result<bool> {
 		match self.eval(e, scope)? {
-			Expr::Const(Value::Bool(b)) | Expr::Construct(_, Construction::Literal(Value::Bool(b))) => {
-				Ok(b)
-			}
+			Expr::Const(Value::Bool(b))
+			| Expr::Construct(_, Construction::Literal(Value::Bool(b))) => Ok(b),
 			e => bail!("{} is not a condition", describe(&e)),
 		}
 	}

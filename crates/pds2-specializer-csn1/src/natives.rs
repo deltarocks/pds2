@@ -1,21 +1,21 @@
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
-use genco::lang::{rust, Rust};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
+use genco::lang::{Rust, rust};
 use genco::prelude::*;
+use pds_bits_runtime::csn1;
 use pds2_core::ast::Ident;
 use pds2_core::hir::TypeId;
 use pds2_core::mir::{self, Construction, Expr, Value};
-use pds2_core::specializer::eval::{bits_of, int_of, signed, width, Target, Val};
-use pds2_core::specializer::expr::{describe, Elaborator, ValueModel};
+use pds2_core::specializer::eval::{Target, Val, bits_of, int_of, signed, width};
+use pds2_core::specializer::expr::{Elaborator, ValueModel, describe};
 use pds2_core::specializer::reflect::{list_of, use_of};
 use pds2_core::specializer::{
-	construct_vec, list_value, pds_io, specialization_use, vec_of_value, visit_specialization,
 	AstHir, BoxCost, Embed, LowerCx, Names, NativeCodegen, NativeCodegenCtx, NativeLayout, Scalar,
-	SlotVisitor, VALUE,
+	SlotVisitor, VALUE, construct_vec, list_value, pds_io, specialization_use, vec_of_value,
+	visit_specialization,
 };
-use pds_bits_runtime::csn1;
 
 use crate::pattern::{literal, pattern_arg, prefix_free, size_arg};
-use crate::wire::{choose, read, skip, Encoder, Encoding, Input, Output};
+use crate::wire::{Encoder, Encoding, Input, Output, choose, read, skip};
 
 pub fn runtime(item: &str) -> rust::Tokens {
 	quote!($(rust::import("crate::pds::csn1", item)))
@@ -33,7 +33,11 @@ pub fn no_view<L: genco::lang::Lang>(ctx: &NativeCodegenCtx<L>) -> Result<()> {
 fn unit_value(cx: &Elaborator, id: TypeId, value: &Expr) -> Result<Construction> {
 	match value {
 		Expr::Record(fields) if fields.is_empty() => Ok(Construction::Record(vec![])),
-		v => bail!("{} carries no data, write it as `()`, got {}", cx.name(id), describe(v)),
+		v => bail!(
+			"{} carries no data, write it as `()`, got {}",
+			cx.name(id),
+			describe(v)
+		),
 	}
 }
 
@@ -220,12 +224,19 @@ impl ValueModel for Optional {
 			return Ok(Construction::Variant(Ident::new("none"), vec![]));
 		}
 		let inner = use_of(native, VALUE)?.target;
-		Ok(Construction::Wrap(Box::new(cx.coerce(value.clone(), inner)?)))
+		Ok(Construction::Wrap(Box::new(
+			cx.coerce(value.clone(), inner)?,
+		)))
 	}
 }
 
 impl NativeCodegen<Rust> for Optional {
-	fn inline_ty(&self, id: TypeId, native: &mir::NativeType, names: &dyn Names<Rust>) -> Option<rust::Tokens> {
+	fn inline_ty(
+		&self,
+		id: TypeId,
+		native: &mir::NativeType,
+		names: &dyn Names<Rust>,
+	) -> Option<rust::Tokens> {
 		let value = specialization_use(native, VALUE)?.target;
 		Some(quote!(Option<$(names.slot_ty(id, &Ident::new(VALUE), value))>))
 	}
@@ -239,13 +250,17 @@ impl NativeCodegen<Rust> for Optional {
 		let Construction::Wrap(inner) = c else {
 			return Ok(quote!(None));
 		};
-		let value = cx.names.slot_new(id, &Ident::new(VALUE), (cx.lower)(inner)?);
+		let value = cx
+			.names
+			.slot_new(id, &Ident::new(VALUE), (cx.lower)(inner)?);
 		Ok(quote!(Some($value)))
 	}
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		no_view(ctx)?;
 		let (present, absent) = optional_patterns(ctx.native)?;
-		let value_use = ctx.specialization_use(VALUE).context("optional value type")?;
+		let value_use = ctx
+			.specialization_use(VALUE)
+			.context("optional value type")?;
 		let value = value_use.target;
 		let slot = Ident::new(VALUE);
 		let read_value = ctx.slot_new(&slot, quote!($(ctx.deserialize_call(value_use))?));
@@ -308,7 +323,11 @@ impl Encoder for Optional {
 	fn decode(&self, cx: &Encoding, t: &Target, input: &Input) -> Result<Construction> {
 		let (present, absent) = optional_patterns(t.native)?;
 		Ok(match choose(input, &[&present, &absent])? {
-			0 => Construction::Wrap(Box::new(cx.decode_use(use_of(t.native, VALUE)?, &t.scope(), input)?)),
+			0 => Construction::Wrap(Box::new(cx.decode_use(
+				use_of(t.native, VALUE)?,
+				&t.scope(),
+				input,
+			)?)),
 			_ => Construction::Variant(Ident::new("none"), vec![]),
 		})
 	}
@@ -344,7 +363,12 @@ impl ValueModel for Repeated {
 }
 
 impl NativeCodegen<Rust> for Repeated {
-	fn inline_ty(&self, _id: TypeId, native: &mir::NativeType, names: &dyn Names<Rust>) -> Option<rust::Tokens> {
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		native: &mir::NativeType,
+		names: &dyn Names<Rust>,
+	) -> Option<rust::Tokens> {
 		vec_of_value(native, names)
 	}
 	fn construct(
@@ -359,7 +383,9 @@ impl NativeCodegen<Rust> for Repeated {
 	fn generate(&self, ctx: &NativeCodegenCtx<Rust>) -> Result<rust::Tokens> {
 		no_view(ctx)?;
 		let (more, end) = repeated_patterns(ctx.native)?;
-		let value_use = ctx.specialization_use(VALUE).context("repeated value type")?;
+		let value_use = ctx
+			.specialization_use(VALUE)
+			.context("repeated value type")?;
 		let value = value_use.target;
 		let (_, poutput, presult) = pds_io();
 		let (poutput, presult) = (&poutput, &presult);
@@ -563,7 +589,11 @@ impl Encoder for Spare {
 pub struct Padded;
 
 fn padded_octets(native: &mir::NativeType) -> Result<Option<usize>> {
-	match native.const_args.iter().any(|(n, _)| n.as_str() == "octets") {
+	match native
+		.const_args
+		.iter()
+		.any(|(n, _)| n.as_str() == "octets")
+	{
 		true => size_arg(native, "octets").map(Some),
 		false => Ok(None),
 	}
@@ -586,12 +616,19 @@ impl ValueModel for Padded {
 		value: &Expr,
 	) -> Result<Construction> {
 		let inner = use_of(native, VALUE)?.target;
-		Ok(Construction::Wrap(Box::new(cx.coerce(value.clone(), inner)?)))
+		Ok(Construction::Wrap(Box::new(
+			cx.coerce(value.clone(), inner)?,
+		)))
 	}
 }
 
 impl NativeCodegen<Rust> for Padded {
-	fn inline_ty(&self, _id: TypeId, native: &mir::NativeType, names: &dyn Names<Rust>) -> Option<rust::Tokens> {
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		native: &mir::NativeType,
+		names: &dyn Names<Rust>,
+	) -> Option<rust::Tokens> {
 		Some(names.ty(specialization_use(native, VALUE)?.target))
 	}
 	fn construct(
@@ -705,9 +742,12 @@ impl Encoder for Padded {
 			}
 			Some(octets) => {
 				let at = input.position();
-				let sub = input
-					.take(octets * 8)
-					.map_err(|_| anyhow!("bit {at}: {octets} octets needed, {} bits left", input.remaining()))?;
+				let sub = input.take(octets * 8).map_err(|_| {
+					anyhow!(
+						"bit {at}: {octets} octets needed, {} bits left",
+						input.remaining()
+					)
+				})?;
 				cx.decode_use(value, &t.scope(), &sub)?
 			}
 		};

@@ -2,13 +2,13 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use anyhow::{anyhow, bail, ensure, Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail, ensure};
 
 use crate::{
 	ast::Ident,
 	hir::{
-		id_generator::PendingTypeId, IdGenerator, Namespace, Reference, ReferenceKind, Traverse,
-		TraverseSkip, Type, TypeId, TypeKind, Visitor,
+		IdGenerator, Namespace, Reference, ReferenceKind, Traverse, TraverseSkip, Type, TypeId,
+		TypeKind, Visitor, id_generator::PendingTypeId,
 	},
 	specializer::Registry,
 };
@@ -40,10 +40,8 @@ impl Visitor for CollectCaptures<'_> {
 	}
 }
 
-type Monomorphizations = BTreeMap<
-	(TypeId, BTreeMap<Ident, TypeKind>),
-	(PendingTypeId, String, BTreeSet<Ident>),
->;
+type Monomorphizations =
+	BTreeMap<(TypeId, BTreeMap<Ident, TypeKind>), (PendingTypeId, String, BTreeSet<Ident>)>;
 
 struct FindGenericTypeReferences<'t> {
 	id: IdGenerator,
@@ -78,8 +76,12 @@ impl Visitor for FindGenericTypeReferences<'_> {
 		let mut captured = BTreeSet::new();
 		for (n, t) in &value.types {
 			let mut t = t.clone();
-			t.traverse(&mut CollectCaptures(&mut captured), TraverseSkip::empty(), reg)
-				.with_context(|| format!("generic binding {n:?}"))?;
+			t.traverse(
+				&mut CollectCaptures(&mut captured),
+				TraverseSkip::empty(),
+				reg,
+			)
+			.with_context(|| format!("generic binding {n:?}"))?;
 			usage.insert(n.clone(), t);
 		}
 
@@ -126,18 +128,18 @@ impl Visitor for ReplaceGenericReferencesWithSpecified<'_> {
 		let TypeKind::Reference(re) = tk else {
 			return Ok(());
 		};
-		let ReferenceKind::Generic(gen) = &re.ty else {
+		let ReferenceKind::Generic(generic) = &re.ty else {
 			return Ok(());
 		};
-		if self.still_unset.contains_key(gen) {
+		if self.still_unset.contains_key(generic) {
 			return Ok(());
 		}
 		let mut resolved = self
 			.types
-			.get(gen)
+			.get(generic)
 			.ok_or_else(|| {
 				anyhow!(
-					"unknown generic argument: {gen:?} in {:?}, existing: {:?}",
+					"unknown generic argument: {generic:?} in {:?}, existing: {:?}",
 					re,
 					self.types
 				)
@@ -153,7 +155,7 @@ impl Visitor for ReplaceGenericReferencesWithSpecified<'_> {
 			}
 			_ => ensure!(
 				re.args.is_empty() && re.types.is_empty(),
-				"cannot apply arguments to non-reference generic binding {gen:?}"
+				"cannot apply arguments to non-reference generic binding {generic:?}"
 			),
 		}
 
@@ -206,9 +208,9 @@ impl Visitor for ImplementMonomorphized<'_> {
 				// generator decides): prune them, absent entry = unbound. The mono is
 				// fully concrete, so it keeps the native's declared params and no
 				// generic set.
-				native.specialization.retain(
-					|(_, v)| !matches!(v, TypeKind::Reference(r) if r.ty.is_generic()),
-				);
+				native
+					.specialization
+					.retain(|(_, v)| !matches!(v, TypeKind::Reference(r) if r.ty.is_generic()));
 				let mut params = ty.params.clone();
 				params.extend(captured_params);
 				self.created

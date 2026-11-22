@@ -1,21 +1,21 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{anyhow, bail, Context as _, Result};
-use genco::lang::{js, JavaScript};
+use anyhow::{Context as _, Result, anyhow, bail};
+use genco::lang::{JavaScript, js};
 use genco::prelude::*;
 
 use std::rc::Rc;
 
+use super::GeneratorOutput;
 use super::common::{self, sanitize, scalar_of};
 use super::naming::{self, Modules};
-use super::GeneratorOutput;
 use crate::ast::{BinOp, FieldRefSegment, Ident};
 use crate::hir::TypeId;
 use crate::mir::{self, Construction, Expr, Field, Type, TypeKind, TypeMap, Value};
 use crate::specializer::expr::Elaborator;
 use crate::specializer::{
-	specialization_use, LowerCx, Names, NativeCodegen, NativeCodegenCtx, Registry, Scalar,
+	LowerCx, Names, NativeCodegen, NativeCodegenCtx, Registry, Scalar, specialization_use,
 };
 
 type Tokens = js::Tokens;
@@ -51,7 +51,10 @@ impl<'a> TsMeta<'a> {
 		Self {
 			raw_names: self.raw_names.clone(),
 			modules: self.modules.clone(),
-			here: path[..path.len() - 1].iter().map(|m| m.stem.clone()).collect(),
+			here: path[..path.len() - 1]
+				.iter()
+				.map(|m| m.stem.clone())
+				.collect(),
 			types: self.types,
 			reg: self.reg,
 			inlining: RefCell::default(),
@@ -70,7 +73,11 @@ impl<'a> TsMeta<'a> {
 		let here: Vec<&str> = self.here.iter().map(String::as_str).collect();
 		let dir: Vec<&str> = dir.iter().map(|m| m.stem.as_str()).collect();
 		let (up, rest) = naming::relative(&here, &dir);
-		let prefix = if up == 0 { "./".to_owned() } else { "../".repeat(up) };
+		let prefix = if up == 0 {
+			"./".to_owned()
+		} else {
+			"../".repeat(up)
+		};
 		let target = rest
 			.into_iter()
 			.chain([file[0].stem.as_str()])
@@ -100,12 +107,18 @@ impl<'a> TsMeta<'a> {
 		self.inlining.borrow_mut().remove(&id);
 		ty
 	}
-	fn native_codegen(&self, id: TypeId) -> Option<(&mir::NativeType, &dyn NativeCodegen<JavaScript>)> {
+	fn native_codegen(
+		&self,
+		id: TypeId,
+	) -> Option<(&mir::NativeType, &dyn NativeCodegen<JavaScript>)> {
 		let TypeKind::Native(native) = &self.types[id].kind else {
 			return None;
 		};
 		let (specializer, _) = native.specializer.as_ref()?;
-		Some((native, self.reg.codegen::<JavaScript>(specializer.as_str())?))
+		Some((
+			native,
+			self.reg.codegen::<JavaScript>(specializer.as_str())?,
+		))
 	}
 	fn nullable(&self, id: TypeId) -> bool {
 		match &self.types[id].kind {
@@ -249,7 +262,11 @@ fn numeric_cast(from: Scalar, to: Scalar, x: Tokens) -> Tokens {
 	if float(to) {
 		return wrap(to, if wide(from) { quote!(Number($x)) } else { x });
 	}
-	let x = if float(from) { quote!(Math.trunc($x)) } else { x };
+	let x = if float(from) {
+		quote!(Math.trunc($x))
+	} else {
+		x
+	};
 	match (wide(from), wide(to)) {
 		(true, true) => wrap(to, x),
 		(false, true) => wrap(to, quote!(BigInt($x))),
@@ -343,16 +360,16 @@ fn lower(meta: &TsMeta, expr: &Expr, from_locals: bool) -> Result<Tokens> {
 			}
 		}
 		Expr::Binary(op, a, b) => {
-			let ty = expr
-				.ty()
-				.ok_or_else(|| anyhow!("untyped arithmetic"))?;
+			let ty = expr.ty().ok_or_else(|| anyhow!("untyped arithmetic"))?;
 			let s = scalar_of(meta.types, ty)
 				.filter(|s| s.is_number())
 				.ok_or_else(|| anyhow!("arithmetic on a non-number"))?;
 			let (a, b) = (rec(a)?, rec(b)?);
 			match (op, s) {
 				(BinOp::Mul, Scalar::I32 | Scalar::U32) => wrap(s, quote!(Math.imul($a, $b))),
-				(BinOp::Div, Scalar::F32 | Scalar::F64 | Scalar::I64 | Scalar::U64) => wrap(s, quote!(($a / $b))),
+				(BinOp::Div, Scalar::F32 | Scalar::F64 | Scalar::I64 | Scalar::U64) => {
+					wrap(s, quote!(($a / $b)))
+				}
 				(BinOp::Div, _) => wrap(s, quote!(Math.trunc($a / $b))),
 				_ => wrap(s, quote!(($a $(op.symbol()) $b))),
 			}
@@ -435,68 +452,66 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 					}
 				}
 			}
-			TypeKind::Native(native) => {
-				match &native.specializer {
-					Some((specializer, variant)) => {
-						let resolve = |n: &str| {
-							meta.raw_names
-								.iter()
-								.find(|(_, v)| v.as_str() == n)
-								.map(|(k, _)| *k)
-						};
-						let Some(codegen) = reg.codegen::<JavaScript>(specializer.as_str()) else {
-							anyhow::bail!("no typescript codegen for specializer {specializer:?}");
-						};
-						let args_struct_gen = || args_struct.clone();
-						let pass_args = |u: &Type| -> Tokens {
-							if input[u.target].params.is_empty() {
-								quote!()
-							} else {
-								args_passing(&meta, u)
-							}
-						};
-						let virtual_used =
-							|name: &str| virtuals_used.contains(&(*id, Ident::new(name)));
-						codegen
-							.generate(&NativeCodegenCtx {
-								id: *id,
-								variant,
-								native,
-								params: &ty.params,
-								names: &meta,
-								resolve: &resolve,
-								args_struct: &args_struct_gen,
-								args_param: &args_param,
-								pass_args: &pass_args,
-								types: input,
-								elab: &elab,
-								exprs: elaborated.exprs(*id),
-								cast_to: elaborated.cast_to(*id),
-								virtual_used: &virtual_used,
-								read: &|v, from_locals| {
-									read_or_const_reference(&meta, from_locals, v, TypeId::default())
-								},
-								lower: &|e, from_locals| lower(&meta, e, from_locals),
-								view: false,
-								take: false,
-								type_name: None,
-								declared: &Default::default(),
-								move_only: false,
-							})
-							.with_context(|| format!("typescript codegen for {:?}", ty.name))?
-					}
-					None => {
-						let native_import =
-							&js::import(format!("{}pds_native.ts", meta.up()), meta.name_str(*id));
-						quote! {
-							export type Ty = ReturnType<typeof $native_import.deserialize>;
-							export const serialize = $native_import.serialize;
-							export const deserialize = $native_import.deserialize;
-							export const size_of = $native_import.size_of;
+			TypeKind::Native(native) => match &native.specializer {
+				Some((specializer, variant)) => {
+					let resolve = |n: &str| {
+						meta.raw_names
+							.iter()
+							.find(|(_, v)| v.as_str() == n)
+							.map(|(k, _)| *k)
+					};
+					let Some(codegen) = reg.codegen::<JavaScript>(specializer.as_str()) else {
+						anyhow::bail!("no typescript codegen for specializer {specializer:?}");
+					};
+					let args_struct_gen = || args_struct.clone();
+					let pass_args = |u: &Type| -> Tokens {
+						if input[u.target].params.is_empty() {
+							quote!()
+						} else {
+							args_passing(&meta, u)
 						}
+					};
+					let virtual_used =
+						|name: &str| virtuals_used.contains(&(*id, Ident::new(name)));
+					codegen
+						.generate(&NativeCodegenCtx {
+							id: *id,
+							variant,
+							native,
+							params: &ty.params,
+							names: &meta,
+							resolve: &resolve,
+							args_struct: &args_struct_gen,
+							args_param: &args_param,
+							pass_args: &pass_args,
+							types: input,
+							elab: &elab,
+							exprs: elaborated.exprs(*id),
+							cast_to: elaborated.cast_to(*id),
+							virtual_used: &virtual_used,
+							read: &|v, from_locals| {
+								read_or_const_reference(&meta, from_locals, v, TypeId::default())
+							},
+							lower: &|e, from_locals| lower(&meta, e, from_locals),
+							view: false,
+							take: false,
+							type_name: None,
+							declared: &Default::default(),
+							move_only: false,
+						})
+						.with_context(|| format!("typescript codegen for {:?}", ty.name))?
+				}
+				None => {
+					let native_import =
+						&js::import(format!("{}pds_native.ts", meta.up()), meta.name_str(*id));
+					quote! {
+						export type Ty = ReturnType<typeof $native_import.deserialize>;
+						export const serialize = $native_import.serialize;
+						export const deserialize = $native_import.deserialize;
+						export const size_of = $native_import.size_of;
 					}
 				}
-			}
+			},
 		};
 		output.insert(
 			root.modules.file(*id, "ts").into(),
@@ -520,7 +535,10 @@ pub fn generator(input: &mir::TypeMap, output: &mut GeneratorOutput, reg: &Regis
 		} else {
 			format!("{}/mod.ts", stems.join("/"))
 		};
-		output.insert(file.into(), index.to_file_string().expect("formatting should succeed"));
+		output.insert(
+			file.into(),
+			index.to_file_string().expect("formatting should succeed"),
+		);
 	}
 	Ok(())
 }

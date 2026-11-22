@@ -1,11 +1,11 @@
-use anyhow::{anyhow, bail, Result};
-use genco::lang::{rust, Rust};
+use anyhow::{Result, anyhow, bail};
+use genco::lang::{Rust, rust};
 use genco::prelude::*;
 use pds2_core::hir::TypeId;
 use pds2_core::mir::{self, Construction};
 use pds2_core::specializer::eval::{Target, Val};
 use pds2_core::specializer::{
-	pds_io, Names, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor,
+	Names, NativeCodegen, NativeCodegenCtx, NativeLayout, SlotVisitor, pds_io,
 };
 use pds2_specializer_bytes::{Encoder, Encoding, Input};
 
