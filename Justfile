@@ -1,7 +1,7 @@
 protoc := "nix shell nixpkgs#protobuf -c protoc"
 
 lang:
-	rm -rf crates/lang-tests/src/gen ts/lang-tests/gen
+	rm -rf crates/lang-tests/src/generated ts/lang-tests/generated
 	cargo run compile crates/lang-tests/lang.pds rust --to crates/lang-tests/src/generated --view ''
 	cargo run compile crates/lang-tests/lang.pds typescript --to ts/lang-tests/generated
 

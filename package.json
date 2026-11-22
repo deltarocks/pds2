@@ -3,12 +3,16 @@
 	"private": true,
 	"type": "module",
 	"workspaces": [
-		"pds-bytes-runtime"
+		"ts/pds-bytes-runtime",
+		"ts/lang-tests"
 	],
 	"scripts": {
 		"build": "pnpm -r run prepack"
 	},
 	"devDependencies": {
 		"@deltarocks/raphus": "^0.1.1"
+	},
+	"catalog": {
+		"@std/assert": "jsr:^1.0.19"
 	}
 }

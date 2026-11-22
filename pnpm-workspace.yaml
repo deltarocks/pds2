@@ -1,0 +1,14 @@
+packages:
+  - ts/pds-bytes-runtime
+  - ts/lang-tests
+
+catalog:
+  '@std/assert': jsr:^1.0.19
+
+catalogMode: strict
+cleanupUnusedCatalogs: true
+
+enableGlobalVirtualStore: true
+
+minimumReleaseAgeExclude:
+  - '@deltarocks/*'

@@ -1,0 +1,16 @@
+{
+	"nodeModulesDir": "manual",
+	"fmt": {
+		"useTabs": true,
+		"singleQuote": true,
+		"exclude": [
+			"*.pegjs.mjs",
+			"packages/*/lib"
+		]
+	},
+	"test": {
+		"sanitizeOps": true,
+		"sanitizeResources": true
+	},
+	"private": true
+}

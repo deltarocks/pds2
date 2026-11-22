@@ -1,9 +1,9 @@
-export type ErrorKind = "NotEnoughData" | "TooLargeInteger" | "InvalidValue";
+export type ErrorKind = 'NotEnoughData' | 'TooLargeInteger' | 'InvalidValue';
 
 export class PdsError extends Error {
 	constructor(readonly kind: ErrorKind, detail?: string) {
 		super(detail ? `${kind}: ${detail}` : kind);
-		this.name = "PdsError";
+		this.name = 'PdsError';
 	}
 }
 
@@ -32,7 +32,7 @@ export class Input {
 
 	peek(): number {
 		if (this.#offset >= this.#data.length) {
-			throw new PdsError("NotEnoughData");
+			throw new PdsError('NotEnoughData');
 		}
 		const byte = this.#data[this.#offset];
 		return this.#offset === this.#maskAt ? byte & this.#mask : byte;
@@ -54,7 +54,7 @@ export class Input {
 
 	read_bytes(n: number): Uint8Array<ArrayBuffer> {
 		if (n > this.remaining()) {
-			throw new PdsError("NotEnoughData");
+			throw new PdsError('NotEnoughData');
 		}
 		const out = this.#data.slice(this.#offset, this.#offset + n);
 		if (n > 0 && this.#offset === this.#maskAt) {
@@ -114,7 +114,9 @@ export function equal(a: unknown, b: unknown): boolean {
 	if (a === b) {
 		return true;
 	}
-	if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
+	if (
+		typeof a !== 'object' || typeof b !== 'object' || a === null || b === null
+	) {
 		return false;
 	}
 	if (a instanceof Map || b instanceof Map) {
@@ -152,7 +154,7 @@ export function equal(a: unknown, b: unknown): boolean {
 }
 
 const encoder = new TextEncoder();
-const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 export function utf8_encode(s: string): Uint8Array {
 	return encoder.encode(s);
@@ -162,7 +164,7 @@ export function utf8_decode(bytes: Uint8Array): string {
 	try {
 		return decoder.decode(bytes);
 	} catch {
-		throw new PdsError("InvalidValue", "invalid utf-8");
+		throw new PdsError('InvalidValue', 'invalid utf-8');
 	}
 }
 
@@ -193,16 +195,56 @@ function fixed<T>(
 	};
 }
 
-export const pds_u8 = fixed<number>(1, (d) => d.getUint8(0), (d, v) => d.setUint8(0, v));
-export const pds_i8 = fixed<number>(1, (d) => d.getInt8(0), (d, v) => d.setInt8(0, v));
-export const pds_u16 = fixed<number>(2, (d) => d.getUint16(0), (d, v) => d.setUint16(0, v));
-export const pds_i16 = fixed<number>(2, (d) => d.getInt16(0), (d, v) => d.setInt16(0, v));
-export const pds_u32 = fixed<number>(4, (d) => d.getUint32(0), (d, v) => d.setUint32(0, v));
-export const pds_i32 = fixed<number>(4, (d) => d.getInt32(0), (d, v) => d.setInt32(0, v));
-export const pds_u64 = fixed<bigint>(8, (d) => d.getBigUint64(0), (d, v) => d.setBigUint64(0, v));
-export const pds_i64 = fixed<bigint>(8, (d) => d.getBigInt64(0), (d, v) => d.setBigInt64(0, v));
-export const pds_f32 = fixed<number>(4, (d) => d.getFloat32(0), (d, v) => d.setFloat32(0, v));
-export const pds_f64 = fixed<number>(8, (d) => d.getFloat64(0), (d, v) => d.setFloat64(0, v));
+export const pds_u8 = fixed<number>(
+	1,
+	(d) => d.getUint8(0),
+	(d, v) => d.setUint8(0, v),
+);
+export const pds_i8 = fixed<number>(
+	1,
+	(d) => d.getInt8(0),
+	(d, v) => d.setInt8(0, v),
+);
+export const pds_u16 = fixed<number>(
+	2,
+	(d) => d.getUint16(0),
+	(d, v) => d.setUint16(0, v),
+);
+export const pds_i16 = fixed<number>(
+	2,
+	(d) => d.getInt16(0),
+	(d, v) => d.setInt16(0, v),
+);
+export const pds_u32 = fixed<number>(
+	4,
+	(d) => d.getUint32(0),
+	(d, v) => d.setUint32(0, v),
+);
+export const pds_i32 = fixed<number>(
+	4,
+	(d) => d.getInt32(0),
+	(d, v) => d.setInt32(0, v),
+);
+export const pds_u64 = fixed<bigint>(
+	8,
+	(d) => d.getBigUint64(0),
+	(d, v) => d.setBigUint64(0, v),
+);
+export const pds_i64 = fixed<bigint>(
+	8,
+	(d) => d.getBigInt64(0),
+	(d, v) => d.setBigInt64(0, v),
+);
+export const pds_f32 = fixed<number>(
+	4,
+	(d) => d.getFloat32(0),
+	(d, v) => d.setFloat32(0, v),
+);
+export const pds_f64 = fixed<number>(
+	8,
+	(d) => d.getFloat64(0),
+	(d, v) => d.setFloat64(0, v),
+);
 
 export const pds_bool: Native<boolean> = {
 	serialize(v: boolean, output: Output): void {

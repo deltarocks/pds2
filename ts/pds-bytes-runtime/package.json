@@ -1,6 +1,6 @@
 {
 	"name": "@deltarocks/pds-bytes-runtime",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Byte-oriented runtime for pds2 generated TypeScript codecs",
 	"type": "module",
 	"exports": {

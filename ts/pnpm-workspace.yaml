@@ -1,7 +1,0 @@
-packages:
-  - pds-bytes-runtime
-
-enableGlobalVirtualStore: true
-
-minimumReleaseAgeExclude:
-  - '@deltarocks/*'

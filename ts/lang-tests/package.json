@@ -1,0 +1,9 @@
+{
+	"name": "@deltarocks/pds2-lang-tests",
+	"private": true,
+	"type": "module",
+	"dependencies": {
+		"@deltarocks/pds-bytes-runtime": "workspace:*",
+		"@std/assert": "catalog:"
+	}
+}

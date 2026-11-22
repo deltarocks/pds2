@@ -1,2 +1,2 @@
-export * from "../pds-bytes-runtime/mod.ts";
-export * as protobuf from "../pds-bytes-runtime/protobuf.ts";
+export * from '@deltarocks/pds-bytes-runtime';
+export * as protobuf from '@deltarocks/pds-bytes-runtime/protobuf';
