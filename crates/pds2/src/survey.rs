@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 
-use pds2_core::ast::{self, Block, Item, Statement, Value};
+use pds2_core::ast::{self, Block, Item, ItemArgs, Statement, Value};
 
 pub struct Version {
 	pub name: String,
@@ -43,13 +43,47 @@ pub enum Change {
 	Other,
 }
 
+fn canonical(v: &Value) -> Value {
+	match v {
+		Value::Item(i) => {
+			let mut args = ItemArgs::builder();
+			for a in i.args.positional() {
+				args = args.arg(canonical(a));
+			}
+			for (n, a) in i.args.named_values() {
+				args = args.named(n.clone(), canonical(a));
+			}
+			Value::Item(Item {
+				name: i.name.clone(),
+				args: args.build(),
+				block: Block {
+					attributes: i.block.attributes.clone(),
+					statements: i.block.statements.iter().map(canonical_statement).collect(),
+					root: i.block.root,
+				},
+			})
+		}
+		Value::List(xs) => Value::List(xs.iter().map(canonical).collect()),
+		Value::Record(fs) => Value::Record(fs.iter().map(|(n, x)| (n.clone(), canonical(x))).collect()),
+		Value::Binary(op, a, b) => Value::Binary(*op, Box::new(canonical(a)), Box::new(canonical(b))),
+		v => v.clone(),
+	}
+}
+
+fn canonical_statement(stmt: &Statement) -> Statement {
+	Statement {
+		attributes: stmt.attributes.clone(),
+		items: stmt.items.iter().map(canonical).collect(),
+	}
+}
+
 fn format_values(items: &[Value]) -> String {
 	if items.is_empty() {
 		return String::new();
 	}
 	let block = Block {
 		attributes: Default::default(),
-		statements: vec![Statement::simple(items.to_vec())],
+		statements: vec![Statement::simple(items.iter().map(canonical).collect())],
 		root: true,
 	};
 	let text = ast::format(&block);
@@ -59,7 +93,7 @@ fn format_values(items: &[Value]) -> String {
 fn format_statement(stmt: &Statement) -> String {
 	let block = Block {
 		attributes: Default::default(),
-		statements: vec![stmt.clone()],
+		statements: vec![canonical_statement(stmt)],
 		root: true,
 	};
 	ast::format(&block)
