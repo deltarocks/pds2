@@ -231,7 +231,7 @@ impl BodyItemDecl {
 }
 
 pub fn parse_ast(ast: Block, reg: &Registry) -> Result<Namespace> {
-	let (ast, _) = crate::definition::lower(ast, reg).context("lowering custom definitions")?;
+	let (ast, _) = crate::prepare(ast, reg).context("lowering custom definitions")?;
 	let mut ns = Namespace::from_ast(ast).context("parsing AST to IR")?;
 	super::desugar::inline_functions(&mut ns, reg).context("inlining functions")?;
 	super::desugar::resolve_calls(&mut ns, reg).context("resolving calls")?;
@@ -451,6 +451,7 @@ impl Namespace {
 	fn from_ast(value: Block) -> Result<Self> {
 		let mut out = BTreeMap::new();
 		let mut functions = BTreeMap::new();
+		let root = value.root;
 		for statement in value.statements {
 			let (attrs, item, mut items) = statement.pop_item()?;
 
@@ -464,11 +465,15 @@ impl Namespace {
 			}
 
 			let (name, item) = match item.name.expect_simple_name()?.as_str() {
-				"namespace" => {
-					ensure!(items.is_empty(), "namespace has no items");
+				kind @ ("namespace" | "package") => {
+					ensure!(items.is_empty(), "{kind} has no items");
+					ensure!(
+						kind == "namespace" || root,
+						"packages can only be declared at the top level"
+					);
 					let name = item.args.arg(0, "ns name")?;
 					let ns = Namespace::from_ast(item.block)
-						.with_context(|| format!("namespace {:?}", name))?;
+						.with_context(|| format!("{kind} {:?}", name))?;
 					(name, NamespaceItem::Inner(ns))
 				}
 				"def_native" => {

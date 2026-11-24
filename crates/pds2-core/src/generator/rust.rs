@@ -143,14 +143,14 @@ fn move_only(types: &TypeMap, reg: &Registry) -> Result<BTreeSet<TypeId>> {
 }
 
 impl<'a> RustMeta<'a> {
-	fn new(source: &'a TypeMap, reg: &'a Registry, crates: Option<&str>) -> Result<Self> {
+	fn new(source: &'a TypeMap, reg: &'a Registry, split: Option<&Split>) -> Result<Self> {
 		let mut raw_names = BTreeMap::new();
 		for (id, ty) in source.0.iter() {
 			raw_names.insert(*id, ty.name.readable_name());
 		}
 		let modules = naming::rust_modules(source)?;
-		let layout = crates
-			.map(|name| Layout::new(source, reg, &modules, name))
+		let layout = split
+			.map(|split| Layout::new(source, reg, &modules, split))
 			.transpose()?;
 		Ok(Self {
 			raw_names: Rc::new(raw_names),
@@ -229,7 +229,7 @@ impl<'a> RustMeta<'a> {
 			.expect("only split output spans crates");
 		let target = to.krate.expect("split output places every type in a crate");
 		let head: Vec<String> = match self.here.krate {
-			Some(from) => {
+			Some(from) if layout.crates[from].module.is_none() => {
 				self.deps
 					.borrow_mut()
 					.entry(from)
@@ -237,7 +237,7 @@ impl<'a> RustMeta<'a> {
 					.insert(target);
 				vec![format!("::{}", layout.crates[target].ident)]
 			}
-			None => std::iter::once(format!("::{}", layout.umbrella))
+			_ => std::iter::once(format!("::{}", layout.umbrella))
 				.chain(layout.crates[target].ns.clone())
 				.collect(),
 		};
@@ -352,18 +352,6 @@ impl<'a> RustMeta<'a> {
 pub struct RustNames<'a>(RustMeta<'a>);
 
 impl<'a> RustNames<'a> {
-	pub fn new(
-		types: &'a TypeMap,
-		reg: &'a Registry,
-		here: &[&str],
-		crates: Option<&str>,
-	) -> Result<Self> {
-		let meta = RustMeta::new(types, reg, crates)?;
-		Ok(Self(meta.at(Loc {
-			krate: None,
-			path: here.iter().map(|s| s.to_string()).collect(),
-		})))
-	}
 	pub fn ty(&self, id: TypeId) -> Tokens {
 		Names::ty(&self.0, id)
 	}
@@ -434,6 +422,14 @@ impl<'a> DefinitionRustCtx<'a> {
 		})))
 	}
 	fn namespace_dir(&self, namespace: &[Ident]) -> Result<Dir> {
+		if let (Some(layout), [only]) = (&self.meta.layout, namespace)
+			&& let Some(k) = layout
+				.crates
+				.iter()
+				.position(|c| c.module.is_some() && c.namespace.as_deref() == Some(only.as_str()))
+		{
+			return Ok((Some(k), vec![]));
+		}
 		let id = self
 			.meta
 			.types
@@ -792,11 +788,7 @@ pub fn generate(
 	split: Option<&Split>,
 	definitions: &[crate::definition::DefinitionUse],
 ) -> Result<()> {
-	ensure!(
-		definitions.is_empty() || split.is_none(),
-		"custom definitions can't be generated with --crates yet"
-	);
-	let meta = RustMeta::new(input, reg, split.map(|s| s.name.as_str()))?;
+	let meta = RustMeta::new(input, reg, split)?;
 	let mut extras = definition_extras(&meta, reg, definitions)?;
 	let ids: Vec<TypeId> = input.0.keys().copied().collect();
 	emit(&meta, input, reg, &ids, "", &mut extras, output)?;
@@ -823,6 +815,9 @@ fn mod_files(
 	let mut dirs: BTreeMap<Dir, BTreeMap<naming::Module, bool>> = BTreeMap::new();
 	if meta.layout.is_none() {
 		dirs.entry((None, vec![])).or_default();
+	}
+	for key in extras.keys().filter(|(_, path)| path.is_empty()) {
+		dirs.entry(key.clone()).or_default();
 	}
 	for id in ids {
 		let (krate, path) = meta.located(*id);
@@ -895,7 +890,12 @@ fn mod_files(
 			.collect::<Result<Vec<_>>>()?;
 		let stems: Vec<&str> = key.1.iter().map(|m| m.stem.as_str()).collect();
 		let file = match (krate, stems.is_empty()) {
-			(Some(_), true) if dir.is_empty() => meta.dir_file(krate, "lib.rs"),
+			(Some(k), true) if dir.is_empty() => meta
+				.layout
+				.as_ref()
+				.expect("crates come from a layout")
+				.crates[k]
+				.root_file(),
 			(_, true) => meta.dir_file(krate, &format!("{dir}mod.rs")),
 			(_, false) => meta.dir_file(krate, &format!("{dir}{}/mod.rs", stems.join("/"))),
 		};

@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
@@ -19,6 +19,8 @@ pub struct Split {
 	pub root_doc: Option<String>,
 	pub namespace_docs: BTreeMap<String, String>,
 	pub versions: BTreeMap<String, String>,
+	pub packages: BTreeSet<String>,
+	pub modules: BTreeMap<String, PathBuf>,
 }
 
 impl Split {
@@ -32,6 +34,7 @@ pub(super) struct Crate {
 	pub ident: String,
 	pub ns: Option<String>,
 	pub namespace: Option<String>,
+	pub module: Option<PathBuf>,
 }
 
 impl Crate {
@@ -41,10 +44,39 @@ impl Crate {
 			package,
 			ns,
 			namespace,
+			module: None,
+		}
+	}
+	fn module(namespace: &str, target: &Path) -> Self {
+		let root = match target.extension() {
+			Some(e) if e == "rs" => target.to_owned(),
+			_ => target.join("mod.rs"),
+		};
+		Self {
+			ident: namespace.to_owned(),
+			package: namespace.to_owned(),
+			ns: None,
+			namespace: Some(namespace.to_owned()),
+			module: Some(root),
 		}
 	}
 	pub fn file(&self, path: &str) -> PathBuf {
-		PathBuf::from(format!("{}/src/{path}", self.package))
+		match &self.module {
+			Some(root) if path == "mod.rs" => root.clone(),
+			Some(root) if root.file_name().is_some_and(|n| n == "mod.rs") => root
+				.parent()
+				.expect("a module file has a directory")
+				.join(path),
+			Some(root) => root.with_extension("").join(path),
+			None => PathBuf::from(format!("{}/src/{path}", self.package)),
+		}
+	}
+	pub fn root_file(&self) -> PathBuf {
+		self.file(if self.module.is_some() {
+			"mod.rs"
+		} else {
+			"lib.rs"
+		})
 	}
 }
 
@@ -58,14 +90,28 @@ pub(super) struct Layout {
 }
 
 impl Layout {
-	pub fn new(types: &TypeMap, reg: &Registry, modules: &Modules, name: &str) -> Result<Self> {
+	pub fn new(types: &TypeMap, reg: &Registry, modules: &Modules, split: &Split) -> Result<Self> {
+		let name = split.name.as_str();
 		let mut crates = vec![Crate::new(format!("{name}-root"), None, None)];
+		for (namespace, dir) in &split.modules {
+			if !split.packages.contains(namespace) {
+				bail!("{namespace} is not a package, it can't be generated as a module");
+			}
+			crates.push(Crate::module(namespace, dir));
+		}
 		let mut by_ns: BTreeMap<String, usize> = BTreeMap::new();
 		let mut of = BTreeMap::new();
 		let mut strip = BTreeSet::new();
 		for (id, def) in &types.0 {
-			if def.namespaced == 0 {
+			if def.namespaced == 0 || !split.packages.contains(def.name.segments()[0].as_str()) {
 				continue;
+			}
+			if split.modules.contains_key(def.name.segments()[0].as_str()) {
+				bail!(
+					"{} is a type of module package {}, which can only hold definition output",
+					def.name.readable_name(),
+					def.name.segments()[0].as_str()
+				);
 			}
 			let top = &modules.path(*id)[0];
 			let k = *by_ns.entry(top.ident.clone()).or_insert_with(|| {
@@ -177,6 +223,7 @@ impl Layout {
 			);
 		}
 		let used: Vec<usize> = (0..self.crates.len())
+			.filter(|k| self.crates[*k].module.is_none())
 			.filter(|k| output.contains_key(&self.crates[*k].file("lib.rs")))
 			.collect();
 		let viewed: Vec<usize> = used

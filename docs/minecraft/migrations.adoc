@@ -1,15 +1,17 @@
 = Version migrations
 :order: 1
 
-`crates/minecraft-versions` keeps one schema per protocol version and the
-migrations between them:
+bungeeoxide (`crates/bungeeoxide-converter`) keeps one schema per protocol
+version and the migrations between them:
 
 [cols="1,3"]
 |===
 | Path | Contents
 
-| `pds/<version>.pds` | the schema of a version. `just update` regenerates every release minecraft-data has, headed by `@!doc` (source commit, Minecraft versions served) and `@!protocol [...]`. Versions minecraft-data lacks are written by hand next to them, with their own `@!protocol` (`@!legacy_protocol` for pre-netty numbers, which collide with netty ones).
+| `minecraft.pds` | the root schema: a package per version, in version order, and the `migrations` definition
+| `pds/<version>.pds` | the schema of a version. `just update` regenerates every release minecraft-data has, headed by `@!doc` (source commit, Minecraft versions served), `@!protocol [...]` and `@!snapshots [(protocol: ..., name: "..."), ...]`. A schema lists the snapshots numbered from `0x40000000` (written in decimal) of the releases it serves: the release in the snapshot's name, or for weekly names the next release by data version, or for April Fools builds off the data version line the release of the build before them. Snapshots of a release no schema serves yet go to the latest schema. Versions minecraft-data lacks are written by hand next to them, with their own `@!protocol` (`@!legacy_protocol` for pre-netty numbers, which collide with netty ones).
 | `minecraft-data.commit` | the minecraft-data commit `just update` reads; `just bump` moves it to upstream master
+| `minecraft-data.pins` | data folders read from another commit, one `<folder> <commit> <source>` line each (tab separated), for versions only an unmerged minecraft-data branch has
 | `patches/<path>` | fixes to minecraft-data files, `<path>` mirroring the file in minecraft-data: a file or a directory of files applied in name order, RFC 6902 `.json` patches for JSON (guarded by `test` operations) and unified `.patch` diffs for text. A patch can create a file minecraft-data lacks.
 | `data/` | registries extracted by `just update`: block states, items, entities, particles, sounds, vanilla registry codecs
 | `migrations/<old>-<new>.pds` | rules converting between adjacent versions
@@ -17,35 +19,82 @@ migrations between them:
 | `migrations/<old>-<new>.diff.txt` | definitions that changed between them, from `just diff`
 |===
 
-`just gen` merges `pds/` in version order (`sort -V` of the file names),
-compiles the result and generates the converters. Merging folds the versions
-into one schema: definitions that differ become variants named
-`<name>_v<version>`, each version gets a namespace (`v1_8`, `v1_9`, ...)
-aliasing its packet roots and keeping its `@!protocol`, and the root lists
-the order in `@!versions`. `pds2 minecraft-data converters` generates
-`convert.rs` with one step per pair of adjacent versions, in both directions
-(`up` = older to newer, `down` = newer to older). Converting across several
-versions chains the steps.
+[source,pds]
+----
+@!deduplicate true
+
+package(v1_8) {
+    @!doc "Minecraft 1.8 protocol types"
+    include("pds/1.8.pds");
+};
+
+package(v1_9) {
+    @!doc "Minecraft 1.9 protocol types"
+    include("pds/1.9.pds");
+};
+
+package(convert) {
+    migrations(virtual: true) {
+        version(v1_8, name: "1.8");
+        version(v1_9, name: "1.9") {
+            include("migrations/1.8-1.9.pds");
+        };
+        every {
+            include("migrations/every.pds");
+        };
+    };
+};
+----
+
+Every version is a package, so `just gen` compiles a crate per version
+(`bungeeoxide-minecraft-v1-8`, ...), and `@!deduplicate` keeps one copy of
+what versions share: a definition lives in the first version that has it and
+later versions re-export it (see
+xref:../language/definitions.adoc[Definitions]). Natives sit at the top level,
+in `bungeeoxide-minecraft-root`.
+
+`migrations` comes from `pds2-specializer-minecraft-data`. It lists the
+versions in order: `version(package, name: "...")` names a version's package
+and its name, and its block holds the rules of the step from the previous
+version, here included from the migration files. The protocol numbers are the
+package's `@!protocol`, `@!legacy_protocol` and `@!snapshots`, which the
+included schema brings. `step: false` leaves the step from the previous version out, and
+`every` holds the hooks of every step. A schema has one `migrations`; the
+package holding it is written with `--module convert=src/gen/convert.rs`, so the
+generated `convert` module lands in the crate that has `crate::custom` and
+`crate::Session`. It has one step per pair of adjacent versions, in both
+directions (`up` = older to newer, `down` = newer to older). Converting across
+several versions chains the steps. To add a version, `just update` writes its
+schema; add its package and its `version` to `minecraft.pds`, then run `just
+scaffold`.
 
 Identical types pass through untouched. Containers are matched field by field
 and unions arm by arm, by name, so renumbered packets and moved fields need no
-rules. Everything else must be written down in the step's migration file,
+rules. A field, arm or list element that both versions pass the same argument
+with different values (a list counted by another field, a union switched on
+another tag) is not converted by itself: its layout depends on that value.
+Everything else must be written down in the step's migration file,
 otherwise generation fails listing each missing rule; rules that end up unused
-are errors too. A step without a migration file is not generated:
+are errors too. A step marked `step: false` is not generated:
 `STEPS[i]` tells whether the step from version `i` to `i + 1` exists, and
 `reachable(a, b)` whether every step between two versions does.
 `version_of(protocol)` maps a protocol number to its version index and
 `legacy_version_of` a pre-netty one; `Version` names every version
-(`Version::V1_8`) and indexes tables directly. `packet_name(root, version,
+(`Version::V1_8`) and indexes tables directly. `SNAPSHOTS` holds `(protocol,
+name, version)` for every snapshot, sorted by protocol, and
+`snapshots_of(protocol)` returns the entries of one number: usually one, none
+for an unknown number, and several where snapshots share a number, possibly
+listed under different versions. A snapshot number that is also a release
+number, or a snapshot listed twice, is an error. `packet_name(root, version,
 bytes)` reads only the packet id.
 
-For hand-written code `convert.rs` also has a module per version that has a
+For hand-written code `convert` also has a module per version that has a
 step, re-exporting each type that version uses under its unversioned name:
 `convert::v1_8::slot`, `convert::v1_9::play_toClient_packet`. Types without a
 name of their own are reached through their owner: `__field`, `__arm` and
 `__items` for list elements, as in
 `convert::v1_8::play_toClient_packet_spawn_entity__velocity`. These names stay
-the same when other versions join the merge.
+the same when other versions join.
 
 [source,pds]
 ----
@@ -71,8 +120,11 @@ namespace(play) {
 };
 ----
 
-`updated(name)` names a definition without its `_v` suffix, or a field or arm
-when nested. Inside it:
+`updated(name)` names a definition by its path inside the version's package,
+or a field or arm when nested. A definition that only names a list or an
+option (`def(ids) => array(Count: varint) => varint;`) has no type of its own,
+so its rules go where it is used, under the field or arm holding it. Inside
+`updated`:
 
 [cols="1,3"]
 |===
@@ -133,12 +185,12 @@ a hook placed under the packet union (`updated(packet) { updated(chat) {
 hooked(message, ...) } }`) runs even in steps that convert that packet arm by
 hand.
 
-`migrations/every.pds` holds hooks that apply to every step, written like a
-migration but with `hooked` and `updated` rules only. Each step merges them
+`every` holds hooks that apply to every step, written like a step but with
+`hooked` and `updated` rules only. Each step merges them
 into its own rules wherever the named definitions, fields and arms exist in
 its source version; a step only has to convert a type because of them in the
-hook's direction. A rule of `every.pds` that no step uses is an error.
-`crates/minecraft-versions` uses it to translate text keys an older client
+hook's direction. A rule of `every` that no step uses is an error.
+bungeeoxide uses it to translate text keys an older client
 does not know (`custom::localize`, see `languages`).
 
 The crate's `Justfile` drives the work:
@@ -147,14 +199,14 @@ The crate's `Justfile` drives the work:
 |===
 | Recipe | Does
 
-| `just scaffold` | merges `pds/`, creates missing migration files and appends a rule for every structural difference: `drop` for packets one side lacks, `unsupported` where a conversion has to be written. Rules it added that turn out unused are removed again.
-| `just converters` | regenerates `convert.rs` from the migrations and runs the tests
+| `just gen` | compiles `minecraft.pds` into the version crates in `minecraft/` and the `convert` module, adds new crates to the workspace and runs the tests
+| `just scaffold` | creates missing migration files and appends a rule for every structural difference: `drop` for packets one side lacks, `unsupported` where a conversion has to be written. Rules it added that turn out unused are removed again. The files have to be included from `minecraft.pds` already.
 | `just languages` | downloads the English strings of every version (minecraft-data `language.json`, through `minecraft-data.commit` and `patches/`) into `target/minecraft-languages/<folder>.json`, with `index.tsv` mapping version names to folders; `just update` runs it too. Mojang's text stays out of git.
 | `just report [from] [to]` | replays recorded 1.8 server traffic one step at a time, decoding the result at every version, and lists what each step drops or fails
 |===
 
-`pds2 minecraft-data converters ... --check` reports missing and unused rules
-without writing anything; `--virtual` lets custom code carry packets through
+`pds2 compile ... --check` reports missing and unused rules without writing
+anything. `migrations(virtual: true)` lets custom code carry packets through
 the steps as decoded models instead of bytes: `convert` asks
 `crate::custom::virtual_start` whether to take a packet over, advances such
 models with `virtual_step` and encodes them once with `virtual_finish` at the

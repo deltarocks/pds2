@@ -4,275 +4,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use genco::lang::rust;
 use genco::prelude::*;
-use pds2_core::ast::{Block, FieldRefSegment, Item, Value};
+use pds2_core::ast::{FieldRefSegment, Ident, Value};
 use pds2_core::generator::common::scalar_of;
 use pds2_core::generator::naming::{Case, Scope};
 use pds2_core::generator::recursion::{Graph, feedback_vertices};
-use pds2_core::generator::rust::RustNames;
+use pds2_core::generator::rust::{DefinitionRustCtx, RustNames};
 use pds2_core::hir::TypeId;
 use pds2_core::mir::{self, Expr, FieldItem, TypeKind, TypeMap};
 use pds2_core::specializer::expr::Elaborator;
-use pds2_core::specializer::{Registry, VALUE, specialization_use};
+use pds2_core::specializer::{VALUE, specialization_use};
 use pds2_specializer_protodef::{container, union};
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum Dir {
-	Up,
-	Down,
-}
-
-impl Dir {
-	fn name(self) -> &'static str {
-		match self {
-			Dir::Up => "up",
-			Dir::Down => "down",
-		}
-	}
-}
-
-#[derive(Clone, Debug)]
-#[allow(clippy::large_enum_variant)]
-pub enum Action {
-	Drop,
-	Default,
-	Unsupported,
-	Custom(String),
-	Expr(Value),
-}
-
-#[derive(Clone, Default, Debug)]
-pub struct Change {
-	pub up: Option<Action>,
-	pub down: Option<Action>,
-}
-
-impl Change {
-	fn get(&self, dir: Dir) -> Option<&Action> {
-		match dir {
-			Dir::Up => self.up.as_ref(),
-			Dir::Down => self.down.as_ref(),
-		}
-	}
-}
-
-#[derive(Clone, Default, Debug)]
-pub struct Rules {
-	pub path: String,
-	pub own: bool,
-	pub whole: Change,
-	pub added: BTreeMap<String, Change>,
-	pub removed: BTreeMap<String, Change>,
-	pub converted: BTreeMap<String, Change>,
-	pub hooked: BTreeMap<String, Change>,
-	pub renamed: BTreeMap<String, String>,
-	pub updated: BTreeMap<String, Rules>,
-}
-
-impl Rules {
-	fn active(&self, dir: Dir) -> bool {
-		self.own
-			|| self.hooked.values().any(|c| c.get(dir).is_some())
-			|| self.updated.values().any(|u| u.active(dir))
-	}
-
-	fn disown(&mut self) -> Result<()> {
-		ensure!(
-			self.whole.up.is_none()
-				&& self.whole.down.is_none()
-				&& self.added.is_empty()
-				&& self.removed.is_empty()
-				&& self.converted.is_empty()
-				&& self.renamed.is_empty(),
-			"{}: rules for every step can only be `hooked` or `updated`",
-			self.path
-		);
-		self.own = false;
-		self.updated.values_mut().try_for_each(Rules::disown)
-	}
-}
-
-fn first_name(item: &Item) -> Result<String> {
-	match item.args.positional().first() {
-		Some(Value::Item(i)) => Ok(i.name.item.as_str().to_owned()),
-		_ => bail!("`{:?}` needs a name", item.name),
-	}
-}
-
-fn action(item: &Item, key: &str) -> Option<Action> {
-	let (_, v) = item.args.named_values().find(|(n, _)| n.as_str() == key)?;
-	Some(match v {
-		Value::Item(i) if i.name.item.as_str() == "drop" && i.args.is_empty() => Action::Drop,
-		Value::Item(i) if i.name.item.as_str() == "default" && i.args.is_empty() => Action::Default,
-		Value::Item(i) if i.name.item.as_str() == "unsupported" && i.args.is_empty() => {
-			Action::Unsupported
-		}
-		Value::Item(i) if i.name.item.as_str() == "custom" => {
-			Action::Custom(first_name(i).unwrap_or_default())
-		}
-		v => Action::Expr(v.clone()),
-	})
-}
-
-fn change(item: &Item) -> Change {
-	Change {
-		up: action(item, "up"),
-		down: action(item, "down"),
-	}
-}
-
-fn parse_rules(item: &Item, path: String, all: &mut BTreeSet<String>) -> Result<Rules> {
-	all.insert(path.clone());
-	let mut r = Rules {
-		path: path.clone(),
-		own: true,
-		whole: change(item),
-		..Default::default()
-	};
-	for stmt in &item.block.statements {
-		let Some(Value::Item(op)) = stmt.items.first() else {
-			bail!("{path}: expected a rule");
-		};
-		let name = first_name(op)?;
-		let kind = op.name.item.as_str();
-		let key = format!("{path}/{kind}({name})");
-		all.insert(key.clone());
-		match kind {
-			"added" => merge_change(r.added.entry(name).or_default(), change(op), &key)?,
-			"removed" => merge_change(r.removed.entry(name).or_default(), change(op), &key)?,
-			"converted" => merge_change(r.converted.entry(name).or_default(), change(op), &key)?,
-			"hooked" => {
-				let c = change(op);
-				for a in [&c.up, &c.down].into_iter().flatten() {
-					ensure!(
-						matches!(a, Action::Custom(_)),
-						"{key}: a hook should be custom(...)"
-					);
-				}
-				merge_change(r.hooked.entry(name).or_default(), c, &key)?
-			}
-			"renamed" => {
-				let (_, to) = op
-					.args
-					.named_values()
-					.find(|(n, _)| n.as_str() == "to")
-					.ok_or_else(|| anyhow!("{key}: needs `to: <new name>`"))?;
-				let Value::Item(to) = to else {
-					bail!("{key}: `to` should be a name");
-				};
-				r.renamed.insert(name, to.name.item.as_str().to_owned());
-			}
-			"updated" => {
-				all.remove(&key);
-				let nested = parse_rules(op, format!("{path}/{name}"), all)?;
-				match r.updated.get_mut(&name) {
-					Some(existing) => merge_rules(existing, nested)?,
-					None => {
-						r.updated.insert(name.clone(), nested);
-					}
-				}
-			}
-			k => bail!("{path}: unknown rule `{k}`"),
-		}
-	}
-	Ok(r)
-}
-
-fn merge_change(into: &mut Change, from: Change, at: &str) -> Result<()> {
-	for (slot, new) in [(&mut into.up, from.up), (&mut into.down, from.down)] {
-		if let Some(new) = new {
-			ensure!(slot.is_none(), "{at} is given twice");
-			*slot = Some(new);
-		}
-	}
-	Ok(())
-}
-
-fn merge_rules(into: &mut Rules, from: Rules) -> Result<()> {
-	into.own |= from.own;
-	merge_change(&mut into.whole, from.whole, &into.path)?;
-	for (map, other, kind) in [
-		(&mut into.added, from.added, "added"),
-		(&mut into.removed, from.removed, "removed"),
-		(&mut into.converted, from.converted, "converted"),
-		(&mut into.hooked, from.hooked, "hooked"),
-	] {
-		for (name, change) in other {
-			let at = format!("{}/{kind}({name})", into.path);
-			merge_change(map.entry(name).or_default(), change, &at)?;
-		}
-	}
-	for (old, new) in from.renamed {
-		ensure!(
-			into.renamed.insert(old.clone(), new).is_none(),
-			"{}/renamed({old}) is given twice",
-			into.path
-		);
-	}
-	for (name, nested) in from.updated {
-		match into.updated.get_mut(&name) {
-			Some(existing) => merge_rules(existing, nested)?,
-			None => {
-				into.updated.insert(name, nested);
-			}
-		}
-	}
-	Ok(())
-}
-
-pub struct Migration {
-	pub rules: BTreeMap<String, Rules>,
-	pub all: BTreeSet<String>,
-}
-
-pub fn parse_migration(block: &Block) -> Result<Migration> {
-	fn walk(
-		block: &Block,
-		ns: &mut Vec<String>,
-		out: &mut BTreeMap<String, Rules>,
-		all: &mut BTreeSet<String>,
-	) -> Result<()> {
-		for stmt in &block.statements {
-			let Some(Value::Item(head)) = stmt.items.first() else {
-				bail!("expected `namespace` or `updated`");
-			};
-			let name = first_name(head)?;
-			match head.name.item.as_str() {
-				"namespace" => {
-					ns.push(name);
-					walk(&head.block, ns, out, all)?;
-					ns.pop();
-				}
-				"updated" => {
-					let full = ns
-						.iter()
-						.chain([&name])
-						.cloned()
-						.collect::<Vec<_>>()
-						.join("::");
-					let rules = parse_rules(head, full.clone(), all)?;
-					match out.get_mut(&full) {
-						Some(existing) => merge_rules(existing, rules)?,
-						None => {
-							out.insert(full, rules);
-						}
-					}
-				}
-				k => bail!("unexpected `{k}` in a migration"),
-			}
-		}
-		Ok(())
-	}
-	let mut rules = BTreeMap::new();
-	let mut all = BTreeSet::new();
-	walk(block, &mut Vec::new(), &mut rules, &mut all)?;
-	Ok(Migration { rules, all })
-}
-
-pub fn parse_every(block: &Block) -> Result<Migration> {
-	let mut m = parse_migration(block)?;
-	m.rules.values_mut().try_for_each(Rules::disown)?;
-	Ok(m)
-}
+use super::rules::{Action, Rules, merge_rules};
+use super::{Dir, MigrationsData};
 
 #[derive(Clone)]
 enum Conv {
@@ -363,6 +107,21 @@ fn stored_fields(types: &TypeMap, id: TypeId) -> Option<Vec<(String, TypeId)>> {
 				.collect(),
 		),
 		_ => None,
+	}
+}
+
+fn field_use<'t>(types: &'t TypeMap, id: TypeId, name: &str) -> Option<&'t mir::Type> {
+	let n = native(types, id)?;
+	match kind_of(types, id)? {
+		"container" => container::view(n)?
+			.into_iter()
+			.find(|f| f.load_from.is_none() && f.name.as_str() == name)
+			.map(|f| f.ty),
+		_ => n
+			.fields
+			.iter()
+			.find(|(f, _)| f.as_str() == name)
+			.map(|(_, t)| t),
 	}
 }
 
@@ -910,6 +669,7 @@ impl<'a> Gen<'a> {
 						"array" | "terminated" | "entityMetadataLoop" | "topBitSetTerminatedArray"
 					) =>
 			{
+				self.same_counts(from, to, at)?;
 				let (ef, et) = (self.element(from)?, self.element(to)?);
 				let (rf, rt) = (self.resolve(ef), self.resolve(et));
 				if rf != rt
@@ -922,15 +682,17 @@ impl<'a> Gen<'a> {
 					let items = quote!(v.into_iter().map(|x| $cast).collect::<Vec<_>>());
 					return Some(wrap(items));
 				}
-				match self.convert(
-					step,
+				let nested = rules.and_then(|r| r.updated.get("items"));
+				if !self.same_args(
+					native(self.types, from).and_then(|n| specialization_use(n, VALUE)),
+					native(self.types, to).and_then(|n| specialization_use(n, VALUE)),
+					nested,
 					dir,
-					ef,
-					et,
-					rules.and_then(|r| r.updated.get("items")),
-					false,
 					&format!("{at}/items"),
 				) {
+					return None;
+				}
+				match self.convert(step, dir, ef, et, nested, false, &format!("{at}/items")) {
 					Conv::Identity => Some(wrap(quote!(v))),
 					Conv::Call(f) => {
 						let items = quote! {
@@ -964,15 +726,17 @@ impl<'a> Gen<'a> {
 						t
 					}
 				};
-				let conv = self.convert(
-					step,
+				let nested = rules.and_then(|r| r.updated.get("value"));
+				if !self.same_args(
+					native(self.types, from).and_then(|n| specialization_use(n, VALUE)),
+					native(self.types, to).and_then(|n| specialization_use(n, VALUE)),
+					nested,
 					dir,
-					ef,
-					et,
-					rules.and_then(|r| r.updated.get("value")),
-					false,
 					&format!("{at}/value"),
-				);
+				) {
+					return None;
+				}
+				let conv = self.convert(step, dir, ef, et, nested, false, &format!("{at}/value"));
 				let inner = rebox(self.apply(&conv, unbox));
 				let mapped = quote! {
 					match v.map(|x| -> crate::pds::convert::Result<_> { Ok($inner) }).transpose() {
@@ -990,12 +754,22 @@ impl<'a> Gen<'a> {
 				} else {
 					quote!(p)
 				};
+				let nested = rules.and_then(|r| r.updated.get(fname.as_str()));
+				if !self.same_args(
+					Some(fty),
+					Some(tty),
+					nested,
+					dir,
+					&format!("{at}/{}", fname.as_str()),
+				) {
+					return None;
+				}
 				let conv = self.convert(
 					step,
 					dir,
 					fty.target,
 					tty.target,
-					rules.and_then(|r| r.updated.get(fname.as_str())),
+					nested,
 					false,
 					&format!("{at}/{}", fname.as_str()),
 				);
@@ -1020,6 +794,7 @@ impl<'a> Gen<'a> {
 				Some(wrap(quote!(v)))
 			}
 			(Some(a), Some(b)) if a == b && matches!(a, "buffer" | "pstring") => {
+				self.same_counts(from, to, at)?;
 				Some(wrap(quote!(v)))
 			}
 			_ if self.numeric(from) && self.numeric(to) => {
@@ -1039,6 +814,111 @@ impl<'a> Gen<'a> {
 				None
 			}
 		}
+	}
+
+	fn expr_key(&self, e: &Expr) -> String {
+		let list = |items: &[Expr]| {
+			items
+				.iter()
+				.map(|e| self.expr_key(e))
+				.collect::<Vec<_>>()
+				.join(", ")
+		};
+		let ty = |t: TypeId| {
+			self.base_name(t)
+				.cloned()
+				.unwrap_or_else(|| full_name(self.types, self.resolve(t)))
+		};
+		match e {
+			Expr::Var(n, _) => n.as_str().to_owned(),
+			Expr::Field(f) => {
+				f.0.iter()
+					.map(|i| match &i.segment {
+						FieldRefSegment::Down { to, .. } => to.as_str().to_owned(),
+						FieldRefSegment::Virtual(v) => format!("@{}", v.as_str()),
+						FieldRefSegment::Arg(a) => format!("${}", a.as_str()),
+					})
+					.collect::<Vec<_>>()
+					.join("/")
+			}
+			Expr::Const(v) => format!("{v:?}"),
+			Expr::Record(fields) => format!(
+				"({})",
+				fields
+					.iter()
+					.map(|(n, e)| format!("{}: {}", n.as_str(), self.expr_key(e)))
+					.collect::<Vec<_>>()
+					.join(", ")
+			),
+			Expr::List(items) => format!("[{}]", list(items)),
+			Expr::Call(n, args) => format!("{}({})", n.as_str(), list(args)),
+			Expr::Construct(t, c) => format!("{}({c:?})", ty(*t)),
+			Expr::Cast(e, t) | Expr::Typed(e, t) => format!("{}({})", ty(*t), self.expr_key(e)),
+			Expr::Binary(op, a, b) => format!("({} {op:?} {})", self.expr_key(a), self.expr_key(b)),
+			Expr::Eq(a, b) => format!("({} == {})", self.expr_key(a), self.expr_key(b)),
+		}
+	}
+
+	fn args_key(&self, t: Option<&mir::Type>) -> BTreeMap<String, String> {
+		t.map(|t| {
+			t.args
+				.iter()
+				.map(|(name, e)| (name.as_str().to_owned(), self.expr_key(e)))
+				.collect()
+		})
+		.unwrap_or_default()
+	}
+
+	fn same_args(
+		&self,
+		from: Option<&mir::Type>,
+		to: Option<&mir::Type>,
+		nested: Option<&Rules>,
+		dir: Dir,
+		at: &str,
+	) -> bool {
+		if nested.is_some_and(|r| r.own && r.whole.get(dir).is_some()) {
+			return true;
+		}
+		let (af, ato) = (self.args_key(from), self.args_key(to));
+		let changed: Vec<String> = af
+			.iter()
+			.filter_map(|(name, a)| {
+				let b = ato.get(name)?;
+				(a != b).then(|| format!("{name} changed from {a} to {b}"))
+			})
+			.collect();
+		if changed.is_empty() {
+			return true;
+		}
+		self.error(format!(
+			"{at}: argument {}, it can't be converted automatically, add a rule",
+			changed.join(", ")
+		));
+		false
+	}
+
+	fn same_counts(&self, from: TypeId, to: TypeId, at: &str) -> Option<()> {
+		let counts = |id: TypeId| -> Vec<String> {
+			native(self.types, id)
+				.map(|n| {
+					n.ref_args
+						.iter()
+						.map(|(name, e)| format!("{}: {}", name.as_str(), self.expr_key(e)))
+						.collect()
+				})
+				.unwrap_or_default()
+		};
+		let (cf, ct) = (counts(from), counts(to));
+		if cf == ct {
+			return Some(());
+		}
+		self.error(format!(
+			"{at}: the length takes ({}) in one version and ({}) in the other, it can't be converted automatically, add a rule",
+			cf.join(", "),
+			ct.join(", ")
+		));
+		None
 	}
 
 	fn element(&self, id: TypeId) -> Option<TypeId> {
@@ -1110,8 +990,17 @@ impl<'a> Gen<'a> {
 						if rule.is_some() && fs != ft && self.numeric(fs) && self.numeric(ft) {
 							self.cast(unbox, ft)
 						} else {
-							let conv =
-								self.convert(step, dir, *sty, *dty, nested, false, &field_at);
+							let conv = if self.same_args(
+								field_use(self.types, from, &s),
+								field_use(self.types, to, d),
+								nested,
+								dir,
+								&field_at,
+							) {
+								self.convert(step, dir, *sty, *dty, nested, false, &field_at)
+							} else {
+								Conv::Identity
+							};
 							self.apply(&conv, unbox)
 						}
 					}
@@ -1349,15 +1238,25 @@ impl<'a> Gen<'a> {
 					{
 						self.cast(unbox, ft)
 					} else {
-						let conv = self.convert(
-							step,
-							dir,
-							ty.target,
-							tty.target,
+						let conv = if self.same_args(
+							Some(ty),
+							Some(tty),
 							r.updated.get(&newer),
-							false,
+							dir,
 							&arm_at,
-						);
+						) {
+							self.convert(
+								step,
+								dir,
+								ty.target,
+								tty.target,
+								r.updated.get(&newer),
+								false,
+								&arm_at,
+							)
+						} else {
+							Conv::Identity
+						};
 						self.apply(&conv, unbox)
 					};
 					let value = if self.names.boxed(to, tname) {
@@ -1404,15 +1303,26 @@ impl<'a> Gen<'a> {
 					} else {
 						quote!(p)
 					};
-					let conv = self.convert(
-						step,
+					let nested = r.updated.get("default");
+					let conv = if self.same_args(
+						Some(dty),
+						Some(tty),
+						nested,
 						dir,
-						dty.target,
-						tty.target,
-						r.updated.get("default"),
-						false,
 						&format!("{at}/default"),
-					);
+					) {
+						self.convert(
+							step,
+							dir,
+							dty.target,
+							tty.target,
+							nested,
+							false,
+							&format!("{at}/default"),
+						)
+					} else {
+						Conv::Identity
+					};
 					let value = self.apply(&conv, unbox);
 					let value = if self.names.boxed(to, tname) {
 						quote!(Box::new($value))
@@ -1486,74 +1396,50 @@ fn version_range_macro(variants: &[String]) -> String {
 }
 
 pub fn generate(
-	types: &TypeMap,
-	reg: &Registry,
-	merged: &Block,
-	versions: &[crate::merge::Version],
-	migrations: &[Option<Migration>],
-	every: Option<&Migration>,
-	virtual_packets: bool,
-	crates: Option<&str>,
-) -> Result<String> {
-	let protocols: Vec<(i32, usize)> = versions
+	data: &MigrationsData,
+	ctx: &DefinitionRustCtx,
+	namespace: &[Ident],
+) -> Result<rust::Tokens> {
+	let (types, reg) = (ctx.types(), ctx.reg());
+	let migrations = &data.steps;
+	let every = data.every.as_ref();
+	let virtual_packets = data.virtual_packets;
+	let protocols: Vec<(i32, usize)> = data
+		.versions
 		.iter()
 		.enumerate()
 		.flat_map(|(i, v)| v.protocols.iter().map(move |p| (*p, i)))
 		.collect();
-	let legacy: Vec<(i32, usize)> = versions
+	let legacy: Vec<(i32, usize)> = data
+		.versions
 		.iter()
 		.enumerate()
 		.flat_map(|(i, v)| v.legacy.iter().map(move |p| (*p, i)))
 		.collect();
-	let versions: Vec<String> = versions.iter().map(|v| v.name.clone()).collect();
+	let mut snapshots: Vec<(i32, &str, usize)> = data
+		.versions
+		.iter()
+		.enumerate()
+		.flat_map(|(i, v)| v.snapshots.iter().map(move |(p, n)| (*p, n.as_str(), i)))
+		.collect();
+	snapshots.sort_by_key(|(p, _, _)| *p);
+	let versions: Vec<String> = data.versions.iter().map(|v| v.name.clone()).collect();
 	let variant_names: Vec<String> = versions
 		.iter()
 		.map(|v| format!("V{}", v.replace(['.', '-'], "_")))
 		.collect();
+	ensure!(!versions.is_empty(), "migrations need at least one version");
 	ensure!(
 		migrations.len() + 1 == versions.len(),
 		"{} versions need {} migrations",
 		versions.len(),
 		versions.len() - 1
 	);
-	let tags: Vec<String> = versions.iter().map(|v| crate::merge::tag(v)).collect();
-	let mut base = BTreeMap::new();
-	fn defs(block: &Block, ns: &mut Vec<String>, out: &mut Vec<String>) {
-		for stmt in &block.statements {
-			let Some(Value::Item(head)) = stmt.items.first() else {
-				continue;
-			};
-			let Ok(name) = first_name(head) else { continue };
-			match head.name.item.as_str() {
-				"namespace" => {
-					ns.push(name);
-					defs(&head.block, ns, out);
-					ns.pop();
-				}
-				"def" => out.push(
-					ns.iter()
-						.chain([&name])
-						.cloned()
-						.collect::<Vec<_>>()
-						.join("::"),
-				),
-				_ => {}
-			}
-		}
-	}
-	let mut names = Vec::new();
-	defs(merged, &mut Vec::new(), &mut names);
-	for name in names {
-		let stripped = tags
-			.iter()
-			.find_map(|t| name.strip_prefix(&format!("{t}::")))
-			.unwrap_or(&name)
-			.to_owned();
-		base.insert(name, stripped);
-	}
+	let tags: Vec<String> = data.versions.iter().map(|v| v.package.clone()).collect();
+	let base = data.base.clone();
 	let g = Gen {
 		types,
-		names: RustNames::new(types, reg, &["convert"], crates)?,
+		names: ctx.names_in(namespace)?,
 		elab: Elaborator { types, reg },
 		alias_base: {
 			let mut found: BTreeMap<TypeId, Option<String>> = BTreeMap::new();
@@ -1875,6 +1761,14 @@ pub fn generate(
 			LEGACY_PROTOCOLS.iter().find(|(p, _)| *p == protocol).map(|(_, v)| *v)
 		}
 
+		pub const SNAPSHOTS: &[(i32, &str, Version)] = &[$(for (p, n, i) in &snapshots join(, ) => ($(*p), $(quoted(*n)), Version::$(&variant_names[*i])))];
+
+		pub fn snapshots_of(protocol: i32) -> &'static [(i32, &'static str, Version)] {
+			let start = SNAPSHOTS.partition_point(|(p, _, _)| *p < protocol);
+			let end = SNAPSHOTS.partition_point(|(p, _, _)| *p <= protocol);
+			&SNAPSHOTS[start..end]
+		}
+
 		pub const STEPS: &[bool] = &[$(for m in migrations join(, ) => $(if m.is_some() { true } else { false }))];
 
 		pub fn reachable(a: Version, b: Version) -> bool {
@@ -1981,5 +1875,8 @@ pub fn generate(
 
 		$(for c in code.iter() join($['\n']) => $c)
 	};
-	file.to_file_string().context("rendering converters")
+	Ok(quote! {
+		$("#![allow(unreachable_code)]")
+		$file
+	})
 }

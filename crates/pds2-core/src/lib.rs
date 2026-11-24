@@ -1,10 +1,19 @@
 pub mod ast;
+pub mod dedup;
 pub mod definition;
 pub mod format;
 pub mod generator;
 pub mod hir;
 pub mod mir;
 pub mod specializer;
+
+pub fn prepare(
+	block: ast::Block,
+	reg: &specializer::Registry,
+) -> anyhow::Result<(ast::Block, Vec<definition::DefinitionUse>)> {
+	let block = dedup::deduplicate(block)?;
+	definition::lower(block, reg)
+}
 
 #[macro_export]
 macro_rules! should_be_desugared {

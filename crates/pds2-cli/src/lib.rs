@@ -36,6 +36,10 @@ pub struct CompileArgs {
 	#[arg(long, global = true)]
 	pub to: Option<PathBuf>,
 
+	/// Compile and generate, but write nothing
+	#[arg(long, global = true)]
+	pub check: bool,
+
 	#[command(subcommand)]
 	pub codegen: Codegen,
 }
@@ -70,6 +74,13 @@ pub struct RustArgs {
 	/// Workspace dependency of every generated crate
 	#[arg(long = "crate-dependency", value_name = "NAME", requires = "crates")]
 	pub crate_dependencies: Vec<String>,
+
+	/// Write package PACKAGE as a module of an existing crate instead of a crate of its own, rooted
+	/// at PATH when it is a .rs file and at PATH/mod.rs otherwise. Such a package holds only custom
+	/// definition output; it reaches the other packages through the umbrella crate and `crate::` is
+	/// the crate PATH belongs to
+	#[arg(long = "module", value_name = "PACKAGE=PATH", requires = "crates")]
+	pub modules: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -102,15 +113,16 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 		print_mir,
 		consts,
 		to,
+		check,
 		codegen,
 	} = args;
-	let data = std::fs::read_to_string(from)?;
-	let mut parsed = ast::parse(&data)?;
+	let mut parsed = ast::load(&from)?;
 	let split = match &codegen {
 		Codegen::Rust(RustArgs {
 			crates: Some(name),
 			crate_prelude,
 			crate_dependencies,
+			modules,
 			..
 		}) => Some(Split {
 			name: name.clone(),
@@ -124,6 +136,16 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 				None => String::new(),
 			},
 			dependencies: crate_dependencies.clone(),
+			packages: packages(&parsed),
+			modules: modules
+				.iter()
+				.map(|m| {
+					let (package, path) = m
+						.split_once('=')
+						.ok_or_else(|| anyhow!("--module {m:?} should be PACKAGE=PATH"))?;
+					Ok((package.to_owned(), std::path::absolute(path)?))
+				})
+				.collect::<Result<_>>()?,
 		}),
 		_ => None,
 	};
@@ -137,7 +159,7 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 			.map_err(|e| anyhow!("--const {name:?}: {e}"))?;
 		parsed.statements.extend(def.statements);
 	}
-	let (parsed, definitions) = pds2_core::definition::lower(parsed, reg)?;
+	let (parsed, definitions) = pds2_core::prepare(parsed, reg)?;
 
 	if print_ast {
 		dbg!(&parsed);
@@ -171,6 +193,9 @@ pub fn compile(args: CompileArgs, reg: &Registry) -> Result<()> {
 		}
 	}
 
+	if check {
+		return Ok(());
+	}
 	if let Some(to) = &to {
 		std::fs::create_dir_all(to)?;
 	}
@@ -251,6 +276,23 @@ fn existing_versions(dir: &Path) -> BTreeMap<String, String> {
 		.collect()
 }
 
+fn packages(block: &ast::Block) -> std::collections::BTreeSet<String> {
+	block
+		.statements
+		.iter()
+		.filter_map(|stmt| {
+			let head = stmt.head()?;
+			if head.head_name() != Some("package") {
+				return None;
+			}
+			let ast::Value::Item(name) = head.args.positional().first()? else {
+				return None;
+			};
+			Some(name.name.item.as_str().to_owned())
+		})
+		.collect()
+}
+
 fn namespace_docs(block: &ast::Block) -> BTreeMap<String, String> {
 	block
 		.statements
@@ -259,7 +301,7 @@ fn namespace_docs(block: &ast::Block) -> BTreeMap<String, String> {
 			let ast::Value::Item(head) = stmt.items.first()? else {
 				return None;
 			};
-			if head.name.item.as_str() != "namespace" {
+			if !matches!(head.name.item.as_str(), "namespace" | "package") {
 				return None;
 			}
 			let ast::Value::Item(name) = head.args.positional().first()? else {

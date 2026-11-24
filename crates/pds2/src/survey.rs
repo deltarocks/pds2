@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 
-use pds2_core::ast::{self, Block, Item, ItemArgs, Statement, Value};
+use pds2_core::ast::{self, Block, Item, Statement, Value};
+use pds2_core::dedup::{canonical, deep_hashes, statement_text};
 
 pub struct Version {
 	pub name: String,
@@ -43,40 +44,6 @@ pub enum Change {
 	Other,
 }
 
-fn canonical(v: &Value) -> Value {
-	match v {
-		Value::Item(i) => {
-			let mut args = ItemArgs::builder();
-			for a in i.args.positional() {
-				args = args.arg(canonical(a));
-			}
-			for (n, a) in i.args.named_values() {
-				args = args.named(n.clone(), canonical(a));
-			}
-			Value::Item(Item {
-				name: i.name.clone(),
-				args: args.build(),
-				block: Block {
-					attributes: i.block.attributes.clone(),
-					statements: i.block.statements.iter().map(canonical_statement).collect(),
-					root: i.block.root,
-				},
-			})
-		}
-		Value::List(xs) => Value::List(xs.iter().map(canonical).collect()),
-		Value::Record(fs) => Value::Record(fs.iter().map(|(n, x)| (n.clone(), canonical(x))).collect()),
-		Value::Binary(op, a, b) => Value::Binary(*op, Box::new(canonical(a)), Box::new(canonical(b))),
-		v => v.clone(),
-	}
-}
-
-fn canonical_statement(stmt: &Statement) -> Statement {
-	Statement {
-		attributes: stmt.attributes.clone(),
-		items: stmt.items.iter().map(canonical).collect(),
-	}
-}
-
 fn format_values(items: &[Value]) -> String {
 	if items.is_empty() {
 		return String::new();
@@ -91,15 +58,7 @@ fn format_values(items: &[Value]) -> String {
 }
 
 fn format_statement(stmt: &Statement) -> String {
-	let block = Block {
-		attributes: Default::default(),
-		statements: vec![canonical_statement(stmt)],
-		root: true,
-	};
-	ast::format(&block)
-		.split_whitespace()
-		.collect::<Vec<_>>()
-		.join(" ")
+	statement_text(stmt)
 }
 
 fn first_name(item: &Item) -> Option<String> {
@@ -305,93 +264,6 @@ pub fn deep(v: &Version) -> BTreeMap<String, u64> {
 		})
 		.collect();
 	deep_hashes(&graph)
-}
-
-pub fn deep_hashes(graph: &BTreeMap<&str, (&str, Vec<&str>)>) -> BTreeMap<String, u64> {
-	struct Tarjan<'g, 'a> {
-		graph: &'g BTreeMap<&'a str, (&'a str, Vec<&'a str>)>,
-		index: BTreeMap<&'a str, usize>,
-		low: BTreeMap<&'a str, usize>,
-		stack: Vec<&'a str>,
-		on_stack: BTreeSet<&'a str>,
-		components: Vec<Vec<&'a str>>,
-	}
-	impl<'a> Tarjan<'_, 'a> {
-		fn visit(&mut self, v: &'a str) {
-			let i = self.index.len();
-			self.index.insert(v, i);
-			self.low.insert(v, i);
-			self.stack.push(v);
-			self.on_stack.insert(v);
-			for &w in &self.graph[v].1 {
-				let reached = match self.index.get(w).copied() {
-					None => {
-						self.visit(w);
-						self.low[w]
-					}
-					Some(iw) if self.on_stack.contains(w) => iw,
-					Some(_) => continue,
-				};
-				let low = self.low.get_mut(v).expect("visited");
-				*low = (*low).min(reached);
-			}
-			if self.low[v] == self.index[v] {
-				let mut group = Vec::new();
-				loop {
-					let w = self.stack.pop().expect("v is on the stack");
-					self.on_stack.remove(w);
-					group.push(w);
-					if w == v {
-						break;
-					}
-				}
-				group.sort_unstable();
-				self.components.push(group);
-			}
-		}
-	}
-	let mut t = Tarjan {
-		graph,
-		index: BTreeMap::new(),
-		low: BTreeMap::new(),
-		stack: Vec::new(),
-		on_stack: BTreeSet::new(),
-		components: Vec::new(),
-	};
-	for &v in graph.keys() {
-		if !t.index.contains_key(v) {
-			t.visit(v);
-		}
-	}
-	let mut component_of: BTreeMap<&str, usize> = BTreeMap::new();
-	let mut component_hash: Vec<u64> = Vec::new();
-	let mut out = BTreeMap::new();
-	for (k, group) in t.components.iter().enumerate() {
-		for &m in group {
-			component_of.insert(m, k);
-		}
-		let mut h = DefaultHasher::new();
-		for &m in group {
-			let (text, refs) = &graph[m];
-			m.hash(&mut h);
-			text.hash(&mut h);
-			for &r in refs {
-				match component_of[r] {
-					c if c == k => r.hash(&mut h),
-					c => component_hash[c].hash(&mut h),
-				}
-			}
-		}
-		let shared = h.finish();
-		component_hash.push(shared);
-		for &m in group {
-			let mut h = DefaultHasher::new();
-			shared.hash(&mut h);
-			m.hash(&mut h);
-			out.insert(m.to_owned(), h.finish());
-		}
-	}
-	out
 }
 
 fn simple(ty: &str) -> bool {

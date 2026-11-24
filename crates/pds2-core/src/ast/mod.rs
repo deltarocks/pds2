@@ -10,6 +10,8 @@ use std::{
 };
 mod format;
 pub use format::{format, format_call, format_value};
+mod include;
+pub use include::load;
 mod parse;
 pub use parse::{parse, parse_expr};
 

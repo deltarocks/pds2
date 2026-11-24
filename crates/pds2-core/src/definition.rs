@@ -10,13 +10,15 @@ use crate::generator::rust::DefinitionRustCtx;
 use crate::mir;
 use crate::specializer::Registry;
 
-pub const BUILTIN_STATEMENTS: &[&str] = &["namespace", "def", "def_native", "fn"];
+pub const BUILTIN_STATEMENTS: &[&str] =
+	&["namespace", "package", "include", "def", "def_native", "fn"];
 
 const MAX_DEPTH: usize = 32;
 
 pub struct LowerCtx<'a> {
 	pub namespace: &'a [Ident],
 	pub reg: &'a Registry,
+	pub root: &'a Block,
 }
 
 pub struct Lowered {
@@ -68,13 +70,37 @@ pub trait Definition {
 
 pub fn lower(mut block: Block, reg: &Registry) -> Result<(Block, Vec<DefinitionUse>)> {
 	let mut uses = Vec::new();
-	lower_block(&mut block, reg, &mut Vec::new(), &mut uses, 0)?;
+	if has_definitions(&block, reg) {
+		let root = block.clone();
+		lower_block(&mut block, reg, &root, &mut Vec::new(), &mut uses, 0)?;
+	} else {
+		lower_block(
+			&mut block,
+			reg,
+			&Block::default(),
+			&mut Vec::new(),
+			&mut uses,
+			0,
+		)?;
+	}
 	Ok((block, uses))
+}
+
+fn has_definitions(block: &Block, reg: &Registry) -> bool {
+	block.statements.iter().any(|s| match s.head() {
+		Some(item) => match item.head_name() {
+			Some("namespace" | "package") => has_definitions(&item.block, reg),
+			Some(name) => reg.definition(name).is_some(),
+			None => false,
+		},
+		None => false,
+	})
 }
 
 fn lower_block(
 	block: &mut Block,
 	reg: &Registry,
+	root: &Block,
 	namespace: &mut Vec<Ident>,
 	uses: &mut Vec<DefinitionUse>,
 	depth: usize,
@@ -86,18 +112,20 @@ fn lower_block(
 			continue;
 		};
 		match head.as_str() {
-			"namespace" => {
+			kind @ ("namespace" | "package") => {
 				if let Some(Value::Item(item)) = statement.items.first_mut() {
 					let name = item.args.positional().first().cloned().map(Ident::parse);
 					if let Some(Ok(name)) = name {
 						namespace.push(name.clone());
-						let lowered = lower_block(&mut item.block, reg, namespace, uses, depth);
+						let lowered =
+							lower_block(&mut item.block, reg, root, namespace, uses, depth);
 						namespace.pop();
-						lowered.with_context(|| format!("namespace {name:?}"))?;
+						lowered.with_context(|| format!("{kind} {name:?}"))?;
 					}
 				}
 				block.statements.push(statement);
 			}
+			"include" => bail!("include is only expanded when the schema is loaded from a file"),
 			"def" | "def_native" | "fn" => block.statements.push(statement),
 			name => {
 				let Some(definition) = reg.definition(name) else {
@@ -116,7 +144,16 @@ fn lower_block(
 					None => name.to_owned(),
 				};
 				let lowered = definition
-					.lower(attributes, item, chain, &LowerCtx { namespace, reg })
+					.lower(
+						attributes,
+						item,
+						chain,
+						&LowerCtx {
+							namespace,
+							reg,
+							root,
+						},
+					)
 					.with_context(|| format!("in `{label}`"))?;
 				uses.push(DefinitionUse {
 					definition: head.clone(),
@@ -127,7 +164,7 @@ fn lower_block(
 					statements: lowered.statements,
 					..Default::default()
 				};
-				lower_block(&mut inner, reg, namespace, uses, depth + 1)
+				lower_block(&mut inner, reg, root, namespace, uses, depth + 1)
 					.with_context(|| format!("expanding `{label}`"))?;
 				block.statements.extend(inner.statements);
 			}

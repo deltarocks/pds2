@@ -3,12 +3,14 @@ use pds2_core::specializer::Registry;
 use pds2_specializer_bytes::register_encoder;
 use pds2_specializer_protodef::UpgradeRegistry;
 
+pub mod migrations;
 mod natives;
 mod ts;
 
 use natives::*;
 
 pub fn register(reg: &mut Registry) {
+	reg.register_definition("migrations", migrations::Migrations);
 	pds2_specializer_generic::register_terminated(reg, "entityMetadataLoop");
 
 	reg.register_layout("topBitSetTerminatedArray", TopBitSetTerminatedArray);

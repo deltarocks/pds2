@@ -12,7 +12,7 @@ syntax and encoders into a `Registry` by name:
 | `pds2-specializer-csn1` | the bit `Encoder`, `uint`, `optional`, `choice`, `repeated`, `fixed`, `spare`, `padded`, encodings `bits_container`, `bits_array`, and the `serialized_bits`, `deserialized_bits` functions
 | `pds2-specializer-generic` | `const`, `terminated`
 | `pds2-specializer-protodef` | `container`, `union`, `array`, `option`, `bitfield`, `bitflags`, `buffer`, `pstring`, and the protodef JSON upgrader
-| `pds2-specializer-minecraft-data` | `entityMetadataLoop`, `topBitSetTerminatedArray`, `registryEntryHolder`, `registryEntryHolderSet`, and upgraders for minecraft-data natives
+| `pds2-specializer-minecraft-data` | `entityMetadataLoop`, `topBitSetTerminatedArray`, `registryEntryHolder`, `registryEntryHolderSet`, upgraders for minecraft-data natives, and the `migrations` definition (xref:../minecraft/migrations.adoc[Version migrations])
 | `pds2-specializer-protobuf` | `message`, `enum`, and the `FileDescriptorSet` converter
 | `pds2-specializer-bifrostlink` | the `service` definition, `resource`, `pipe` and `result`, for bifrostlink RPC
 |===
@@ -48,8 +48,9 @@ form for different encoding rules are alternatives a CLI
 picks between.
 
 `compile <schema> rust` and `compile <schema> typescript` pick the generator;
-`--to`, `--const` and `--print-*` go before or after it, generator options
-(`--view`, `--crates`, ...) after it. Generated Rust is formatted with `rustfmt`
+`--to`, `--const`, `--check` (generate, but write nothing) and `--print-*` go
+before or after it, generator options (`--view`, `--crates`, `--module`, ...)
+after it. The schema is read with its `include`s expanded. Generated Rust is formatted with `rustfmt`
 for the edition of the cargo package it is written to, and its `rustfmt.toml`;
 outside a package rustfmt decides the edition itself.
 
@@ -59,15 +60,19 @@ pds2 compile lang.pds rust --to src/gen --view ''
 pds2 compile lang.pds typescript --to ts/gen
 ----
 
+[#custom-definitions]
 == Custom definitions
 
 A library can register a custom definition with
-`Registry::register_definition(name, ..)`: a top level or namespace statement
-headed by `name` that is not a type. Before anything else is compiled, the
-definition lowers the statement in place into ordinary statements (namespaces,
-`def`s) and keeps whatever it needs for code generation. Lowered statements may
-use other definitions. After the types are compiled, the definition generates
-Rust appended to the `mod.rs` of the namespaces it names, seeing the final types
-and their Rust names. `namespace`, `def`, `def_native` and `fn` can't be taken.
-Custom definitions are not supported with `--crates` yet, and none generate
-TypeScript.
+`Registry::register_definition(name, ..)`: a top level, namespace or package
+statement headed by `name` that is not a type. Before anything else is
+compiled, and after packages are deduplicated, the definition lowers the
+statement in place into ordinary statements (namespaces, `def`s) and keeps
+whatever it needs for code generation; it may read the whole schema as it was
+before lowering (`LowerCtx::root`). Lowered statements may use other
+definitions. After the types are compiled, the definition generates Rust
+appended to the `mod.rs` of the namespaces it names, seeing the final types and
+their Rust names; with `--crates` that is the module in the namespace's crate,
+and a package written with `--module` can hold nothing but such output.
+`namespace`, `package`, `include`, `def`, `def_native` and `fn` can't be
+taken. No definition generates TypeScript yet.
