@@ -47,6 +47,7 @@ pub fn register_upgraders(reg: &mut UpgradeRegistry) {
 		"compressedNbt",
 		"byte_array",
 		"string",
+		"entityDelta",
 	] {
 		reg.register(Opaque(name));
 	}
