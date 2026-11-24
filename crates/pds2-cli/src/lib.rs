@@ -76,9 +76,9 @@ pub struct RustArgs {
 	pub crate_dependencies: Vec<String>,
 
 	/// Write package PACKAGE as a module of an existing crate instead of a crate of its own, rooted
-	/// at PATH when it is a .rs file and at PATH/mod.rs otherwise. Such a package holds only custom
-	/// definition output; it reaches the other packages through the umbrella crate and `crate::` is
-	/// the crate PATH belongs to
+	/// at PATH when it is a .rs file and at PATH/mod.rs otherwise. It reaches the other packages
+	/// through the umbrella crate, `crate::` is the crate PATH belongs to, and no other package may
+	/// use its types
 	#[arg(long = "module", value_name = "PACKAGE=PATH", requires = "crates")]
 	pub modules: Vec<String>,
 }

@@ -30,7 +30,9 @@ the receiver handle the notification before reading further messages.
 
 Each method becomes a namespace with the types `Request` and, when it answers,
 `Response`, so a method body has to qualify its own types named `Request` or
-`Response`. The service's `mod.rs` then holds:
+`Response`. A service in a package written with `--module` keeps these types
+and its code in that module, so only the crate hosting it needs bifrostlink.
+The service's `mod.rs` then holds:
 
 [cols="1,3"]
 |===

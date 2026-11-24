@@ -411,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "pds2"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "genco",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "pds2-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -443,7 +443,7 @@ dependencies = [
 
 [[package]]
 name = "pds2-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -456,7 +456,7 @@ dependencies = [
 
 [[package]]
 name = "pds2-specializer-bifrostlink"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "genco",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "pds2-specializer-bytes"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "pds2-core",
@@ -478,7 +478,7 @@ dependencies = [
 
 [[package]]
 name = "pds2-specializer-csn1"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "genco",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "pds2-specializer-generic"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "genco",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "pds2-specializer-minecraft-data"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "genco",
@@ -512,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "pds2-specializer-protobuf"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "genco",
@@ -523,7 +523,7 @@ dependencies = [
 
 [[package]]
 name = "pds2-specializer-protodef"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "Inflector",
  "anyhow",

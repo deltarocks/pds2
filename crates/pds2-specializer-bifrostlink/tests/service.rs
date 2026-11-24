@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use pds2_core::generator::split::Split;
 use pds2_core::generator::{rust, typescript};
 use pds2_core::specializer::Registry;
 use pds2_core::{ast, definition, hir, mir};
@@ -51,6 +52,29 @@ fn compile_ts(schema: &str) -> Result<BTreeMap<PathBuf, String>> {
 	let mut out = Default::default();
 	typescript::generator(&types, &mut out, &reg)?;
 	definition::generate_typescript(&types, &uses, &reg, &mut out)?;
+	Ok(out.into_iter().collect())
+}
+
+fn compile_split(
+	schema: &str,
+	packages: &[&str],
+	module: &str,
+) -> Result<BTreeMap<PathBuf, String>> {
+	let reg = registry();
+	let (block, uses) = definition::lower(ast::parse(schema)?, &reg)?;
+	let types = mir::from_hir(&hir::parse_ast(block, &reg)?, &reg)?;
+	let split = Split {
+		name: "app".to_owned(),
+		prelude: String::new(),
+		dependencies: vec![],
+		root_doc: None,
+		namespace_docs: BTreeMap::new(),
+		versions: BTreeMap::new(),
+		packages: packages.iter().map(|p| (*p).to_owned()).collect(),
+		modules: [(module.to_owned(), PathBuf::from("/host/src/link"))].into(),
+	};
+	let mut out = Default::default();
+	rust::generate(&types, &mut out, &reg, None, Some(&split), &uses)?;
 	Ok(out.into_iter().collect())
 }
 
@@ -275,4 +299,66 @@ fn service_ids_are_unique() {
 		e.contains(&format!("services {a} and {b} have the same id")),
 		"{e}"
 	);
+}
+
+const PACKAGED: &str = "def(Thing) { export; } => container { field(x) => u8; }; package(link) { service(Front) { request(ask, id: 1) { field(thing) => Thing; } => u8; }; };";
+
+#[test]
+fn service_types_live_in_a_module_package() {
+	let out = compile_split(&format!("{NATIVES}{PACKAGED}"), &["link"], "link").unwrap();
+	let at = |file: &str| -> &String {
+		out.get(Path::new("/host/src/link").join(file).as_path())
+			.unwrap_or_else(|| panic!("{file} missing from {:?}", out.keys()))
+	};
+	assert!(at("mod.rs").contains("pub mod front;"), "{}", at("mod.rs"));
+	let request = at("front/ask/request.rs");
+	assert!(request.contains("::app::Thing"), "{request}");
+	let service = squash(at("front/mod.rs"));
+	assert!(
+		service.contains(&squash("pub trait Server<C: ::bifrostlink::Config>")),
+		"{service}"
+	);
+	assert!(
+		!out.contains_key(&PathBuf::from("app-link/Cargo.toml")),
+		"{:?}",
+		out.keys()
+	);
+	let root = &out[&PathBuf::from("app-root/src/lib.rs")];
+	assert!(!root.contains("front"), "{root}");
+}
+
+#[test]
+fn types_using_a_module_package_follow_it() {
+	let schema = format!(
+		"{NATIVES}package(link) {{ def(Inner) => container {{ field(x) => u8; }}; }}; def(Outer) => container {{ field(i) => link::Inner; }};"
+	);
+	let out = compile_split(&schema, &["link"], "link").unwrap();
+	assert!(
+		out.contains_key(&PathBuf::from("/host/src/link/outer.rs")),
+		"{:?}",
+		out.keys()
+	);
+}
+
+#[test]
+fn module_package_types_stay_in_their_package() {
+	let direct = format!(
+		"{NATIVES}package(link) {{ def(Inner) => container {{ field(x) => u8; }}; }}; package(other) {{ def(Outer) => container {{ field(i) => link::Inner; }}; }};"
+	);
+	let e = format!(
+		"{:#}",
+		compile_split(&direct, &["link", "other"], "link").unwrap_err()
+	);
+	assert!(
+		e.contains("other_Outer uses link_Inner of module package link"),
+		"{e}"
+	);
+	let through_root = format!(
+		"{NATIVES}package(link) {{ def(Inner) => container {{ field(x) => u8; }}; }}; def(Middle) => container {{ field(i) => link::Inner; }}; package(other) {{ def(Outer) => container {{ field(m) => Middle; }}; }};"
+	);
+	let e = format!(
+		"{:#}",
+		compile_split(&through_root, &["link", "other"], "link").unwrap_err()
+	);
+	assert!(e.contains("which only that package can use"), "{e}");
 }

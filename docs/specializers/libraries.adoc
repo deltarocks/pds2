@@ -73,7 +73,7 @@ before lowering (`LowerCtx::root`). Lowered statements may use other
 definitions. After the types are compiled, the definition generates Rust
 appended to the `mod.rs` of the namespaces it names, seeing the final types and
 their Rust names; with `--crates` that is the module in the namespace's crate,
-and a package written with `--module` can hold nothing but such output.
+which for a package written with `--module` is that module.
 `namespace`, `package`, `include`, `def`, `def_native` and `fn` can't be
 taken. `Definition::generate_typescript` adds files to the TypeScript output;
 `service` uses it, other definitions refuse TypeScript.

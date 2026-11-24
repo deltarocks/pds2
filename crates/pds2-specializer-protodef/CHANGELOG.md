@@ -2,6 +2,13 @@
 
 <!-- bureaucrate goes here -->
 
+## [v0.1.2] 2026-11-24
+
+### Dependencies
+
+- Updated `pds2-core` to 0.2.0
+- Updated `pds2-specializer-bytes` to 0.1.2
+
 ## [v0.1.1] 2026-11-22
 
 ### Other changes

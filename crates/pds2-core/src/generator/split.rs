@@ -93,10 +93,12 @@ impl Layout {
 	pub fn new(types: &TypeMap, reg: &Registry, modules: &Modules, split: &Split) -> Result<Self> {
 		let name = split.name.as_str();
 		let mut crates = vec![Crate::new(format!("{name}-root"), None, None)];
+		let mut module_of: BTreeMap<&str, usize> = BTreeMap::new();
 		for (namespace, dir) in &split.modules {
 			if !split.packages.contains(namespace) {
 				bail!("{namespace} is not a package, it can't be generated as a module");
 			}
+			module_of.insert(namespace, crates.len());
 			crates.push(Crate::module(namespace, dir));
 		}
 		let mut by_ns: BTreeMap<String, usize> = BTreeMap::new();
@@ -106,12 +108,10 @@ impl Layout {
 			if def.namespaced == 0 || !split.packages.contains(def.name.segments()[0].as_str()) {
 				continue;
 			}
-			if split.modules.contains_key(def.name.segments()[0].as_str()) {
-				bail!(
-					"{} is a type of module package {}, which can only hold definition output",
-					def.name.readable_name(),
-					def.name.segments()[0].as_str()
-				);
+			if let Some(k) = module_of.get(def.name.segments()[0].as_str()) {
+				of.insert(*id, *k);
+				strip.insert(*id);
+				continue;
 			}
 			let top = &modules.path(*id)[0];
 			let k = *by_ns.entry(top.ident.clone()).or_insert_with(|| {
@@ -188,6 +188,19 @@ impl Layout {
 			}
 			for id in group {
 				of.insert(id, home);
+			}
+		}
+		for (id, k) in &of {
+			if let Some(r) = refs[id]
+				.iter()
+				.find(|r| of[*r] != *k && crates[of[*r]].module.is_some())
+			{
+				bail!(
+					"{} uses {} of module package {}, which only that package can use",
+					types[*id].name.readable_name(),
+					types[*r].name.readable_name(),
+					crates[of[r]].package
+				);
 			}
 		}
 		Ok(Self {

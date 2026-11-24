@@ -73,9 +73,11 @@ re-exports them all. The `@!doc` of a package describes its crate.
 `--module PACKAGE=PATH` writes a package into an existing crate instead, as the
 module file `PATH` (or `PATH/mod.rs` when `PATH` is a directory): no manifest,
 `crate::` is the crate the module belongs to, and other packages are reached
-through the `NAME` crate. Such a package holds only the output of custom
-definitions, see xref:../specializers/libraries.adoc#custom-definitions[Custom
-definitions].
+through the `NAME` crate. Its types live in the module too, so nothing outside
+the package may use them; a type outside packages that uses one moves into the
+module with it. This places custom definition output, see
+xref:../specializers/libraries.adoc#custom-definitions[Custom definitions], and
+the types it lowers to, in a crate of your own.
 
 == `include("file.pds")`
 
