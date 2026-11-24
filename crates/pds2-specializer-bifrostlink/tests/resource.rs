@@ -58,3 +58,28 @@ fn views_reject_resources() {
 	let e = rust::generate(&types(&reg), &mut out, &reg, Some(""), None, &[]).unwrap_err();
 	assert!(format!("{e:#}").contains("move-only"), "{e:#}");
 }
+
+#[test]
+fn typescript_resources_go_through_the_runtime() {
+	let reg = registry();
+	let mut out = Default::default();
+	pds2_core::generator::typescript::generator(&types(&reg), &mut out, &reg).unwrap();
+	let holder = &out[&PathBuf::from("Holder.ts")];
+	assert!(holder.contains("handle: Resource<pds$u8.Ty>;"), "{holder}");
+	let resource = out
+		.iter()
+		.find(|(path, _)| path.to_string_lossy().starts_with("resource"))
+		.map(|(_, v)| v)
+		.expect("resource module");
+	for expected in [
+		"import {Input, Output, Resource, resource} from \"../pds.ts\";",
+		"resource.serialize(_0, output);",
+		"return resource.adopt(id, payload);",
+		"return resource.id_size(_0) + pds$u8.size_of(_0.value);",
+	] {
+		assert!(
+			resource.contains(expected),
+			"{expected:?} missing from {resource}"
+		);
+	}
+}

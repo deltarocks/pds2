@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use anyhow::Result;
-use pds2_core::generator::rust;
+use pds2_core::generator::{rust, typescript};
 use pds2_core::specializer::Registry;
 use pds2_core::{ast, definition, hir, mir};
 use pds2_specializer_bifrostlink::service_id;
@@ -41,6 +41,16 @@ fn compile(schema: &str) -> Result<BTreeMap<PathBuf, String>> {
 	let types = mir::from_hir(&hir::parse_ast(block, &reg)?, &reg)?;
 	let mut out = Default::default();
 	rust::generate(&types, &mut out, &reg, None, None, &uses)?;
+	Ok(out.into_iter().collect())
+}
+
+fn compile_ts(schema: &str) -> Result<BTreeMap<PathBuf, String>> {
+	let reg = registry();
+	let (block, uses) = definition::lower(ast::parse(schema)?, &reg)?;
+	let types = mir::from_hir(&hir::parse_ast(block, &reg)?, &reg)?;
+	let mut out = Default::default();
+	typescript::generator(&types, &mut out, &reg)?;
+	definition::generate_typescript(&types, &uses, &reg, &mut out)?;
 	Ok(out.into_iter().collect())
 }
 
@@ -105,6 +115,79 @@ fn generates_server_and_client() {
 		assert!(module.contains(&squash(&expected)), "{expected:?} missing from:\n{}", out[&PathBuf::from("remowt/pty/mod.rs")]);
 	}
 	assert!(out.contains_key(&PathBuf::from("remowt/pty/open_shell/request.rs")));
+}
+
+#[test]
+fn generates_typescript_server_and_client() {
+	let out = compile_ts(SCHEMA).unwrap();
+	let service = &out[&PathBuf::from("remowt/Pty/service.ts")];
+	let module = squash(service);
+	for expected in [
+		"import * as pds$remowt$Pty$open_shell$Request from \"./open_shell/Request.ts\";".to_owned(),
+		"import {Call, Remote, Rpc} from \"../../../pds.ts\";".to_owned(),
+		"export const SERVICE_NAME = \"remowt::Pty\";".to_owned(),
+		format!("export const SERVICE_ID = {:#010x};", service_id("remowt::Pty")),
+		"\"open_shell\": 1n,".to_owned(),
+		"\"exited\": 3n,".to_owned(),
+		"open_shell(from: A, request: pds$remowt$Pty$open_shell$Request.Ty, signal: AbortSignal): Promise<pds$remowt$Pty$open_shell$Response.Ty> | pds$remowt$Pty$open_shell$Response.Ty;".to_owned(),
+		"exited(from: A, request: pds$remowt$Pty$exited$Request.Ty): Promise<void> | void;".to_owned(),
+		"rpc.registerRequest(SERVICE_ID, method.open_shell, true,".to_owned(),
+		"rpc.registerRequest(SERVICE_ID, method.resize, false,".to_owned(),
+		"rpc.registerNotification(SERVICE_ID, method.exited, true,".to_owned(),
+		"return call.encode(() => {});".to_owned(),
+		"resize(request: pds$remowt$Pty$resize$Request.Ty, signal?: AbortSignal): Promise<void> {".to_owned(),
+		"(output) => pds$remowt$Pty$resize$Request.serialize(request, output), () => undefined, signal);".to_owned(),
+		"exited(request: pds$remowt$Pty$exited$Request.Ty): void {".to_owned(),
+	] {
+		assert!(module.contains(&squash(&expected)), "{expected:?} missing from:\n{service}");
+	}
+	let index = &out[&PathBuf::from("remowt/Pty/mod.ts")];
+	assert!(
+		index.contains("export * as open_shell from \"./open_shell/mod.ts\";"),
+		"{index}"
+	);
+	assert!(
+		index.ends_with("export * from \"./service.ts\";\n"),
+		"{index}"
+	);
+}
+
+#[test]
+fn typescript_client_omits_empty_requests() {
+	let out = compile_ts(&format!(
+		"{NATIVES}service(S) {{ request(a, id: 1) {{}} => u8; notification(b, id: 2) {{}}; }};"
+	))
+	.unwrap();
+	let service = squash(&out[&PathBuf::from("S/service.ts")]);
+	assert!(
+		service.contains(&squash(
+			"a(signal?: AbortSignal): Promise<pds$S$a$Response.Ty> {"
+		)),
+		"{service}"
+	);
+	assert!(
+		service.contains(&squash("pds$S$a$Request.serialize({}, output)")),
+		"{service}"
+	);
+	assert!(service.contains(&squash("b(): void {")), "{service}");
+	assert!(
+		service.contains(&squash("import {Call, Remote, Rpc} from \"../../pds.ts\";")),
+		"{service}"
+	);
+}
+
+#[test]
+fn typescript_client_names_are_reserved() {
+	let e = match compile_ts(&format!(
+		"{NATIVES}service(S) {{ notification(remote, id: 1) {{}}; }};"
+	)) {
+		Ok(_) => panic!("compiled"),
+		Err(e) => format!("{e:#}"),
+	};
+	assert!(
+		e.contains("the name `remote` is taken by the generated client"),
+		"{e}"
+	);
 }
 
 #[test]

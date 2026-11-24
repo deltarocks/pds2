@@ -1,11 +1,14 @@
 use anyhow::Result;
 use pds2_core::ast::{Attributes, Ident, Item, Path, Value};
 use pds2_core::definition::{Definition, DefinitionUse, ExtraModule, LowerCtx, Lowered};
+use pds2_core::generator::GeneratorOutput;
 use pds2_core::generator::rust::DefinitionRustCtx;
+use pds2_core::mir;
 use sha3::{Digest, Sha3_256};
 
 mod lower;
 mod rust;
+mod typescript;
 
 pub struct Service;
 
@@ -59,5 +62,13 @@ impl Definition for Service {
 		ctx: &DefinitionRustCtx,
 	) -> Result<Vec<ExtraModule>> {
 		rust::generate(uses, ctx)
+	}
+	fn generate_typescript(
+		&self,
+		uses: &[&DefinitionUse],
+		types: &mir::TypeMap,
+		output: &mut GeneratorOutput,
+	) -> Result<()> {
+		typescript::generate(uses, types, output)
 	}
 }

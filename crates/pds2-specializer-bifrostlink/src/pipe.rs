@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow, bail};
-use genco::lang::{Rust, rust};
+use genco::lang::{JavaScript, Rust, js, rust};
 use genco::prelude::*;
 use pds2_core::hir::TypeId;
 use pds2_core::mir::{self, Construction};
@@ -41,6 +41,34 @@ impl NativeCodegen<Rust> for PipeNative {
 			}
 			pub fn size_of(_0: &Ty) -> usize {
 				::bifrostlink::__private::pipe::size_of(_0)
+			}
+		})
+	}
+}
+
+impl NativeCodegen<JavaScript> for PipeNative {
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		_native: &mir::NativeType,
+		names: &dyn Names<JavaScript>,
+	) -> Option<js::Tokens> {
+		Some(quote!($(names.runtime("Pipe"))))
+	}
+	fn generate(&self, ctx: &NativeCodegenCtx<JavaScript>) -> Result<js::Tokens> {
+		let pipe = &ctx.runtime("pipe");
+		let (pinput, poutput) = (&ctx.runtime("Input"), &ctx.runtime("Output"));
+		Ok(quote! {
+			$((ctx.args_struct)())
+			export type Ty = $(ctx.runtime("Pipe"));
+			export function serialize(_0: Ty, output: $poutput): void {
+				$pipe.serialize(_0, output);
+			}
+			export function deserialize(input: $pinput$(if !ctx.params.is_empty() => , $((ctx.args_param)()))): Ty {
+				return $pipe.deserialize(input);
+			}
+			export function size_of(_0: Ty): number {
+				return $pipe.size_of(_0);
 			}
 		})
 	}

@@ -56,3 +56,17 @@ like `resource`.
 `result(Ok: T, Err: E)` is a `std::result::Result<T, E>`, sent as a `u8` tag
 (0 for `Ok`, 1 for `Err`) and the value, so a method can answer with an error of
 its own besides the transport error of `Client` calls. It needs the `u8` native.
+
+== TypeScript
+
+A service also generates `service.ts` next to its method namespaces, re-exported
+from the namespace `mod.ts`: `SERVICE_NAME`, `SERVICE_ID`, `method` (ids as
+`bigint`), a `Server<A>` interface whose methods take the sender and the whole
+request object (requests also get an `AbortSignal`), `register_endpoints(server,
+rpc)` and a `Client<A>` class. Client methods take the request object, except
+for requests without fields, and requests take an optional `AbortSignal`.
+Generated code imports `Rpc`, `Remote`, `Call`, `Resource`, `Pipe` and the
+`resource`/`pipe` helpers from `pds.ts`, which re-exports
+`@deltarocks/bifrostlink/pds`. `resource => T` is a `Resource<T>`, `pipe` a
+`Pipe`, and `result` is `{ kind: "ok"; value: T } | { kind: "err"; value: E }`.
+

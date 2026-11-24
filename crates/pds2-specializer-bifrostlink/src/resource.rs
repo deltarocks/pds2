@@ -1,5 +1,5 @@
 use anyhow::{Context as _, Result, anyhow, bail};
-use genco::lang::{Rust, rust};
+use genco::lang::{JavaScript, Rust, js, rust};
 use genco::prelude::*;
 use pds2_core::ast::Ident;
 use pds2_core::hir::TypeId;
@@ -56,6 +56,43 @@ impl NativeCodegen<Rust> for ResourceNative {
 			}
 			pub fn size_of(_0: &Ty) -> usize {
 				::bifrostlink::__private::resource::id_size(_0) + $(ctx.names.size_of(value))(&**_0)
+			}
+		})
+	}
+}
+
+impl NativeCodegen<JavaScript> for ResourceNative {
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		native: &mir::NativeType,
+		names: &dyn Names<JavaScript>,
+	) -> Option<js::Tokens> {
+		let value = specialization_use(native, VALUE)?.target;
+		Some(quote!($(names.runtime("Resource"))<$(names.ty(value))>))
+	}
+	fn generate(&self, ctx: &NativeCodegenCtx<JavaScript>) -> Result<js::Tokens> {
+		let value_use = ctx
+			.specialization_use(VALUE)
+			.context("resource payload type")?;
+		let value = value_use.target;
+		let resource = &ctx.runtime("resource");
+		let (pinput, poutput) = (&ctx.runtime("Input"), &ctx.runtime("Output"));
+		let names = ctx.names;
+		Ok(quote! {
+			$((ctx.args_struct)())
+			export type Ty = $(ctx.runtime("Resource"))<$(names.ty(value))>;
+			export function serialize(_0: Ty, output: $poutput): void {
+				$resource.serialize(_0, output);
+				$(names.serialize(value))(_0.value, output);
+			}
+			export function deserialize(input: $pinput$(if !ctx.params.is_empty() => , $((ctx.args_param)()))): Ty {
+				const id = $resource.read_id(input);
+				const payload = $(ctx.deserialize_call(value_use));
+				return $resource.adopt(id, payload);
+			}
+			export function size_of(_0: Ty): number {
+				return $resource.id_size(_0) + $(names.size_of(value))(_0.value);
 			}
 		})
 	}

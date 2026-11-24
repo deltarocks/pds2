@@ -49,3 +49,33 @@ fn result_is_a_std_result() {
 		.expect("result module");
 	assert!(result.contains("InvalidValue"), "{result}");
 }
+
+#[test]
+fn result_is_tagged_in_typescript() {
+	let mut reg = Registry::default();
+	pds2_specializer_bytes::register(&mut reg);
+	pds2_specializer_protodef::register(&mut reg);
+	pds2_specializer_bifrostlink::register(&mut reg);
+	let types = mir::from_hir(
+		&hir::parse_ast(ast::parse(SCHEMA).unwrap(), &reg).unwrap(),
+		&reg,
+	)
+	.unwrap();
+	let mut out = Default::default();
+	pds2_core::generator::typescript::generator(&types, &mut out, &reg).unwrap();
+	let holder = &out[&PathBuf::from("Holder.ts")];
+	assert!(
+		holder
+			.contains("{ kind: \"ok\"; value: pds$u16.Ty } | { kind: \"err\"; value: pds$u8.Ty }"),
+		"{holder}"
+	);
+	let result = out
+		.iter()
+		.find(|(path, _)| path.to_string_lossy().starts_with("result"))
+		.map(|(_, v)| v)
+		.expect("result module");
+	assert!(
+		result.contains("case 1: return { kind: \"err\""),
+		"{result}"
+	);
+}

@@ -103,3 +103,23 @@ fn views_reject_pipes() {
 	let e = rust::generate(&types(&reg), &mut out, &reg, Some(""), None, &[]).unwrap_err();
 	assert!(format!("{e:#}").contains("move-only"), "{e:#}");
 }
+
+#[test]
+fn typescript_pipes_go_through_the_runtime() {
+	let reg = registry();
+	let mut out = Default::default();
+	pds2_core::generator::typescript::generator(&types(&reg), &mut out, &reg).unwrap();
+	let holder = &out[&PathBuf::from("Holder.ts")];
+	assert!(holder.contains("io: Pipe;"), "{holder}");
+	let stdio = &out[&PathBuf::from("Stdio.ts")];
+	assert!(stdio.contains("{ kind: \"pipe\"; value: Pipe }"), "{stdio}");
+	let pipe = &out[&PathBuf::from("pipe.ts")];
+	for expected in [
+		"import {Input, Output, Pipe, pipe} from \"../pds.ts\";",
+		"export type Ty = Pipe;",
+		"pipe.serialize(_0, output);",
+		"return pipe.deserialize(input);",
+	] {
+		assert!(pipe.contains(expected), "{expected:?} missing from {pipe}");
+	}
+}

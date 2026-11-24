@@ -1,5 +1,5 @@
 use anyhow::{Context as _, Result, anyhow, bail};
-use genco::lang::{Rust, rust};
+use genco::lang::{JavaScript, Rust, js, rust};
 use genco::prelude::*;
 use pds2_core::ast::Ident;
 use pds2_core::hir::TypeId;
@@ -76,6 +76,56 @@ impl NativeCodegen<Rust> for ResultNative {
 						::core::result::Result::Ok(v) => $(names.size_of(ok))(v),
 						::core::result::Result::Err(e) => $(names.size_of(err))(e),
 					}
+			}
+		})
+	}
+}
+
+impl NativeCodegen<JavaScript> for ResultNative {
+	fn inline_ty(
+		&self,
+		_id: TypeId,
+		native: &mir::NativeType,
+		names: &dyn Names<JavaScript>,
+	) -> Option<js::Tokens> {
+		let ok = specialization_use(native, OK)?.target;
+		let err = specialization_use(native, ERR)?.target;
+		Some(
+			quote!({ kind: "ok"; value: $(names.ty(ok)) } | { kind: "err"; value: $(names.ty(err)) }),
+		)
+	}
+	fn generate(&self, ctx: &NativeCodegenCtx<JavaScript>) -> Result<js::Tokens> {
+		let ok_use = ctx.specialization_use(OK).context("result ok type")?;
+		let err_use = ctx.specialization_use(ERR).context("result err type")?;
+		let (ok, err) = (ok_use.target, err_use.target);
+		let tag = (ctx.resolve)("u8").ok_or_else(|| anyhow!("result needs the `u8` native"))?;
+		let ty = self
+			.inline_ty(ctx.id, ctx.native, ctx.names)
+			.context("result type")?;
+		let (pinput, poutput) = (&ctx.runtime("Input"), &ctx.runtime("Output"));
+		let perror = &ctx.runtime("PdsError");
+		let names = ctx.names;
+		Ok(quote! {
+			$((ctx.args_struct)())
+			export type Ty = $ty;
+			export function serialize(_0: Ty, output: $poutput): void {
+				if (_0.kind === "ok") {
+					$(names.serialize(tag))(0, output);
+					$(names.serialize(ok))(_0.value, output);
+				} else {
+					$(names.serialize(tag))(1, output);
+					$(names.serialize(err))(_0.value, output);
+				}
+			}
+			export function deserialize(input: $pinput$(if !ctx.params.is_empty() => , $((ctx.args_param)()))): Ty {
+				switch ($(names.deserialize(tag))(input)) {
+					case 0: return { kind: "ok", value: $(ctx.deserialize_call(ok_use)) };
+					case 1: return { kind: "err", value: $(ctx.deserialize_call(err_use)) };
+					default: throw new $perror("InvalidValue", "result tag");
+				}
+			}
+			export function size_of(_0: Ty): number {
+				return $(names.size_of(tag))(0) + (_0.kind === "ok" ? $(names.size_of(ok))(_0.value) : $(names.size_of(err))(_0.value));
 			}
 		})
 	}
