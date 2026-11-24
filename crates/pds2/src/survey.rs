@@ -294,34 +294,104 @@ fn hash(s: &str) -> u64 {
 }
 
 pub fn deep(v: &Version) -> BTreeMap<String, u64> {
-	fn go(
-		v: &Version,
-		name: &str,
-		memo: &mut BTreeMap<String, u64>,
-		active: &mut BTreeSet<String>,
-	) -> u64 {
-		if let Some(h) = memo.get(name) {
-			return *h;
+	let graph: BTreeMap<&str, (&str, Vec<&str>)> = v
+		.defs
+		.iter()
+		.map(|(n, d)| {
+			(
+				n.as_str(),
+				(d.text.as_str(), d.refs.iter().map(String::as_str).collect()),
+			)
+		})
+		.collect();
+	deep_hashes(&graph)
+}
+
+pub fn deep_hashes(graph: &BTreeMap<&str, (&str, Vec<&str>)>) -> BTreeMap<String, u64> {
+	struct Tarjan<'g, 'a> {
+		graph: &'g BTreeMap<&'a str, (&'a str, Vec<&'a str>)>,
+		index: BTreeMap<&'a str, usize>,
+		low: BTreeMap<&'a str, usize>,
+		stack: Vec<&'a str>,
+		on_stack: BTreeSet<&'a str>,
+		components: Vec<Vec<&'a str>>,
+	}
+	impl<'a> Tarjan<'_, 'a> {
+		fn visit(&mut self, v: &'a str) {
+			let i = self.index.len();
+			self.index.insert(v, i);
+			self.low.insert(v, i);
+			self.stack.push(v);
+			self.on_stack.insert(v);
+			for &w in &self.graph[v].1 {
+				let reached = match self.index.get(w).copied() {
+					None => {
+						self.visit(w);
+						self.low[w]
+					}
+					Some(iw) if self.on_stack.contains(w) => iw,
+					Some(_) => continue,
+				};
+				let low = self.low.get_mut(v).expect("visited");
+				*low = (*low).min(reached);
+			}
+			if self.low[v] == self.index[v] {
+				let mut group = Vec::new();
+				loop {
+					let w = self.stack.pop().expect("v is on the stack");
+					self.on_stack.remove(w);
+					group.push(w);
+					if w == v {
+						break;
+					}
+				}
+				group.sort_unstable();
+				self.components.push(group);
+			}
 		}
-		let def = &v.defs[name];
-		if !active.insert(name.to_owned()) {
-			return hash(&def.text);
+	}
+	let mut t = Tarjan {
+		graph,
+		index: BTreeMap::new(),
+		low: BTreeMap::new(),
+		stack: Vec::new(),
+		on_stack: BTreeSet::new(),
+		components: Vec::new(),
+	};
+	for &v in graph.keys() {
+		if !t.index.contains_key(v) {
+			t.visit(v);
+		}
+	}
+	let mut component_of: BTreeMap<&str, usize> = BTreeMap::new();
+	let mut component_hash: Vec<u64> = Vec::new();
+	let mut out = BTreeMap::new();
+	for (k, group) in t.components.iter().enumerate() {
+		for &m in group {
+			component_of.insert(m, k);
 		}
 		let mut h = DefaultHasher::new();
-		def.text.hash(&mut h);
-		for r in &def.refs {
-			go(v, r, memo, active).hash(&mut h);
+		for &m in group {
+			let (text, refs) = &graph[m];
+			m.hash(&mut h);
+			text.hash(&mut h);
+			for &r in refs {
+				match component_of[r] {
+					c if c == k => r.hash(&mut h),
+					c => component_hash[c].hash(&mut h),
+				}
+			}
 		}
-		active.remove(name);
-		let out = h.finish();
-		memo.insert(name.to_owned(), out);
-		out
+		let shared = h.finish();
+		component_hash.push(shared);
+		for &m in group {
+			let mut h = DefaultHasher::new();
+			shared.hash(&mut h);
+			m.hash(&mut h);
+			out.insert(m.to_owned(), h.finish());
+		}
 	}
-	let mut memo = BTreeMap::new();
-	for name in v.defs.keys() {
-		go(v, name, &mut memo, &mut BTreeSet::new());
-	}
-	memo
+	out
 }
 
 fn simple(ty: &str) -> bool {
